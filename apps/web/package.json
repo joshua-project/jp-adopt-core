@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@azure/msal-browser": "^3.30.0",
+    "@azure/msal-react": "^2.2.0",
     "@jp-adopt/contracts": "workspace:*",
     "next": "15.2.4",
     "react": "19.0.0",

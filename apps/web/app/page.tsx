@@ -18,9 +18,11 @@ export default function HomePage() {
         Open contacts
       </Link>
       <p className="text-sm text-slate-500">
-        For local dev, the API accepts <code className="rounded bg-slate-100 px-1">Bearer dev-local</code> when{" "}
-        <code className="rounded bg-slate-100 px-1">STRICT_AUTH=false</code> (see runbook). Production uses
-        Azure AD B2C JWTs; configure tenant, audience, and issuer in the environment.
+        On <code className="rounded bg-slate-100 px-1">/contacts</code>, use <strong>Sign in</strong> (Azure AD
+        B2C via MSAL) when the public B2C env is set, or the dev token field when available. The API also accepts{" "}
+        <code className="rounded bg-slate-100 px-1">Bearer dev-local</code> with{" "}
+        <code className="rounded bg-slate-100 px-1">STRICT_AUTH=false</code> (see runbook and{" "}
+        <code className="rounded bg-slate-100 px-1">apps/web/README.md</code>).
       </p>
     </div>
   );
