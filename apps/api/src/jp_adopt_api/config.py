@@ -8,7 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     database_url: str = "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5434/jp_adopt"
 
@@ -26,6 +31,9 @@ class Settings(BaseSettings):
     )
 
     strict_auth: bool = False
+
+    # Comma-separated browser origins for CORS when APP_ENV is production (e.g. https://crm.example.com).
+    cors_allow_origins: str = ""
 
     @model_validator(mode="after")
     def production_requires_strict_auth(self) -> Self:

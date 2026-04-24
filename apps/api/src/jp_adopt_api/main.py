@@ -5,8 +5,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from jp_adopt_api.config import get_settings
 from jp_adopt_api.db import get_engine
 from jp_adopt_api.routers import contacts, health
+
+
+def _cors_params() -> dict[str, object]:
+    settings = get_settings()
+    if settings.is_production:
+        origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
+        return {"allow_origins": origins}
+    # Next.js dev may bind 3001+ if 3000 is taken; match any localhost port.
+    return {
+        "allow_origin_regex": r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    }
 
 
 @asynccontextmanager
@@ -24,10 +36,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Local dev: Next.js (apps/web) on another origin. Tighten in production via a reverse proxy or env-driven origins.
+# Local dev: Next.js on another port/origin. Production: set CORS_ALLOW_ORIGINS (comma-separated) on Settings.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    **_cors_params(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -155,6 +155,10 @@ The Next app does not embed a full B2C sign-in in this spike; use Path A (`dev-l
 SELECT id, event_type, processed_at FROM outbox ORDER BY created_at DESC LIMIT 5;
 ```
 
+## Troubleshooting
+
+**“Load contacts” fails in the browser (network error / empty list) but `curl` to the API works:** the browser enforces **CORS**. In **non-production**, the API allows `http://` and `https://` for **`localhost`** and **`127.0.0.1`** on **any port** (so Next on `3001`, etc.). Restart the API after upgrading. For **production**, set comma-separated **`CORS_ALLOW_ORIGINS`** in `.env` to your real web origins.
+
 ## Related GitHub work
 
 - Epic: **#20** (blocker closure), **#10** (Phase 0 umbrella)
