@@ -1,0 +1,18 @@
+{
+  "name": "@jp-adopt/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/generated/api.ts",
+  "types": "./src/generated/api.ts",
+  "exports": {
+    ".": "./src/generated/api.ts"
+  },
+  "scripts": {
+    "generate": "openapi-typescript ../../apps/api/openapi.json -o src/generated/api.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.8.0",
+    "typescript": "^5.7.0"
+  }
+}
