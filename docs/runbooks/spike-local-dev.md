@@ -44,7 +44,6 @@ pnpm run dev:stack
 
 This runs Docker Compose for Postgres and Redis, applies Alembic migrations, then starts the API, worker, and web in parallel. Stop with **Ctrl+C** (child processes are torn down).
 
-
 ## 1. Infra: Postgres and Redis
 
 From the repo root:
@@ -57,7 +56,7 @@ Defaults (see `docker-compose.yml`):
 
 | Service  | Port   | User / DB   | Password  |
 |----------|--------|-------------|-----------|
-| Postgres | 5432   | `jp_adopt`  | `jp_adopt`|
+| Postgres | 5434 (host → 5432 in container) | `jp_adopt`  | `jp_adopt`|
 | Redis    | 6379   | —           | —         |
 
 Copy `.env.example` to `.env` at the repo root (or export the same variables in your shell). The API and worker read `DATABASE_URL`, `REDIS_URL`, and webhook settings from the environment.

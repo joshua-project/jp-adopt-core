@@ -7,7 +7,7 @@ import os
 # Default matches docker-compose and CI Postgres (localhost from the test process).
 os.environ.setdefault(
     "DATABASE_URL",
-    "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5432/jp_adopt",
+    "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5434/jp_adopt",
 )
 
 import pytest

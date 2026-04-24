@@ -8,14 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        populate_by_name=True,
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5432/jp_adopt"
+    database_url: str = "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5434/jp_adopt"
 
     azure_ad_b2c_tenant_name: str = ""
     azure_ad_b2c_tenant_id: str = ""
@@ -53,7 +48,9 @@ class Settings(BaseSettings):
         tn = self.azure_ad_b2c_tenant_name
         tid = self.azure_ad_b2c_tenant_id
         pol = self.azure_ad_b2c_policy
-        return f"https://{tn}.b2clogin.com/{tid}/{pol}/discovery/v2.0/keys"
+        return (
+            f"https://{tn}.b2clogin.com/{tid}/{pol}/discovery/v2.0/keys"
+        )
 
     @property
     def b2c_expected_issuer(self) -> str:

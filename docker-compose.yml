@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: jp_adopt
       POSTGRES_DB: jp_adopt
     ports:
-      - "5432:5432"
+      # Host 5434 avoids colliding with local Postgres on 5432/5433 (common on dev machines).
+      - "5434:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jp_adopt -d jp_adopt"]
       interval: 5s
