@@ -8,6 +8,16 @@ This runbook covers the polyglot stack: **Postgres** (system of record), **Redis
 - [pnpm](https://pnpm.io/) 9.x
 - Docker (for Postgres + Redis)
 
+## First-time bootstrap
+
+From the repo root (creates `.env` / `apps/web/.env.local` if missing, `pnpm install`, starts Docker services **after health checks**, runs Alembic):
+
+```bash
+pnpm run setup:local
+```
+
+Then use **`pnpm run dev:stack`** (below) for day-to-day development.
+
 ## Local API auth: two paths
 
 Pick **one** path for `GET /v1/contacts` and other `/v1/*` routes. The API reads `APP_ENV` or `ENV` (same meaning) plus `STRICT_AUTH` from the repo root `.env` (or your shell).
@@ -158,6 +168,16 @@ SELECT id, event_type, processed_at FROM outbox ORDER BY created_at DESC LIMIT 5
 ## Troubleshooting
 
 **“Load contacts” fails in the browser (network error / empty list) but `curl` to the API works:** the browser enforces **CORS**. In **non-production**, the API allows `http://` and `https://` for **`localhost`** and **`127.0.0.1`** on **any port** (so Next on `3001`, etc.). Restart the API after upgrading. For **production**, set comma-separated **`CORS_ALLOW_ORIGINS`** in `.env` to your real web origins.
+
+**Uvicorn exits with “Address already in use” on port 8000:** something else is using that port. Stop it (e.g. macOS: `lsof -nP -iTCP:8000 -sTCP:LISTEN`) or run the stack with a different API port and point the web app at it:
+
+```bash
+API_PORT=8001 pnpm run dev:stack
+# In apps/web/.env.local set:
+# NEXT_PUBLIC_API_URL=http://127.0.0.1:8001
+```
+
+**Postgres “role jp_adopt does not exist” or connection refused:** ensure Docker is running and you are using the repo’s **`DATABASE_URL`** (host **`localhost:5434`**, user/db **`jp_adopt`**). Re-run **`pnpm run setup:local`**.
 
 ## Related GitHub work
 

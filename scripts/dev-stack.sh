@@ -11,14 +11,16 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-docker compose up -d postgres redis
+docker compose up -d --wait --wait-timeout 120 postgres redis
 
 set -a
 # shellcheck disable=SC1091
 source .env
 set +a
 
-(cd apps/api && uv sync && uv run alembic upgrade head)
+API_PORT="${API_PORT:-8000}"
+
+(cd apps/api && uv sync --extra dev && uv run alembic upgrade head)
 (cd apps/worker && uv sync)
 
 cleanup() {
@@ -30,11 +32,13 @@ cleanup() {
 PIDS=()
 trap cleanup EXIT INT TERM
 
-(cd apps/api && uv run uvicorn jp_adopt_api.main:app --reload --host 0.0.0.0 --port 8000) &
+(cd apps/api && uv run uvicorn jp_adopt_api.main:app --reload --host 0.0.0.0 --port "${API_PORT}") &
 PIDS+=($!)
 (cd apps/worker && uv run jp-adopt-worker) &
 PIDS+=($!)
 (cd "$ROOT" && pnpm --filter web dev) &
 PIDS+=($!)
+
+echo "jp-adopt dev stack: API http://127.0.0.1:${API_PORT}  (set API_PORT to change; match NEXT_PUBLIC_API_URL in apps/web/.env.local)" >&2
 
 wait
