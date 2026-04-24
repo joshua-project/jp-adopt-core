@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: postgresql+asyncpg://jp_adopt:jp_adopt@localhost:5432/jp_adopt
+
+jobs:
+  api:
+    name: API (uv, Alembic, pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jp_adopt
+          POSTGRES_PASSWORD: jp_adopt
+          POSTGRES_DB: jp_adopt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jp_adopt -d jp_adopt"
+          --health-interval 4s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            apps/api/pyproject.toml
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --extra dev
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+      - name: Run pytest
+        working-directory: apps/api
+        run: uv run pytest -q
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+  node:
+    name: pnpm (contracts, web build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            apps/api/pyproject.toml
+
+      - name: Install API (OpenAPI export)
+        working-directory: apps/api
+        run: uv sync
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate API contracts
+        run: pnpm run contracts:generate
+
+      - name: Ensure generated contract artifacts are committed
+        run: |
+          if ! git diff --stat --exit-code; then
+            echo "::error::Run pnpm run contracts:generate locally and commit the changes."
+            git --no-pager diff
+            exit 1
+          fi
+
+      - name: Build web
+        run: pnpm --filter web build
