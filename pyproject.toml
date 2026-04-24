@@ -1,0 +1,12 @@
+[project]
+name = "jp-adopt-core-root"
+version = "0.1.0"
+description = "Workspace root for jp-adopt-core (uv workspace)"
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["apps/api", "apps/worker"]
+
+[tool.uv.sources]

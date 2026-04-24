@@ -1,0 +1,10 @@
+{
+  "name": "jp-adopt-core",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "openapi:export": "cd apps/api && uv run python -m jp_adopt_api.scripts.export_openapi",
+    "contracts:generate": "pnpm run openapi:export && pnpm --filter @jp-adopt/contracts generate",
+    "lint:web": "pnpm --filter web lint"
+  }
+}
