@@ -6,6 +6,7 @@ import type { paths } from "@jp-adopt/contracts";
 
 type ListResponse = paths["/v1/contacts"]["get"]["responses"]["200"]["content"]["application/json"];
 
+// Tab-scoped storage (not localStorage) for dev tokens.
 const STORAGE_KEY = "jp_adopt_bearer";
 
 export default function ContactsPage() {
@@ -20,7 +21,7 @@ export default function ContactsPage() {
     if (typeof window === "undefined") {
       return;
     }
-    const t = window.localStorage.getItem(STORAGE_KEY);
+    const t = window.sessionStorage.getItem(STORAGE_KEY);
     if (t) {
       setToken(t);
     } else {
@@ -32,7 +33,7 @@ export default function ContactsPage() {
     setLoading(true);
     setErr(null);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, token);
+      window.sessionStorage.setItem(STORAGE_KEY, token);
     }
     const res = await fetch(`${base}/v1/contacts?limit=50`, {
       headers: { Authorization: `Bearer ${token}` },

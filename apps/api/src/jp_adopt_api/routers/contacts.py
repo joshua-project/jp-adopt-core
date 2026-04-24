@@ -3,11 +3,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.deps import CurrentUser, DbSession
 from jp_adopt_api.models import Contact, Outbox
 from jp_adopt_api.schemas import ContactListResponse, ContactPatch, ContactRead

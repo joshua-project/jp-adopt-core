@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ContactRead(BaseModel):
@@ -30,3 +31,11 @@ class ContactPatch(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=512)
     adopter_status: str | None = Field(default=None, max_length=128)
     facilitator_status: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def reject_null_for_non_nullable_columns(self) -> Self:
+        """Reject null for NOT NULL columns (422, not IntegrityError)."""
+        for fname in ("party_kind", "display_name"):
+            if fname in self.model_fields_set and getattr(self, fname) is None:
+                raise ValueError(f"{fname} cannot be null")
+        return self

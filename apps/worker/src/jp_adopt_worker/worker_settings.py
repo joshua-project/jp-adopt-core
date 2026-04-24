@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -18,9 +19,25 @@ logger = logging.getLogger(__name__)
 async def drain_outbox(ctx: dict[str, Any]) -> None:
     factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     cfg: EnvSettings = ctx["worker_cfg"]
-    n = await process_outbox_batch(factory, cfg)
-    if n:
-        logger.info("Processed %s outbox row(s) this tick", n)
+    total = 0
+    backoff = 1.0
+    for _ in range(cfg.outbox_batch_size):
+        try:
+            delivered = await process_outbox_batch(factory, cfg)
+            if delivered == 0:
+                break
+            total += delivered
+            backoff = 1.0
+        except Exception as e:
+            logger.warning(
+                "Delivery attempt failed (will retry on next tick): %s; sleeping %.1fs",
+                e,
+                backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(60.0, backoff * 2)
+    if total:
+        logger.info("Processed %s outbox row(s) this tick", total)
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -30,6 +47,11 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["worker_cfg"] = cfg
     ctx["session_factory"] = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     ctx["engine"] = engine
+    if not cfg.integration_webhook_url or not cfg.webhook_hmac_secret:
+        logger.warning(
+            "Outbox delivery disabled: set INTEGRATION_WEBHOOK_URL and WEBHOOK_HMAC_SECRET to enable "
+            "(this message is logged once at worker startup, not every cron tick)"
+        )
     logger.info("ARQ worker started (cron drain + Redis)")
 
 
