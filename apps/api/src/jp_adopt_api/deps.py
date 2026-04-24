@@ -38,7 +38,10 @@ async def require_user(
         )
     token = authorization.split(" ", 1)[1].strip()
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Empty bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Empty bearer token",
+        )
     try:
         return authenticate_bearer(token, settings)
     except DevelopmentAuthForbiddenError:
