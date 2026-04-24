@@ -20,3 +20,16 @@ def test_readyz(client: TestClient) -> None:
 def test_v1_contacts_requires_auth(client: TestClient) -> None:
     response = client.get("/v1/contacts")
     assert response.status_code == 401
+
+
+SEED_CONTACT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+
+def test_patch_rejects_null_for_non_nullable_columns(client: TestClient) -> None:
+    """Copilot: PATCH with null display_name must be 422, not 500 IntegrityError."""
+    response = client.patch(
+        f"/v1/contacts/{SEED_CONTACT_ID}",
+        headers={"Authorization": "Bearer dev-local"},
+        json={"display_name": None},
+    )
+    assert response.status_code == 422

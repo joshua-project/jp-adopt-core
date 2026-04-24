@@ -53,7 +53,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "apps/api/pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            apps/api/pyproject.toml
 
       - name: Install API dependencies
         working-directory: apps/api
@@ -87,7 +90,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "apps/api/pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            apps/api/pyproject.toml
 
       - name: Install API (OpenAPI export)
         working-directory: apps/api
