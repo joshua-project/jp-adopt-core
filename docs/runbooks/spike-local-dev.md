@@ -8,6 +8,43 @@ This runbook covers the polyglot stack: **Postgres** (system of record), **Redis
 - [pnpm](https://pnpm.io/) 9.x
 - Docker (for Postgres + Redis)
 
+## Local API auth: two paths
+
+Pick **one** path for `GET /v1/contacts` and other `/v1/*` routes. The API reads `APP_ENV` or `ENV` (same meaning) plus `STRICT_AUTH` from the repo root `.env` (or your shell).
+
+### Path A — No Azure AD B2C (fastest onboarding)
+
+Use this when you do not have tenant credentials or only need the outbox / webhook spike.
+
+1. Copy `.env.example` → `.env`.
+2. Set **`APP_ENV=development`** (or omit it; default is `development`).
+3. Set **`STRICT_AUTH=false`**.
+4. Call the API with **`Authorization: Bearer dev-local`** (the Next.js Contacts page can use the same token).
+
+Do **not** use Path A in production. With **`APP_ENV=production`** or **`ENV=production`** (or `prod`), the API **refuses to start** if `STRICT_AUTH=false`, and **`Bearer dev-local`** is rejected with **403** even if configuration were misapplied.
+
+### Path B — Real Azure AD B2C (token-acquired API testing)
+
+Use this to validate JWT verification against your tenant (see **Azure AD B2C (API JWTs)** below).
+
+1. Copy `.env.example` → `.env` and set all **`AZURE_AD_B2C_*`** variables for your app registration(s), policy, and API **audience** (see table below).
+2. Set **`STRICT_AUTH=true`** so the API only accepts real JWTs (recommended; matches staging/production behavior).
+3. **Obtain an access token** whose **`aud`** matches `AZURE_AD_B2C_AUDIENCE` and **`iss`** matches your policy (see optional `AZURE_AD_B2C_ISSUER`):
+   - From a registered SPA or Postman using the authorization-code flow with PKCE against your B2C policy, or
+   - From browser **DevTools → Network** after signing in with a test app that requests your API scope, by copying the **access token** (not the ID token) from the token response.
+4. Paste the token into the Contacts page (or send it as `Authorization: Bearer <jwt>`). Interactive Next.js sign-in is tracked separately (Phase C / MSAL).
+
+### One command: infra, migrations, API, worker, web
+
+From the repo root (after `pnpm install` and `.env` present):
+
+```bash
+pnpm run dev:stack
+```
+
+This runs Docker Compose for Postgres and Redis, applies Alembic migrations, then starts the API, worker, and web in parallel. Stop with **Ctrl+C** (child processes are torn down).
+
+
 ## 1. Infra: Postgres and Redis
 
 From the repo root:
@@ -101,9 +138,10 @@ The API validates **access tokens** (Bearer JWT) for routes under `/v1/*`. Confi
 | `AZURE_AD_B2C_AUDIENCE` | **aud** to validate (often the API’s Application ID URI or app ID) |
 | `AZURE_AD_B2C_JWKS_URI` | (Optional) override JWKS URL; default is derived from tenant + policy |
 | `AZURE_AD_B2C_ISSUER` | (Optional) override expected **iss**; default `https://{TENANT_NAME}.b2clogin.com/{TENANT_ID}/v2.0/` — some policies require a more specific issuer; set explicitly if validation fails. |
-| `STRICT_AUTH` | `true` in production: only real JWTs. `false` for local dev: allows `Authorization: Bearer dev-local` (never enable in production). |
+| `APP_ENV` / `ENV` | `development` (default) for local Path A. Use `production` / `prod` only with **`STRICT_AUTH=true`** — otherwise the process exits at startup. |
+| `STRICT_AUTH` | `true` for real JWTs only. `false` only for non-production Path A (`dev-local`). |
 
-The Next app does not embed a full B2C sign-in in this spike; obtain a real access token from the Azure portal or your client app and paste it on the Contacts page, or use `dev-local` with `STRICT_AUTH=false` as documented above.
+The Next app does not embed a full B2C sign-in in this spike; use Path A (`dev-local`) or Path B (paste an access token), as described in **Local API auth: two paths** above.
 
 ## Minimal smoke test
 
@@ -120,5 +158,6 @@ SELECT id, event_type, processed_at FROM outbox ORDER BY created_at DESC LIMIT 5
 
 ## Related GitHub work
 
-- Epic: **#10**
+- Epic: **#20** (blocker closure), **#10** (Phase 0 umbrella)
+- Phase A (local dev hardening): **#21**
 - Phase 0 spike: **#11**–**#18** (label `phase-0-spike`)

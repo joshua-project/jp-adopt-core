@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 DEV_BEARER_TOKEN = "dev-local"
 
 
+class DevelopmentAuthForbiddenError(Exception):
+    """dev-local bearer used while APP_ENV/ENV is production."""
+
+
 @dataclass(frozen=True)
 class AuthUser:
     sub: str
@@ -61,8 +65,14 @@ def decode_b2c_access_token(token: str, settings: Settings) -> AuthUser:
 
 def authenticate_bearer(token: str, settings: Settings) -> AuthUser:
     if token == DEV_BEARER_TOKEN:
+        if settings.is_production:
+            raise DevelopmentAuthForbiddenError(
+                "Bearer dev-local is not allowed when APP_ENV/ENV is production"
+            )
         if settings.strict_auth:
-            raise jwt.InvalidTokenError("Development bearer token is not allowed when STRICT_AUTH=true")
+            raise jwt.InvalidTokenError(
+                "Development bearer token is not allowed when STRICT_AUTH=true"
+            )
         return AuthUser(sub="dev-local", email="dev@local.invalid", tid=None)
     try:
         return decode_b2c_access_token(token, settings)
