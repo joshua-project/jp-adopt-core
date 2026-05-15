@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -11,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     PrimaryKeyConstraint,
     String,
     Text,
@@ -205,5 +207,247 @@ class MigrationConflict(Base):
     source_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     local_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FacilitatingOrg(Base):
+    __tablename__ = "facilitating_org"
+    __table_args__ = (
+        CheckConstraint(
+            "capacity_committed >= 0",
+            name="ck_facilitating_org_capacity_committed_nonneg",
+        ),
+        CheckConstraint(
+            "capacity_committed <= capacity_total",
+            name="ck_facilitating_org_capacity_committed_le_total",
+        ),
+        Index(
+            "ix_facilitating_org_active_accepting",
+            "active",
+            "accepting_potential_adopters",
+        ),
+        Index(
+            "ix_facilitating_org_source_system_source_id",
+            "source_system",
+            "source_id",
+        ),
+        Index(
+            "uq_facilitating_org_is_triage_org",
+            "is_triage_org",
+            unique=True,
+            postgresql_where="is_triage_org = TRUE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    country_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language_codes: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    theological_tags: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    capacity_total: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    capacity_committed: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    accepting_potential_adopters: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    is_triage_org: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    last_assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class Fpg(Base):
+    __tablename__ = "fpg"
+    __table_args__ = (
+        Index("ix_fpg_country_code", "country_code"),
+        Index(
+            "ix_fpg_frontier",
+            "frontier",
+            postgresql_where="frontier = TRUE",
+        ),
+    )
+
+    rop3: Mapped[str] = mapped_column(Text, primary_key=True)
+    people_id3: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    country_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language_codes: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    frontier: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FacilitatorFpgCoverage(Base):
+    __tablename__ = "facilitator_fpg_coverage"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "facilitator_org_id", "rop3", name="pk_facilitator_fpg_coverage"
+        ),
+        Index("ix_facilitator_fpg_coverage_rop3", "rop3"),
+    )
+
+    facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rop3: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("fpg.rop3", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AdopterInterest(Base):
+    __tablename__ = "adopter_interest"
+    __table_args__ = (
+        Index("ix_adopter_interest_contact_id", "contact_id"),
+        Index("ix_adopter_interest_rop3", "rop3"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rop3: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("fpg.rop3"), nullable=True
+    )
+    commitment_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Match(Base):
+    __tablename__ = "match"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ("
+            "'recommended', 'accepted', 'sent_back', 'declined', "
+            "'active', 'completed', 'withdrawn', 'triage')",
+            name="ck_match_status",
+        ),
+        Index("ix_match_adopter_interest_id", "adopter_interest_id"),
+        Index("ix_match_facilitator_org_id", "facilitator_org_id"),
+        Index("ix_match_status", "status"),
+        Index(
+            "uq_match_open_per_interest",
+            "adopter_interest_id",
+            unique=True,
+            postgresql_where=(
+                "status IN ('recommended', 'accepted', 'active', 'triage')"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    adopter_interest_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("adopter_interest.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    recommended_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decided_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reason_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class MatchAttempt(Base):
+    __tablename__ = "match_attempt"
+    __table_args__ = (
+        Index("ix_match_attempt_contact_id", "contact_id"),
+        Index("ix_match_attempt_run_id", "run_id"),
+        Index("ix_match_attempt_contact_run", "contact_id", "run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    adopter_interest_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("adopter_interest.id"),
+        nullable=True,
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    candidate_facilitator_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id"),
+        nullable=False,
+    )
+    score: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    score_breakdown: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    filter_results: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
