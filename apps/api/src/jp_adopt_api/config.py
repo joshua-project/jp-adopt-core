@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,12 +35,48 @@ class Settings(BaseSettings):
     # Comma-separated browser origins for CORS when APP_ENV is production (e.g. https://crm.example.com).
     cors_allow_origins: str = ""
 
+    # Declarative discriminator: only "b2c" is supported in week 1. Future weeks
+    # may introduce alternate IdP strategies; this field exists so the choice is
+    # encoded in config rather than inferred from runtime token issuers.
+    identity_provider: Literal["b2c"] = "b2c"
+
+    # Magic-link side-car: HMAC signing key for the HS256 JWT minted after a
+    # successful claim. Must be >= 32 bytes in production (model_validator below).
+    magic_link_signing_key: str = "dev-magic-link-signing-key-please-change-32b"
+
+    # The public web URL where the click target lives; the worker composes a link
+    # of the form f"{click_base_url}/auth/claim?token={raw_token}".
+    magic_link_click_base_url: str = "http://localhost:3000"
+
+    # The issuer claim minted on magic-link JWTs. Verified on every claim.
+    magic_link_issuer: str = "https://api.joshuaproject.net/magic-link/v1"
+
+    # Entra direct side-car: aud claim the API requires on multi-tenant Entra tokens.
+    # This is the Application ID URI of the API app registration in Entra.
+    entra_direct_audience: str = "api://jp-adopt-core"
+
+    # Azure Communication Services Email (worker uses this; API only reads
+    # for the example .env). Optional in dev — when unset, the worker logs the
+    # magic-link URL to stdout instead of sending.
+    acs_connection_string: str | None = None
+    acs_sender_address: str = "donotreply@joshuaproject.net"
+
     @model_validator(mode="after")
     def production_requires_strict_auth(self) -> Self:
         if self.is_production and not self.strict_auth:
             msg = (
                 "STRICT_AUTH must be true when APP_ENV or ENV is production (or prod). "
                 "The development bearer token bypass is not allowed in production."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def magic_link_key_must_be_strong_in_production(self) -> Self:
+        if self.is_production and len(self.magic_link_signing_key.encode("utf-8")) < 32:
+            msg = (
+                "MAGIC_LINK_SIGNING_KEY must be at least 32 bytes long when "
+                "APP_ENV/ENV is production (HS256 secret entropy floor)."
             )
             raise ValueError(msg)
         return self

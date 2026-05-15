@@ -172,6 +172,52 @@ class IdentityLink(Base):
     )
 
 
+class MagicLinkToken(Base):
+    __tablename__ = "magic_link_token"
+    __table_args__ = (
+        Index("ix_magic_link_token_email_normalized", "email_normalized"),
+        Index("ix_magic_link_token_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    requested_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MagicLinkRateLimit(Base):
+    __tablename__ = "magic_link_rate_limit"
+    __table_args__ = (
+        Index(
+            "ix_magic_link_rate_limit_email_requested",
+            "email_normalized",
+            "requested_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class PartnerTenant(Base):
     __tablename__ = "partner_tenants"
 

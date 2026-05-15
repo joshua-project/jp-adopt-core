@@ -16,6 +16,23 @@ from fastapi.testclient import TestClient
 from jp_adopt_api.main import app
 
 
+@pytest.fixture(autouse=True)
+def _reset_app_db_engine():
+    """The app-level engine in ``jp_adopt_api.db`` is a module-global cache.
+    pytest tests that combine TestClient(app) with async fixtures often each
+    spin up a fresh asyncio loop; the cached engine binds asyncpg connections
+    to whichever loop created them. Reset the cache before every test so each
+    test's TestClient (or async fixture) gets a fresh engine in its own loop.
+    """
+    import jp_adopt_api.db as appdb
+
+    appdb._engine = None
+    appdb._session_factory = None
+    yield
+    appdb._engine = None
+    appdb._session_factory = None
+
+
 @pytest.fixture
 def client() -> TestClient:
     with TestClient(app) as c:
