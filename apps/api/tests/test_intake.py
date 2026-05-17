@@ -44,11 +44,13 @@ from jp_adopt_api.outbox_suppression import (
     outbox_suppressed,
 )
 
-# A test API key — production reads INTAKE_API_KEYS from env. Set it here so
-# the intake endpoints accept the bearer in the integration tests below.
+# A test API key — production reads INTAKE_API_KEYS from env. Set it here
+# UNCONDITIONALLY (env from the shell wins by default with setdefault, which
+# made the tests brittle to a developer who set INTAKE_API_KEYS=anything-else
+# in their environment). Force the test key into os.environ then clear the
+# cached Settings so the next call rereads.
 TEST_INTAKE_KEY = "test-intake-key-do-not-use-in-prod"
-os.environ.setdefault("INTAKE_API_KEYS", TEST_INTAKE_KEY)
-# Drop the cached Settings so the env var above takes effect.
+os.environ["INTAKE_API_KEYS"] = TEST_INTAKE_KEY
 get_settings.cache_clear()
 
 
