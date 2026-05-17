@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from jp_adopt_api.config import get_settings
 from jp_adopt_api.db import get_engine
-from jp_adopt_api.routers import auth_magic_link, contacts, health
+from jp_adopt_api.routers import auth_magic_link, contacts, health, intake
 
 
 def _cors_params() -> dict[str, object]:
@@ -48,3 +48,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(contacts.router)
 app.include_router(auth_magic_link.router)
+app.include_router(intake.router)

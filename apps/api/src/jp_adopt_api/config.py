@@ -61,6 +61,25 @@ class Settings(BaseSettings):
     acs_connection_string: str | None = None
     acs_sender_address: str = "donotreply@joshuaproject.net"
 
+    # Intake endpoints (U4): bearer API key auth for server-to-server calls
+    # from jp-adopt-forms. Multi-key rotation is a v2 concern; single shared
+    # secret is sufficient for week 1. Comma-separated to allow staged rotation
+    # (forms can send the new key while the old is still accepted).
+    intake_api_keys: str = ""
+    # Default origin tag for submissions that don't set one explicitly. Form B
+    # public-website submissions land here; Form A facilitator submissions
+    # likewise. Override per-submission via the `origin` field on the body.
+    intake_default_origin: str = "website"
+
+    @property
+    def intake_api_keys_list(self) -> list[str]:
+        """Parsed list of acceptable intake bearer tokens.
+
+        Empty list disables intake auth — only safe in dev. The intake router
+        refuses to start in production with an empty list (see endpoint guard).
+        """
+        return [k.strip() for k in self.intake_api_keys.split(",") if k.strip()]
+
     @model_validator(mode="after")
     def production_requires_strict_auth(self) -> Self:
         if self.is_production and not self.strict_auth:

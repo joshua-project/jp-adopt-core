@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -456,6 +457,73 @@ class Match(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class ApiIdempotencyKey(Base):
+    """Request-deduplication for intake endpoints (U4).
+
+    A pending row is inserted on first sight; once the handler completes, the
+    row flips to `state='completed'` with the cached response body. Replays
+    within the dedup window return the cached body verbatim.
+    """
+
+    __tablename__ = "api_idempotency_keys"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('pending', 'completed')",
+            name="ck_api_idempotency_keys_state",
+        ),
+        Index("ix_api_idempotency_keys_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    api_key_id: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    state: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="pending", default="pending"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now() + interval '24 hours'"),
+    )
+
+
+class SubmissionBlocked(Base):
+    """Anti-enumeration log: submissions matching a `do_not_engage` contact are
+    silently dropped to the caller (200 OK) but persisted here so Amy can audit
+    blocked attempts and reverse course if needed."""
+
+    __tablename__ = "submissions_blocked"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    email_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    submission_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    blocked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
