@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from jp_adopt_worker.outbox_delivery import process_outbox_batch
 from jp_adopt_worker.settings import WorkerSettings as EnvSettings
+from jp_adopt_worker.tasks.send_magic_link_email import send_magic_link_email
 
 logger = logging.getLogger(__name__)
 
@@ -73,4 +74,4 @@ class ArqWorkerSettings:
     cron_jobs = [
         cron(drain_outbox, second={0, 10, 20, 30, 40, 50}),
     ]
-    functions = [drain_outbox]
+    functions = [drain_outbox, send_magic_link_email]

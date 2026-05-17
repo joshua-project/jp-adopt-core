@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Self
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class ContactRead(BaseModel):
@@ -39,3 +39,120 @@ class ContactPatch(BaseModel):
             if fname in self.model_fields_set and getattr(self, fname) is None:
                 raise ValueError(f"{fname} cannot be null")
         return self
+
+
+# ── Intake (U4): Form A facilitation + Form B adoption ─────────────────────
+#
+# These schemas mirror jp-adopt-forms' POST envelope and accept the subset of
+# form fields jp-adopt-core needs to (a) dedupe the contact, (b) record
+# intent, (c) emit a `submission.received` outbox event for downstream matching.
+# Forms-app retains the full payload; we don't try to round-trip its complete
+# shape. Unknown fields in the body are ignored (no extra="forbid") so the
+# forms-app contract can grow without breaking us.
+
+
+ORIGIN_VALUES = (
+    "core_org",
+    "website",
+    "third_party_referral",
+    "partner_event",
+    "manual_entry",
+    "other",
+)
+PartyKindIntake = Literal["adopter", "facilitator"]
+
+
+class FpgInterestIn(BaseModel):
+    """One row of the adopter's FPG selection on Form B.
+
+    `rop3` is the canonical Joshua Project people-group ID. Empty list at the
+    request level → adopter is `potential_adopter` (wants help selecting).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    rop3: str = Field(min_length=1, max_length=32)
+    commitment_level: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=2048)
+
+
+class IntakeBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: EmailStr
+    display_name: str = Field(min_length=1, max_length=512)
+    origin: str | None = Field(default=None, max_length=64)
+    newsletter_opt_in: bool = False
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
+    language_codes: list[str] | None = None
+    # Free-form bag for forms-app fields we don't model individually but want
+    # to preserve verbatim in the outbox event payload + (eventually) in a
+    # raw_submission audit table.
+    extra: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def normalize_strings(self) -> Self:
+        if self.country_code:
+            object.__setattr__(self, "country_code", self.country_code.upper())
+        if self.language_codes:
+            object.__setattr__(
+                self,
+                "language_codes",
+                [c.strip().lower() for c in self.language_codes if c.strip()],
+            )
+        if self.origin and self.origin not in ORIGIN_VALUES:
+            # Loose validation: log-and-pass would be wrong here because the
+            # contact lands as the origin we record. Reject unknown values so
+            # forms-app must opt in to taxonomy changes.
+            raise ValueError(
+                f"origin must be one of {ORIGIN_VALUES}, got {self.origin!r}"
+            )
+        return self
+
+
+class AdoptionIntake(IntakeBase):
+    """Form B (`/adopt`) payload: an adopter, possibly multi-FPG."""
+
+    party_kind: Literal["adopter"] = "adopter"
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list)
+
+
+class FacilitationIntake(IntakeBase):
+    """Form A (`/facilitate-adoption`) payload: a facilitator (org or person)."""
+
+    party_kind: Literal["facilitator"] = "facilitator"
+    organization_name: str | None = Field(default=None, max_length=512)
+
+
+class IntakeSuccessData(BaseModel):
+    submission_id: uuid.UUID = Field(serialization_alias="submissionId")
+    request_id: str = Field(serialization_alias="requestId")
+    contact_id: uuid.UUID = Field(serialization_alias="contactId")
+    interest_ids: list[uuid.UUID] = Field(serialization_alias="interestIds")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class IntakeSuccess(BaseModel):
+    api_version: str = Field(default="1", serialization_alias="apiVersion")
+    ok: Literal[True] = True
+    data: IntakeSuccessData
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class IntakeErrorBody(BaseModel):
+    code: str
+    message: str | None = None
+    fields: dict[str, list[str]] | None = None
+    request_id: str | None = Field(default=None, serialization_alias="requestId")
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+
+class IntakeError(BaseModel):
+    api_version: str = Field(default="1", serialization_alias="apiVersion")
+    ok: Literal[False] = False
+    error: IntakeErrorBody
+
+    model_config = ConfigDict(populate_by_name=True)
