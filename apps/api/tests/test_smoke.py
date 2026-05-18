@@ -47,9 +47,8 @@ def test_patch_rejects_removed_status_fields(client: TestClient) -> None:
         json={"adopter_status": "matched"},
     )
     assert response.status_code == 422
-    body = response.json()
-    # Either FastAPI's standard 422 envelope (list of errors with `loc`) or
-    # the field name should appear somewhere in the response body.
+    # FastAPI 422 envelope (list of errors with `loc`) names the offending
+    # field somewhere in the response body.
     assert "adopter_status" in response.text
 
 

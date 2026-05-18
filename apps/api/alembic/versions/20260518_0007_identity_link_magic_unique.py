@@ -36,15 +36,27 @@ def upgrade() -> None:
     # Dedupe any existing duplicates first so the unique index can be created.
     # Keep the oldest row by linked_at (matches the new claim_magic_link
     # ORDER BY linked_at ASC LIMIT 1 lookup).
+    #
+    # N7: the original WHERE was just ``a.linked_at > b.linked_at``. If two
+    # duplicate rows share an identical ``linked_at`` (which can happen when
+    # two concurrent claims commit in the same millisecond on platforms
+    # where Postgres rounds to microsecond precision and the application
+    # uses ``now()`` from the same statement), neither side of the inequality
+    # is true and both survive, blowing up the subsequent CREATE INDEX with
+    # a unique-constraint violation. Add a UUID tiebreaker so exactly one
+    # row of every equal-timestamp pair is deleted regardless of clock
+    # resolution.
     op.execute(
         sa.text(
             """
             DELETE FROM identity_link a
             USING identity_link b
-            WHERE a.idp_name = 'magic_link'
+            WHERE a.id != b.id
+              AND a.idp_name = 'magic_link'
               AND b.idp_name = 'magic_link'
               AND a.email_normalized = b.email_normalized
-              AND a.linked_at > b.linked_at
+              AND (a.linked_at > b.linked_at
+                   OR (a.linked_at = b.linked_at AND a.id > b.id))
             """
         )
     )
@@ -56,18 +68,13 @@ def upgrade() -> None:
         postgresql_where=sa.text("idp_name = 'magic_link'"),
     )
 
-    # Own to migrator role when present (per-app DB user discipline).
-    op.execute(
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jp_adopt_migrator') THEN
-                EXECUTE 'ALTER INDEX uq_identity_link_magic_email OWNER TO jp_adopt_migrator';
-            END IF;
-        END
-        $$;
-        """
-    )
+    # N7 (DM-NEW-003): a previous revision of this migration also issued
+    # ``ALTER INDEX uq_identity_link_magic_email OWNER TO jp_adopt_migrator``.
+    # That statement is a no-op in Postgres — index access is governed by
+    # the underlying table's ACL, not the index's owner, and the owner is
+    # already inherited from whoever ran CREATE INDEX. Removed so future
+    # readers don't add it back; the table-level OWNER TO in 0006 / 0003
+    # already covers operational access.
 
 
 def downgrade() -> None:

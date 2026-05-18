@@ -211,6 +211,84 @@ async def test_transition_audit_roundtrip(conn: AsyncConnection) -> None:
         )
 
 
+async def test_identity_link_magic_dedup_handles_equal_linked_at(
+    conn: AsyncConnection,
+) -> None:
+    """N7: migration 0007's dedup query used to be
+    ``WHERE a.linked_at > b.linked_at``. Two duplicate rows with identical
+    ``linked_at`` would both fail that check and both survive, so the
+    subsequent ``CREATE UNIQUE INDEX`` blew up. The fix adds an
+    ``OR (a.linked_at = b.linked_at AND a.id > b.id)`` UUID tiebreaker so
+    exactly one row of every equal-timestamp pair is removed.
+
+    We can't run ``alembic downgrade 0004 → upgrade head`` from within a
+    test without disturbing the shared test DB, so this test exercises the
+    same SQL against a transactional scratch table that mirrors the
+    relevant ``identity_link`` columns. If the SQL is correct here it is
+    correct in the migration.
+    """
+    a = uuid.uuid4()
+    b = uuid.uuid4()
+    email = f"dedup-{uuid.uuid4().hex[:8]}@example.com"
+    async with conn.begin():
+        await conn.execute(
+            text(
+                """
+                CREATE TEMP TABLE _il_dedup (
+                    id uuid PRIMARY KEY,
+                    email_normalized text NOT NULL,
+                    idp_name text NOT NULL,
+                    linked_at timestamptz NOT NULL
+                ) ON COMMIT DROP
+                """
+            )
+        )
+        # Two rows for the same (email, idp_name='magic_link') with the
+        # same linked_at — what the old WHERE clause failed on.
+        await conn.execute(
+            text(
+                """
+                INSERT INTO _il_dedup (id, email_normalized, idp_name, linked_at)
+                VALUES
+                    (:a, :e, 'magic_link', '2026-05-18 12:00:00+00'),
+                    (:b, :e, 'magic_link', '2026-05-18 12:00:00+00')
+                """
+            ),
+            {"a": a, "b": b, "e": email},
+        )
+        # The migration's fixed dedup SQL.
+        await conn.execute(
+            text(
+                """
+                DELETE FROM _il_dedup a
+                USING _il_dedup b
+                WHERE a.id != b.id
+                  AND a.idp_name = 'magic_link'
+                  AND b.idp_name = 'magic_link'
+                  AND a.email_normalized = b.email_normalized
+                  AND (a.linked_at > b.linked_at
+                       OR (a.linked_at = b.linked_at AND a.id > b.id))
+                """
+            )
+        )
+        remaining = (
+            await conn.execute(
+                text(
+                    "SELECT id FROM _il_dedup WHERE email_normalized = :e"
+                ),
+                {"e": email},
+            )
+        ).all()
+        assert len(remaining) == 1, (
+            f"expected exactly one survivor with tied linked_at, got "
+            f"{len(remaining)}"
+        )
+        # Survivor must be the smaller UUID — that's the deterministic
+        # rule the tiebreaker enforces.
+        survivor_id = remaining[0][0]
+        assert survivor_id == min(a, b)
+
+
 async def test_identity_link_unique_b2c_subject_id(conn: AsyncConnection) -> None:
     sub = f"oid:{uuid.uuid4()}"
     a = uuid.uuid4()
