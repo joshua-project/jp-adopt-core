@@ -87,10 +87,24 @@ def _enqueue_send_factory(background_tasks: BackgroundTasks):
       * widening ``request_magic_link``'s contract to accept an enqueue
         callable bound to that pool.
 
-    Until that lands, an operator who needs at-least-once delivery should
-    run the API and the worker against the same Postgres and treat the
-    BackgroundTask path as best-effort. A follow-up unit should track this
-    as a hardening item.
+    Note however that the naive "enqueue to ARQ after commit" still has a
+    commit-then-enqueue gap: process crashes between the DB commit and the
+    Redis enqueue still drop the email.
+
+    PREFERRED PATTERN — transactional outbox (this codebase already has
+    ``Outbox`` and a worker ``drain_outbox`` cron):
+      1. In the same transaction that writes the magic_link_token row,
+         insert an ``Outbox`` row with ``event_type='magic_link.send_requested'``
+         and payload {email, raw_token_hashed_or_ref, click_url_base, ...}.
+      2. ``db.commit()`` atomically persists both the token and the outbox row.
+      3. The existing worker drain consumes the outbox row and enqueues
+         ``send_magic_link_email`` to ARQ. The handler is idempotent (token-
+         row state machine) so a duplicate delivery is safe.
+    This reuses the existing transactional-outbox primitive and inherits its
+    retry + dead-letter behavior. The raw token must not be persisted in the
+    outbox payload directly — pass a one-shot envelope (e.g. token id +
+    encrypted blob) since the outbox sits in the same DB and could be
+    inspected by privileged consumers later.
     """
 
     def _enqueue(**kwargs):
@@ -157,6 +171,16 @@ async def request_link(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"code": "rate_limited", "message": str(e)},
         ) from None
+    except Exception:
+        # B6 / SR5: rollback consistency. FastAPI's ``get_db`` would close
+        # the session anyway, but leaving non-RateLimitedError failures to
+        # propagate without an explicit rollback is a maintenance hazard:
+        # any future refactor that swaps the dep for one without auto-
+        # rollback would silently leak half-written magic_link_token rows.
+        # Rollback explicitly here and re-raise so the global handler still
+        # produces the right response.
+        await db.rollback()
+        raise
     # Post-commit fire-and-forget: any failure in enqueue is logged inside
     # the factory; we still return 202 (anti-enumeration shape) regardless.
     enqueue = _enqueue_send_factory(background_tasks)

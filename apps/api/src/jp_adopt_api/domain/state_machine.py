@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -465,7 +466,11 @@ async def _transition_generic(
     to_state: enum.StrEnum,
     draft_state: enum.StrEnum,
     state_enum: type[enum.StrEnum],
-    spec_lookup: Any,
+    # M2-03: ``spec_lookup`` was previously typed ``Any``, which suppressed all
+    # type checking at the two call sites. It's a (from, to) → TransitionSpec
+    # resolver — make that explicit so the type checker can catch incompatible
+    # lookup functions at the call site.
+    spec_lookup: Callable[[Any, Any], TransitionSpec],
     status_field_name: str,
     actor_b2c_sub: str,
     actor_role: str,

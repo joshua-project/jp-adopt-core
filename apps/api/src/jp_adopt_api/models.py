@@ -515,7 +515,14 @@ class ApiIdempotencyKey(Base):
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     state: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default="pending", default="pending"
+        Text,
+        nullable=False,
+        # DM-007: match the migration form (``sa.text("'pending'")``). A bare
+        # ``"pending"`` server_default sends ``DEFAULT 'pending'`` correctly
+        # at DDL time but autogenerate diffs it as different from the migration
+        # version and produces a spurious ALTER COLUMN proposal.
+        server_default=text("'pending'"),
+        default="pending",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

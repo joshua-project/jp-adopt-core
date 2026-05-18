@@ -36,10 +36,12 @@ from jp_adopt_api.auth_magic import (
     claim_magic_link,
     decode_magic_link_token,
     generate_token,
-    normalize_email,
     request_magic_link,
 )
 from jp_adopt_api.config import Settings, get_settings
+from jp_adopt_api.email_utils import (
+    normalize_email,  # M2-02: canonical (not auth_magic shim)
+)
 from jp_adopt_api.main import app
 from jp_adopt_api.models import (
     IdentityLink,

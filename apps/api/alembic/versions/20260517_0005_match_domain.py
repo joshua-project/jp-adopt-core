@@ -4,12 +4,16 @@ Revision ID: 0005
 Revises: 0003
 Create Date: 2026-05-15
 
-Note on revision sequencing: 0005 follows 0003 directly because U4
-(``20260516_0004_intake_endpoints.py``) is reserved but hasn't landed yet.
-When U4 ships, its migration will re-thread the chain (either by setting
-its own ``down_revision`` to 0003 and updating this file's
-``down_revision`` to 0004, or via a merge revision). Until then, 0005
-applies straight on top of 0003.
+Note on revision sequencing (DM-003 — docstring rot fixed): the final
+revision chain on the branch is
+
+    0001 -> 0002 -> 0003 -> 0005 -> 0006 -> 0004 -> 0007
+
+i.e. 0005 follows 0003 (as ``down_revision`` says), and 0004 was rethreaded
+onto 0006 after both 0005 and 0006 landed. The original docstring claimed
+0005 would later be rethreaded onto 0004 and that 0004 hadn't landed yet;
+both statements are obsolete. The chain shape above is canonical — do not
+re-edit ``down_revision`` here without coordinating with 0004/0006/0007.
 
 Adds:
   * facilitating_org (with capacity tracking, accepting_potential_adopters

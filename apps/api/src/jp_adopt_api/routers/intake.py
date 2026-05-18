@@ -163,14 +163,6 @@ def _hash_body(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-# Shim kept so the call sites below don't churn; canonical implementation
-# lives in ``jp_adopt_api.email_utils``. Previously this used a looser
-# ``strip().lower()`` form (without trailing-dot collapse), which diverged
-# from the magic-link side-car's normalization. F7 (PR #29) unified them.
-def _normalize_email(raw: str) -> str:
-    return normalize_email(raw)
-
-
 # ──────────────────────────────────────────────────────────────────────────
 # Persistence helpers
 # ──────────────────────────────────────────────────────────────────────────
@@ -341,7 +333,7 @@ async def _process_adoption(
     settings: Settings,
     request_id: str,
 ) -> JSONResponse:
-    email_normalized = _normalize_email(payload.email)
+    email_normalized = normalize_email(payload.email)
     if not _EMAIL_SANITY.match(email_normalized):
         return _error_response(
             status.HTTP_400_BAD_REQUEST,
@@ -478,7 +470,7 @@ async def _process_facilitation(
     settings: Settings,
     request_id: str,
 ) -> JSONResponse:
-    email_normalized = _normalize_email(payload.email)
+    email_normalized = normalize_email(payload.email)
     if not _EMAIL_SANITY.match(email_normalized):
         return _error_response(
             status.HTTP_400_BAD_REQUEST,
