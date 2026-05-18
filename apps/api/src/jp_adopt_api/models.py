@@ -315,6 +315,16 @@ class FacilitatingOrg(Base):
     capacity_committed: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0", default=0
     )
+    # N6: currently informational only. F36 added a ``contact_has_no_rop3``
+    # parameter to ``hard_filter`` that consulted this column, but the
+    # only production caller short-circuits no-rop3 interests to triage
+    # before ``hard_filter`` runs, so the wiring was reverted as dead
+    # code. The column stays because the planned U7+ triage-reassignment
+    # path will read it: when an adopter arrives without an FPG selection,
+    # ``match_or_route`` will pick from facilitators with
+    # ``accepting_potential_adopters=True AND is_triage_org=False`` as
+    # alternative triage targets. Until then, operators can populate the
+    # flag in advance; nothing in v1 depends on it.
     accepting_potential_adopters: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
     )

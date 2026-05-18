@@ -199,17 +199,20 @@ def hard_filter(
     rop3: str,
     covered_rop3s: frozenset[str],
     excluded_facilitator_ids: frozenset[uuid.UUID],
-    contact_has_no_rop3: bool = False,
 ) -> FilterReason:
     """Return PASSED if this facilitator is a candidate for this rop3, else
     a specific FilterReason describing what bounced them. Pure function —
     has no DB access; the caller pre-loads coverage.
 
-    F36: when ``contact_has_no_rop3`` is True the caller is asking whether
-    this facilitator is willing to accept an adopter who hasn't picked a
-    people group yet ("potential adopter"). Only facilitators with
-    ``accepting_potential_adopters = True`` qualify; otherwise the flag
-    was decorative dead code.
+    N6: F36 added a ``contact_has_no_rop3`` parameter that gated on
+    ``facilitator.accepting_potential_adopters``. Reverted because the
+    production caller in ``_process_interest`` short-circuits to triage
+    when ``rop3 IS None`` BEFORE this filter ever runs, and the only call
+    site passed ``contact_has_no_rop3=False`` unconditionally — making
+    the branch unreachable. The ``accepting_potential_adopters`` column
+    on ``FacilitatingOrg`` is intentionally retained: it will be wired
+    in once ``match_or_route`` gains an explicit no-FPG branch that
+    selects alternative triage orgs (planned for U7+).
     """
     if facilitator.id in excluded_facilitator_ids:
         return FilterReason.EXCLUDED
@@ -219,10 +222,6 @@ def hard_filter(
     # means "we accept zero adopters right now" so it fails closed.
     if facilitator.capacity_committed >= facilitator.capacity_total:
         return FilterReason.NO_CAPACITY
-    if contact_has_no_rop3:
-        if not facilitator.accepting_potential_adopters:
-            return FilterReason.NO_COVERAGE
-        return FilterReason.PASSED
     if rop3 not in covered_rop3s:
         return FilterReason.NO_COVERAGE
     return FilterReason.PASSED
@@ -482,7 +481,6 @@ async def _process_interest(
                 rop3=rop3,
                 covered_rop3s=cand_template.covered_rop3s,
                 excluded_facilitator_ids=excluded,
-                contact_has_no_rop3=False,
             ),
         )
         if cand.passed_filter:
