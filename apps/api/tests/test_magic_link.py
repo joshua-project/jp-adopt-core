@@ -180,7 +180,7 @@ async def test_claim_happy_path_mints_jwt_and_creates_identity_link(
         )
         await session.commit()
 
-        assert claim.token_type == "bearer"
+        assert claim.token_type == "Bearer"
         decoded = decode_magic_link_token(claim.access_token, settings)
         assert decoded.tid == "magic_link"
         assert decoded.email == email

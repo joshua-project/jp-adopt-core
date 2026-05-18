@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.config import Settings
 from jp_adopt_api.deps import DbSession, SettingsDep
+from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     AdopterInterest,
     ApiIdempotencyKey,
@@ -159,8 +160,12 @@ def _hash_body(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+# Shim kept so the call sites below don't churn; canonical implementation
+# lives in ``jp_adopt_api.email_utils``. Previously this used a looser
+# ``strip().lower()`` form (without trailing-dot collapse), which diverged
+# from the magic-link side-car's normalization. F7 (PR #29) unified them.
 def _normalize_email(raw: str) -> str:
-    return raw.strip().lower()
+    return normalize_email(raw)
 
 
 # ──────────────────────────────────────────────────────────────────────────

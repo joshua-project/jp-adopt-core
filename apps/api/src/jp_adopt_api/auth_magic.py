@@ -13,7 +13,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import jwt
 from sqlalchemy import func, select
@@ -21,11 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.config import Settings
+from jp_adopt_api.email_utils import normalize_email as normalize_email
 from jp_adopt_api.models import (
     IdentityLink,
     MagicLinkRateLimit,
     MagicLinkToken,
 )
+
+# Re-exported for backwards compatibility: callers still
+# ``from jp_adopt_api.auth_magic import normalize_email``. The canonical
+# implementation now lives in ``jp_adopt_api.email_utils``.
+__all__ = ("normalize_email",)
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +84,12 @@ class MagicLinkRequestResult:
 @dataclass(frozen=True)
 class ClaimResult:
     access_token: str
-    token_type: str = "bearer"
+    # RFC 6750 §2.1 capitalizes the scheme as "Bearer". OAuth2 clients (and
+    # the WWW-Authenticate header) match the scheme case-insensitively, but
+    # several SDKs that hand the value straight to ``Authorization`` headers
+    # forward it verbatim — so we emit the canonical form.
+    token_type: Literal["Bearer"] = "Bearer"
     expires_in: int = MAGIC_LINK_JWT_TTL_SECONDS
-
-
-def normalize_email(email: str) -> str:
-    """Lower-cased, whitespace-trimmed, no trailing-dot email.
-
-    Reused by every IdP integration so that ``identity_link.email_normalized``
-    is consistent regardless of which side-car bridged the identity.
-    """
-    return email.strip().rstrip(".").lower()
 
 
 def _hash_token(raw: str, signing_key: str) -> str:
