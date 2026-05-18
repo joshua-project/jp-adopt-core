@@ -43,6 +43,13 @@ class ContactPatch(BaseModel):
     # A dedicated ``POST /v1/contacts/{id}/transition`` endpoint (U7) is the
     # only supported path for status mutations. Free-form display fields
     # remain editable here.
+    #
+    # N2: ``extra='forbid'`` so a client that still POSTs the removed
+    # ``adopter_status`` / ``facilitator_status`` keys gets a 422 with the
+    # offending field named, rather than a silent 200 that drops the field
+    # (which would hide a real bypass-attempt from operators).
+    model_config = ConfigDict(extra="forbid")
+
     party_kind: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, min_length=1, max_length=512)
 
