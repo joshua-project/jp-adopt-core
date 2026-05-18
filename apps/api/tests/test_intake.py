@@ -6,7 +6,7 @@ Covers the test scenarios called out in the plan:
   * idempotency replay vs. conflict vs. in-flight;
   * 413 on > 64KB body;
   * 401 on missing / bad bearer;
-  * `do_not_engage` contact: silent 200 + submissions_blocked row;
+  * `do_not_engage` contact: silent 201 + submissions_blocked row;
   * concurrent submissions with the same email (unique-on-email-normalized
     + append-on-second behavior);
   * outbox_suppressed() context manager: 100 calls = 1 outbox row.
@@ -529,11 +529,14 @@ async def test_idempotency_conflict_on_different_body(
 
 
 @pytest.mark.asyncio
-async def test_do_not_engage_contact_returns_200_and_logs_block(
+async def test_do_not_engage_contact_returns_201_and_logs_block(
     client: TestClient, session: AsyncSession
 ) -> None:
     """Plan: anti-enumeration. We log the attempt but return a success-shaped
-    200 so a third party can't probe blocklist membership via response codes."""
+    201 (matching the accepted-first-call status) so a third party can't probe
+    blocklist membership via response codes. N1: this used to return 200 which
+    became a deterministic do_not_engage oracle once F14 changed first-success
+    to 201."""
     email = f"dne-{uuid.uuid4().hex[:8]}@example.com"
     # Seed a contact at do_not_engage.
     blocked = Contact(
@@ -551,7 +554,7 @@ async def test_do_not_engage_contact_returns_200_and_logs_block(
         json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA01"}]),
         headers=_auth_headers(idem=str(uuid.uuid4())),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     payload = r.json()
     assert payload["ok"] is True
     assert payload["data"]["interestIds"] == []

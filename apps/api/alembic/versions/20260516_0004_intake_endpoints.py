@@ -6,7 +6,8 @@ Adds:
     of the request body for collision detection (same key + different body →
     422 idempotency_key_conflict, mirroring jp-adopt-forms).
   * ``submissions_blocked`` — anti-enumeration log. Submissions that resolve to
-    a ``do_not_engage`` contact are silently dropped (200 OK) but written here
+    a ``do_not_engage`` contact are silently dropped (201 Created — matches
+    the accepted-first-call status to avoid a status-code oracle) but written here
     for Amy to review. Returning 403 would let a third party probe for
     blocked-list membership.
 

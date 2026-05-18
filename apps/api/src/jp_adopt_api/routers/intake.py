@@ -362,8 +362,14 @@ async def _process_adoption(
     )
 
     if contact.adopter_status == "do_not_engage":
-        # Anti-enumeration: log, return success-shaped 200 with NO submission
-        # written so the caller can't probe blocklist membership.
+        # Anti-enumeration: log, return success-shaped response with NO
+        # submission written so the caller can't probe blocklist membership.
+        #
+        # N1: must return 201 (matching the accepted-first-call status) so the
+        # status code itself doesn't reveal that the contact is blocked. F14
+        # introduced 201 for first-successful processing; if we return 200 here
+        # the blocked path becomes a deterministic do_not_engage oracle
+        # (201 = real, 200 = blocked).
         #
         # F15: persist only a PII-light fingerprint of the submission rather
         # than the raw form payload. Storing the full body indefinitely is a
@@ -384,7 +390,7 @@ async def _process_adoption(
             )
         )
         return _success_response(
-            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
             submission_id=uuid.uuid4(),
             request_id=request_id,
             contact_id=contact.id,
@@ -477,6 +483,9 @@ async def _process_facilitation(
     )
 
     if contact.facilitator_status == "do_not_engage":
+        # N1: return 201 (not 200) so status code doesn't act as a
+        # do_not_engage oracle. See the adoption side for the full
+        # anti-enumeration rationale.
         # See F15 note above on the adoption side: only the minimal
         # fingerprint is persisted (not the raw payload).
         session.add(
@@ -493,7 +502,7 @@ async def _process_facilitation(
             )
         )
         return _success_response(
-            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
             submission_id=uuid.uuid4(),
             request_id=request_id,
             contact_id=contact.id,

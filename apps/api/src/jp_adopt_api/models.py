@@ -522,8 +522,10 @@ class ApiIdempotencyKey(Base):
 
 class SubmissionBlocked(Base):
     """Anti-enumeration log: submissions matching a `do_not_engage` contact are
-    silently dropped to the caller (200 OK) but persisted here so Amy can audit
-    blocked attempts and reverse course if needed."""
+    silently dropped to the caller (201 Created — matching the accepted-first-
+    call status so the response is indistinguishable from a real submission)
+    but persisted here so Amy can audit blocked attempts and reverse course
+    if needed."""
 
     __tablename__ = "submissions_blocked"
 
