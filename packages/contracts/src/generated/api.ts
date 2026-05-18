@@ -321,7 +321,7 @@ export interface components {
             /** Input */
             input?: unknown;
             /** Context */
-            ctx?: Record<string, never>;
+            ctx?: Record<string, unknown>;
         };
     };
     responses: never;
