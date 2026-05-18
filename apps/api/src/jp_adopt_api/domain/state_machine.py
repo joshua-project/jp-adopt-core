@@ -29,7 +29,8 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jp_adopt_api.models import Contact, Outbox, TransitionAudit
+from jp_adopt_api.models import Contact, TransitionAudit
+from jp_adopt_api.outbox_suppression import emit_outbox
 
 # ---------------------------------------------------------------------------
 # Enums (lowercase values, exactly matching the CHECK constraint strings on
@@ -505,12 +506,15 @@ async def transition_adopter(
         timestamp=now,
     )
 
-    outbox = Outbox(
-        id=uuid.uuid4(),
+    # Route the outbox write through emit_outbox so bulk-import paths can
+    # suppress the per-row events and emit a single summary. The returned
+    # ID is None when suppression is active; TransitionAudit.outbox_event_ids
+    # is nullable so we tolerate that case honestly (no fake UUID).
+    outbox_event_id = emit_outbox(
+        session,
         event_type=spec.event_type,
-        payload_json=payload,
+        payload=payload,
     )
-    session.add(outbox)
 
     audit = TransitionAudit(
         id=uuid.uuid4(),
@@ -521,7 +525,7 @@ async def transition_adopter(
         actor_role=actor_role,
         reason_code=reason_code.value if reason_code is not None else None,
         reason_text=reason_text,
-        outbox_event_ids=[outbox.id],
+        outbox_event_ids=[outbox_event_id] if outbox_event_id is not None else None,
     )
     session.add(audit)
 
@@ -580,12 +584,12 @@ async def transition_facilitator(
         timestamp=now,
     )
 
-    outbox = Outbox(
-        id=uuid.uuid4(),
+    # Same suppression-aware path as the adopter side; see comment above.
+    outbox_event_id = emit_outbox(
+        session,
         event_type=spec.event_type,
-        payload_json=payload,
+        payload=payload,
     )
-    session.add(outbox)
 
     audit = TransitionAudit(
         id=uuid.uuid4(),
@@ -596,7 +600,7 @@ async def transition_facilitator(
         actor_role=actor_role,
         reason_code=reason_code.value if reason_code is not None else None,
         reason_text=reason_text,
-        outbox_event_ids=[outbox.id],
+        outbox_event_ids=[outbox_event_id] if outbox_event_id is not None else None,
     )
     session.add(audit)
 

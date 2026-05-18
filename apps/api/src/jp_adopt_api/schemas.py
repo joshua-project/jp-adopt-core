@@ -27,10 +27,14 @@ class ContactListResponse(BaseModel):
 
 
 class ContactPatch(BaseModel):
+    # F5 of the U1-U6 review: ``adopter_status`` and ``facilitator_status``
+    # were intentionally REMOVED from the patch surface so a generic PATCH
+    # cannot bypass the state-machine's role/reason-code/audit guarantees.
+    # A dedicated ``POST /v1/contacts/{id}/transition`` endpoint (U7) is the
+    # only supported path for status mutations. Free-form display fields
+    # remain editable here.
     party_kind: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, min_length=1, max_length=512)
-    adopter_status: str | None = Field(default=None, max_length=128)
-    facilitator_status: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def reject_null_for_non_nullable_columns(self) -> Self:

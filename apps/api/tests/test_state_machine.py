@@ -398,3 +398,69 @@ async def test_facilitator_transition_new_to_ready(session: AsyncSession) -> Non
         actor_role="adoption_manager",
     )
     assert contact.facilitator_status == "ready"
+
+
+# ---------------------------------------------------------------------------
+# F4 regression: transition Outbox writes route through emit_outbox so the
+# outbox_suppressed() bulk-import context can swallow them.
+# ---------------------------------------------------------------------------
+
+
+async def test_transition_under_outbox_suppression_emits_zero_outbox_rows(
+    session: AsyncSession,
+) -> None:
+    """One transition inside ``outbox_suppressed`` produces 0 per-row Outbox
+    rows and increments the suppression counter by 1.
+
+    The summary ``jp.adopt.v1.bulk_imported`` event is still emitted by the
+    context manager on exit; that is the single row we expect to see for
+    the suppressed event_type, NOT the per-transition event itself.
+    """
+    from jp_adopt_api.outbox_suppression import outbox_suppressed
+
+    contact = await _make_contact(session, adopter_status="new")
+    event_type = "jp.adopt.v1.contact.contacted"
+
+    async with outbox_suppressed("test_bulk_label", session) as ctx:
+        await transition_adopter(
+            session,
+            contact,
+            to_state=AdopterState.CONTACTED,
+            actor_b2c_sub=ACTOR_SUB,
+            actor_role="adoption_manager",
+        )
+        # Inside the suppression context: the per-event row was buffered,
+        # not written. The suppression counter records what was skipped.
+        assert ctx.event_counts[event_type] == 1
+        assert ctx.total_suppressed == 1
+
+    # Now after the context exits, verify that no Outbox row for this
+    # contact's contacted event was actually written, and that the audit
+    # row honestly stored ``outbox_event_ids = NULL`` (no fake UUID).
+    per_event_rows = (
+        (
+            await session.execute(
+                select(Outbox).where(Outbox.event_type == event_type)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mine = [
+        r for r in per_event_rows
+        if r.payload_json.get("contact_id") == str(contact.id)
+    ]
+    assert mine == [], "per-row Outbox event must not be written under suppression"
+
+    audit = (
+        (
+            await session.execute(
+                select(TransitionAudit).where(
+                    TransitionAudit.contact_id == contact.id
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert audit.outbox_event_ids is None
