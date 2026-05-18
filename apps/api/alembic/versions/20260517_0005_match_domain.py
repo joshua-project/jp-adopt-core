@@ -29,16 +29,16 @@ Seeds:
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0005"
-down_revision: Union[str, None] = "0003"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0003"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 MATCH_STATUS_VALUES = (
@@ -437,6 +437,34 @@ def upgrade() -> None:
             ex_id=example_mission_id,
             fa_id=frontier_alliance_id,
         )
+    )
+
+    # Own to migrator role when present (per-app DB user discipline). Mirrors
+    # the pattern in 0003/0004 — every new table must end up owned by the
+    # migrator role so the application role's GRANTs apply consistently.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            t text;
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jp_adopt_migrator') THEN
+                FOR t IN
+                    SELECT unnest(ARRAY[
+                        'facilitating_org',
+                        'fpg',
+                        'facilitator_fpg_coverage',
+                        'adopter_interest',
+                        'match',
+                        'match_attempt'
+                    ])
+                LOOP
+                    EXECUTE format('ALTER TABLE %I OWNER TO jp_adopt_migrator', t);
+                END LOOP;
+            END IF;
+        END
+        $$;
+        """
     )
 
 

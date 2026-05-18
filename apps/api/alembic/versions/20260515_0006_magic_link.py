@@ -71,6 +71,28 @@ def upgrade() -> None:
         ["email_normalized", "requested_at"],
     )
 
+    # Own to migrator role when present (per-app DB user discipline).
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            t text;
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jp_adopt_migrator') THEN
+                FOR t IN
+                    SELECT unnest(ARRAY[
+                        'magic_link_token',
+                        'magic_link_rate_limit'
+                    ])
+                LOOP
+                    EXECUTE format('ALTER TABLE %I OWNER TO jp_adopt_migrator', t);
+                END LOOP;
+            END IF;
+        END
+        $$;
+        """
+    )
+
 
 def downgrade() -> None:
     op.drop_index(

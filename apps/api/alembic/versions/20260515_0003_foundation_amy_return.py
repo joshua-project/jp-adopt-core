@@ -15,17 +15,16 @@ Adds:
 
 from __future__ import annotations
 
-import uuid
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0003"
-down_revision: Union[str, None] = "0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 ADOPTER_STATUS_VALUES = (
@@ -290,35 +289,70 @@ def upgrade() -> None:
     # The plan dropped facilitator_admin and adoption_partner as dead-code roles
     # for week 1; only staff_admin, adoption_manager, triage_facilitator,
     # and facilitator are seeded here.
-    seed_sql = sa.text(
-        """
-        INSERT INTO roles (id, name, description)
-        VALUES (:id, :name, :description)
-        """
-    )
-    bind = op.get_bind()
-    for name, description in (
+    #
+    # Deterministic UUIDs so tests, fixtures, and runbooks can reference them
+    # by ID. ``00000003-...000N`` encodes the migration revision (0003) and
+    # a stable ordinal (1..4) — uuid.uuid4() would mint a new UUID per fresh
+    # DB which makes any cross-environment audit comparison meaningless.
+    for role_id, name, description in (
         (
+            "00000003-0000-0000-0000-000000000001",
             "staff_admin",
             "Full platform access; manages roles and configuration",
         ),
         (
+            "00000003-0000-0000-0000-000000000002",
             "adoption_manager",
             "Triages adopters, makes matches, reviews send-backs (Amy's role)",
         ),
         (
+            "00000003-0000-0000-0000-000000000003",
             "triage_facilitator",
             "Default queue assignee for adopters with no FPG selected",
         ),
         (
+            "00000003-0000-0000-0000-000000000004",
             "facilitator",
             "Receives matched adopters; accepts/declines/sends-back",
         ),
     ):
-        bind.execute(
-            seed_sql,
-            {"id": uuid.uuid4(), "name": name, "description": description},
+        # Use op.execute directly so the seed runs in the same Alembic
+        # transaction as the DDL above. op.get_bind().execute() works but
+        # bypasses Alembic's migration-context logging.
+        op.execute(
+            sa.text(
+                "INSERT INTO roles (id, name, description) "
+                "VALUES (CAST(:id AS UUID), :name, :description)"
+            ).bindparams(id=role_id, name=name, description=description)
         )
+
+    # Own to migrator role when present (per-app DB user discipline). Mirrors
+    # the pattern in 0004; copied here so the foundation migration doesn't
+    # leave its tables owned by the migrator-application split user.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            t text;
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jp_adopt_migrator') THEN
+                FOR t IN
+                    SELECT unnest(ARRAY[
+                        'roles',
+                        'user_roles',
+                        'transition_audit',
+                        'identity_link',
+                        'partner_tenants',
+                        'migration_conflicts'
+                    ])
+                LOOP
+                    EXECUTE format('ALTER TABLE %I OWNER TO jp_adopt_migrator', t);
+                END LOOP;
+            END IF;
+        END
+        $$;
+        """
+    )
 
 
 def downgrade() -> None:
@@ -343,6 +377,17 @@ def downgrade() -> None:
 
     op.drop_constraint("ck_contacts_facilitator_status", "contacts", type_="check")
     op.drop_constraint("ck_contacts_adopter_status", "contacts", type_="check")
+
+    # F20: round-trip the spike-era seed value the upgrade rewrote. Without
+    # this UPDATE, a downgrade would silently drop the operator-visible
+    # 'new_inquiry' label from the seeded contact. The CHECK constraint has
+    # already been dropped above so 'new_inquiry' is a legal write here.
+    op.execute(
+        sa.text(
+            "UPDATE contacts SET adopter_status = 'new_inquiry' "
+            "WHERE id = CAST(:cid AS UUID) AND adopter_status = 'new'"
+        ).bindparams(cid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    )
 
     op.drop_column("contacts", "language_codes")
     op.drop_column("contacts", "country_code")
