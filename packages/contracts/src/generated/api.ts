@@ -594,7 +594,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Idempotent replay (cached response) */
+            /** @description Idempotent replay (cached) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -612,7 +612,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntakeSuccess"];
                 };
             };
-            /** @description validation_failed / idempotency_required */
+            /** @description validation / idempotency_required */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -657,7 +657,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntakeError"];
                 };
             };
-            /** @description intake_disabled (no API keys configured) */
+            /** @description intake_disabled (no keys) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -680,7 +680,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Idempotent replay (cached response) */
+            /** @description Idempotent replay (cached) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -698,7 +698,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntakeSuccess"];
                 };
             };
-            /** @description validation_failed / idempotency_required */
+            /** @description validation / idempotency_required */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -743,7 +743,7 @@ export interface operations {
                     "application/json": components["schemas"]["IntakeError"];
                 };
             };
-            /** @description intake_disabled (no API keys configured) */
+            /** @description intake_disabled (no keys) */
             503: {
                 headers: {
                     [name: string]: unknown;

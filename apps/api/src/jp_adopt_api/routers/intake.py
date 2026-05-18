@@ -685,14 +685,14 @@ async def _handle(
 # clients (``pnpm contracts:generate``) get a typed envelope for each
 # outcome including the error envelope.
 _INTAKE_RESPONSES: dict[int | str, dict[str, object]] = {
-    200: {"model": IntakeSuccess, "description": "Idempotent replay (cached response)"},
+    200: {"model": IntakeSuccess, "description": "Idempotent replay (cached)"},
     201: {"model": IntakeSuccess, "description": "First successful processing"},
-    400: {"model": IntakeError, "description": "validation_failed / idempotency_required"},
+    400: {"model": IntakeError, "description": "validation / idempotency_required"},
     401: {"model": IntakeError, "description": "Bearer missing or unknown"},
     409: {"model": IntakeError, "description": "Idempotency-Key in-flight"},
     413: {"model": IntakeError, "description": "payload_too_large"},
     422: {"model": IntakeError, "description": "idempotency_key_conflict"},
-    503: {"model": IntakeError, "description": "intake_disabled (no API keys configured)"},
+    503: {"model": IntakeError, "description": "intake_disabled (no keys)"},
 }
 
 

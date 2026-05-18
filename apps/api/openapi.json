@@ -418,7 +418,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Idempotent replay (cached response)",
+            "description": "Idempotent replay (cached)",
             "content": {
               "application/json": {
                 "schema": {
@@ -438,7 +438,7 @@
             }
           },
           "400": {
-            "description": "validation_failed / idempotency_required",
+            "description": "validation / idempotency_required",
             "content": {
               "application/json": {
                 "schema": {
@@ -488,7 +488,7 @@
             }
           },
           "503": {
-            "description": "intake_disabled (no API keys configured)",
+            "description": "intake_disabled (no keys)",
             "content": {
               "application/json": {
                 "schema": {
@@ -543,7 +543,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Idempotent replay (cached response)",
+            "description": "Idempotent replay (cached)",
             "content": {
               "application/json": {
                 "schema": {
@@ -563,7 +563,7 @@
             }
           },
           "400": {
-            "description": "validation_failed / idempotency_required",
+            "description": "validation / idempotency_required",
             "content": {
               "application/json": {
                 "schema": {
@@ -613,7 +613,7 @@
             }
           },
           "503": {
-            "description": "intake_disabled (no API keys configured)",
+            "description": "intake_disabled (no keys)",
             "content": {
               "application/json": {
                 "schema": {
