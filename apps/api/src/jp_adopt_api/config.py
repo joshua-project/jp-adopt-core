@@ -6,6 +6,11 @@ from typing import Self
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Module-level literal for the dev default magic-link signing key. Exposed as
+# a constant so the production guard validator can compare against it without
+# duplicating the string (and so a test importing it stays in sync).
+_DEV_MAGIC_LINK_SIGNING_KEY = "dev-magic-link-signing-key-please-change-32b"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -43,7 +48,10 @@ class Settings(BaseSettings):
 
     # Magic-link side-car: HMAC signing key for the HS256 JWT minted after a
     # successful claim. Must be >= 32 bytes in production (model_validator below).
-    magic_link_signing_key: str = "dev-magic-link-signing-key-please-change-32b"
+    # N3: the literal below is also rejected in production even though it
+    # satisfies the >=32 byte floor — see
+    # ``magic_link_key_must_not_be_default_in_production``.
+    magic_link_signing_key: str = _DEV_MAGIC_LINK_SIGNING_KEY
 
     # The public web URL where the click target lives; the worker composes a link
     # of the form f"{click_base_url}/auth/claim?token={raw_token}".
@@ -97,6 +105,44 @@ class Settings(BaseSettings):
             msg = (
                 "MAGIC_LINK_SIGNING_KEY must be at least 32 bytes long when "
                 "APP_ENV/ENV is production (HS256 secret entropy floor)."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def magic_link_key_must_not_be_default_in_production(self) -> Self:
+        """N3: the dev default literal (44 bytes) satisfies the >=32-byte
+        entropy floor above, which would otherwise let production boot with a
+        publicly-known signing key. Reject the exact literal explicitly so an
+        operator who forgets to rotate the key fails fast at startup instead
+        of silently signing magic-link JWTs with a checked-in secret."""
+        if (
+            self.is_production
+            and self.magic_link_signing_key == _DEV_MAGIC_LINK_SIGNING_KEY
+        ):
+            msg = (
+                "MAGIC_LINK_SIGNING_KEY equals the dev default literal; rotate "
+                "to a unique key in production (the dev default is checked into "
+                "the repo and trivially recoverable)."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def acs_connection_string_required_in_production(self) -> Self:
+        """N5: without an ACS connection string the magic-link worker silently
+        logs the magic-link URL to stdout instead of emailing it. In production
+        that means a user submits a magic-link request, receives a 202 (anti-
+        enumeration shape), and never gets the email — the misconfiguration
+        is invisible from the outside because the success envelope is identical
+        whether email delivery succeeded or not. Refuse to boot when ACS is
+        unconfigured in production."""
+        if self.is_production and not self.acs_connection_string:
+            msg = (
+                "ACS_CONNECTION_STRING must be set when APP_ENV/ENV is production. "
+                "Without it the magic-link worker silently drops emails (logging "
+                "the URL to stdout instead of sending) and users will get 202 "
+                "responses with no email arriving."
             )
             raise ValueError(msg)
         return self
