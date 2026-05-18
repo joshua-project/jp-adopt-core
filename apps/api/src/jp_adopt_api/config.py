@@ -115,10 +115,18 @@ class Settings(BaseSettings):
         entropy floor above, which would otherwise let production boot with a
         publicly-known signing key. Reject the exact literal explicitly so an
         operator who forgets to rotate the key fails fast at startup instead
-        of silently signing magic-link JWTs with a checked-in secret."""
+        of silently signing magic-link JWTs with a checked-in secret.
+
+        Normalize via ``strip().lower()`` before comparison so trailing
+        newlines, leading whitespace, or case variants (e.g. an operator
+        copy-pasting from a wiki that uppercased the literal) don't bypass
+        the guard. Comparing literals only — both sides are checked-in dev
+        secrets, so case-insensitive equality has no real security cost.
+        """
         if (
             self.is_production
-            and self.magic_link_signing_key == _DEV_MAGIC_LINK_SIGNING_KEY
+            and self.magic_link_signing_key.strip().lower()
+            == _DEV_MAGIC_LINK_SIGNING_KEY.strip().lower()
         ):
             msg = (
                 "MAGIC_LINK_SIGNING_KEY equals the dev default literal; rotate "
@@ -136,13 +144,33 @@ class Settings(BaseSettings):
         enumeration shape), and never gets the email — the misconfiguration
         is invisible from the outside because the success envelope is identical
         whether email delivery succeeded or not. Refuse to boot when ACS is
-        unconfigured in production."""
-        if self.is_production and not self.acs_connection_string:
+        unconfigured in production.
+
+        Bare presence is not enough: placeholders like ``'TODO-fill-in-vault'``
+        also pass ``not self.acs_connection_string`` but blow up at first
+        send. Validate the shape — an ACS connection string is of the form
+        ``endpoint=https://...;accesskey=...``; reject anything missing
+        either substring (case-insensitive, since Azure docs vary on casing).
+        """
+        if not self.is_production:
+            return self
+        cs = self.acs_connection_string
+        if not cs:
             msg = (
                 "ACS_CONNECTION_STRING must be set when APP_ENV/ENV is production. "
                 "Without it the magic-link worker silently drops emails (logging "
                 "the URL to stdout instead of sending) and users will get 202 "
                 "responses with no email arriving."
+            )
+            raise ValueError(msg)
+        cs_lower = cs.lower()
+        if "endpoint=" not in cs_lower or "accesskey=" not in cs_lower:
+            msg = (
+                "ACS_CONNECTION_STRING is set but does not look like a valid "
+                "ACS connection string (expected 'endpoint=...;accesskey=...'). "
+                "Placeholder values like 'TODO-fill-in-vault' boot fine but "
+                "blow up at first send; reject them here so the misconfiguration "
+                "surfaces at startup instead of at first magic-link request."
             )
             raise ValueError(msg)
         return self

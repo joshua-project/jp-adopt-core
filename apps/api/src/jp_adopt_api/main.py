@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from jp_adopt_api.config import get_settings
 from jp_adopt_api.db import get_engine
@@ -44,6 +46,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def sanitized_validation_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """A2 / sec-3: FastAPI's default 422 handler serializes ``input`` and
+    ``ctx`` into the response body. For endpoints that accept arbitrary
+    body fields (e.g. PATCH /v1/contacts/{id} with ``extra='forbid'``), the
+    offending field's raw value is echoed back — which then lands in proxy
+    and CDN access logs. A caller who posts a secret in the wrong place
+    would see it logged downstream.
+
+    Strip ``input`` and ``ctx`` from every error entry; keep ``type``,
+    ``loc``, ``msg`` which are derived from the schema and do not contain
+    user-controlled data.
+    """
+    sanitized: list[dict[str, object]] = []
+    for e in exc.errors():
+        sanitized.append(
+            {
+                "type": e.get("type"),
+                "loc": e.get("loc"),
+                "msg": e.get("msg"),
+                # explicitly drop "input" and "ctx"
+            }
+        )
+    return JSONResponse(status_code=422, content={"detail": sanitized})
+
 
 app.include_router(health.router)
 app.include_router(contacts.router)
