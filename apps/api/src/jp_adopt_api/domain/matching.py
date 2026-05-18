@@ -199,10 +199,18 @@ def hard_filter(
     rop3: str,
     covered_rop3s: frozenset[str],
     excluded_facilitator_ids: frozenset[uuid.UUID],
+    contact_has_no_rop3: bool = False,
 ) -> FilterReason:
     """Return PASSED if this facilitator is a candidate for this rop3, else
     a specific FilterReason describing what bounced them. Pure function —
-    has no DB access; the caller pre-loads coverage."""
+    has no DB access; the caller pre-loads coverage.
+
+    F36: when ``contact_has_no_rop3`` is True the caller is asking whether
+    this facilitator is willing to accept an adopter who hasn't picked a
+    people group yet ("potential adopter"). Only facilitators with
+    ``accepting_potential_adopters = True`` qualify; otherwise the flag
+    was decorative dead code.
+    """
     if facilitator.id in excluded_facilitator_ids:
         return FilterReason.EXCLUDED
     if not facilitator.active:
@@ -211,6 +219,10 @@ def hard_filter(
     # means "we accept zero adopters right now" so it fails closed.
     if facilitator.capacity_committed >= facilitator.capacity_total:
         return FilterReason.NO_CAPACITY
+    if contact_has_no_rop3:
+        if not facilitator.accepting_potential_adopters:
+            return FilterReason.NO_COVERAGE
+        return FilterReason.PASSED
     if rop3 not in covered_rop3s:
         return FilterReason.NO_COVERAGE
     return FilterReason.PASSED
@@ -455,6 +467,10 @@ async def _process_interest(
 
     # --- Score every candidate -----------------------------------------
     scored: list[tuple[Candidate, float]] = []
+    # F9: track the MatchAttempt rows we create for this interest in a local
+    # list (no longer scanning ``session.new`` later) so rank backfill is
+    # immune to unrelated flushes or sibling iterations adding/removing rows.
+    attempts_for_this_interest: list[MatchAttempt] = []
     for cand_template in candidates:
         # Each interest needs its own Candidate so filter_reason / score
         # don't leak across interests within the run.
@@ -466,6 +482,7 @@ async def _process_interest(
                 rop3=rop3,
                 covered_rop3s=cand_template.covered_rop3s,
                 excluded_facilitator_ids=excluded,
+                contact_has_no_rop3=False,
             ),
         )
         if cand.passed_filter:
@@ -475,22 +492,26 @@ async def _process_interest(
                 rop3=rop3,
                 covered_rop3s=cand.covered_rop3s,
             )
-            weighted = cand.score_vector.weighted_total(weights)
+            # F43: round once at the source. Both the rank ordering AND the
+            # persisted ``score`` column read this same value, so floating-
+            # point drift between "weighted for sort" and "weighted for
+            # storage" can't desynchronize them.
+            weighted = round(cand.score_vector.weighted_total(weights), 3)
             scored.append((cand, weighted))
+        else:
+            weighted = None  # type: ignore[assignment]
         # Persist a MatchAttempt for *every* candidate considered (pass or
         # fail) so the audit can answer "why didn't org X match?" without
         # rerunning the algorithm.
+        # F31: reuse the local ``weighted`` value here instead of recomputing
+        # ``cand.score_vector.weighted_total(weights)`` two more times.
         attempt = MatchAttempt(
             id=uuid.uuid4(),
             contact_id=contact.id,
             adopter_interest_id=interest.id,
             run_id=run_id,
             candidate_facilitator_id=cand.facilitator.id,
-            score=(
-                Decimal(str(round(cand.score_vector.weighted_total(weights), 3)))
-                if cand.score_vector is not None
-                else None
-            ),
+            score=(Decimal(str(weighted)) if weighted is not None else None),
             score_breakdown=cand.score_vector.as_dict()
             if cand.score_vector is not None
             else None,
@@ -498,15 +519,12 @@ async def _process_interest(
                 candidate=cand,
                 rop3=rop3,
                 score_vector=cand.score_vector,
-                weighted_total=(
-                    cand.score_vector.weighted_total(weights)
-                    if cand.score_vector is not None
-                    else None
-                ),
+                weighted_total=weighted,
             ),
             rank=None,  # set below for promoted candidates
         )
         session.add(attempt)
+        attempts_for_this_interest.append(attempt)
         outcome.attempt_ids.append(attempt.id)
 
     # Hard-filter shut out everyone → triage queue.
@@ -534,17 +552,16 @@ async def _process_interest(
         for cand, total in ranked
         if total >= MIN_SCORE_FLOOR
     ][:TOP_N_RECOMMENDED]
-    # Backfill rank on the promoted MatchAttempt rows. The attempt rows were
-    # already flushed (per-candidate) so we mutate the SQLAlchemy objects;
-    # the next flush at the end of _process_interest captures the rank.
+    # Backfill rank on the promoted MatchAttempt rows. We iterate the
+    # ``attempts_for_this_interest`` list captured during scoring rather than
+    # walking ``session.new`` — see F9: the session.new walk caught the
+    # right rows in practice but only because nothing else was happening
+    # in the session. Any concurrent mutation (sibling interest iteration,
+    # an outer caller adding rows) could shift which rows the loop ranked.
     promoted_attempt_index: dict[uuid.UUID, int] = {}
     for idx, (cand, _total) in enumerate(promoted, start=1):
         promoted_attempt_index[cand.facilitator.id] = idx
-    for attempt_obj in list(session.new):
-        if not isinstance(attempt_obj, MatchAttempt):
-            continue
-        if attempt_obj.adopter_interest_id != interest.id:
-            continue
+    for attempt_obj in attempts_for_this_interest:
         rank = promoted_attempt_index.get(attempt_obj.candidate_facilitator_id)
         if rank is not None:
             attempt_obj.rank = rank

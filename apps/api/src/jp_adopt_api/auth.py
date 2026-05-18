@@ -148,9 +148,14 @@ def authenticate_bearer(token: str, settings: Settings) -> AuthUser:
             raise
 
     # Unknown issuer: in non-production we fall through to the B2C decoder
-    # (which will fail with a precise error). In production we never accept
-    # unknown issuers — STRICT_AUTH=true guarantees the dev-bearer above is
-    # also gated, so the B2C decoder remains the canonical reject path.
+    # (which will fail with a precise error). In production / strict-auth
+    # we raise an explicit InvalidIssuerError so the rejection reason is
+    # never ambiguous in logs (a B2C audience failure for a token that
+    # was never B2C in the first place is a confusing error trail).
+    if settings.is_production or settings.strict_auth:
+        raise jwt.InvalidIssuerError(
+            f"Unrecognized token issuer: {iss!r}"
+        )
     return decode_b2c_access_token(token, settings)
 
 
@@ -161,6 +166,10 @@ async def authenticate_bearer_async(
 ) -> AuthUser:
     """Async dispatch — same as :func:`authenticate_bearer` but also handles
     Entra direct (which needs a DB session for the ``partner_tenants`` check).
+
+    Note: the IdP set is decided by THIS validator dispatch logic — the
+    issuer regex match below — not by a config discriminator. Adding a new
+    side-car (week N) means adding a regex and a decoder import here.
     """
     if token == DEV_BEARER_TOKEN:
         return authenticate_bearer(token, settings)

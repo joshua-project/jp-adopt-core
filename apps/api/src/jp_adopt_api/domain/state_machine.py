@@ -24,7 +24,7 @@ import enum
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -458,33 +458,38 @@ def _build_payload(
     }
 
 
-async def transition_adopter(
+async def _transition_generic(
     session: AsyncSession,
     contact: Contact,
     *,
-    to_state: AdopterState,
+    to_state: enum.StrEnum,
+    draft_state: enum.StrEnum,
+    state_enum: type[enum.StrEnum],
+    spec_lookup: Any,
+    status_field_name: str,
     actor_b2c_sub: str,
     actor_role: str,
-    reason_code: ReasonCode | None = None,
-    reason_text: str | None = None,
+    reason_code: ReasonCode | None,
+    reason_text: str | None,
 ) -> Contact:
-    """Move ``contact`` along the adopter side of the state machine.
+    """Shared transition machinery. F30: the adopter / facilitator entrypoints
+    are now thin wrappers around this function.
 
-    Caller controls the transaction boundary — this function flushes but
-    does NOT commit. Raises one of the documented exceptions on any
-    validation failure.
+    ``status_field_name`` is the column on Contact to read+write (e.g.
+    ``"adopter_status"``). ``state_enum`` is the corresponding StrEnum class
+    used to parse the persisted value back to a typed state. ``spec_lookup``
+    is the side-specific (from, to) → TransitionSpec resolver.
     """
-    if contact.adopter_status is None:
-        from_state = AdopterState.DRAFT
+    current = getattr(contact, status_field_name)
+    if current is None:
+        from_state = draft_state
     else:
         try:
-            from_state = AdopterState(contact.adopter_status)
+            from_state = state_enum(current)
         except ValueError as e:
-            raise IllegalTransitionError(
-                AdopterState.DRAFT, to_state
-            ) from e
+            raise IllegalTransitionError(draft_state, to_state) from e
 
-    spec = _lookup_adopter_spec(from_state, to_state)
+    spec = spec_lookup(from_state, to_state)
 
     if actor_role not in spec.allowed_roles:
         raise RoleNotPermittedError(actor_role, spec.allowed_roles)
@@ -529,12 +534,43 @@ async def transition_adopter(
     )
     session.add(audit)
 
-    contact.adopter_status = to_state.value
+    setattr(contact, status_field_name, to_state.value)
     contact.version = contact.version + 1
     contact.updated_at = now
 
     await session.flush()
     return contact
+
+
+async def transition_adopter(
+    session: AsyncSession,
+    contact: Contact,
+    *,
+    to_state: AdopterState,
+    actor_b2c_sub: str,
+    actor_role: str,
+    reason_code: ReasonCode | None = None,
+    reason_text: str | None = None,
+) -> Contact:
+    """Move ``contact`` along the adopter side of the state machine.
+
+    Caller controls the transaction boundary — this function flushes but
+    does NOT commit. Raises one of the documented exceptions on any
+    validation failure.
+    """
+    return await _transition_generic(
+        session,
+        contact,
+        to_state=to_state,
+        draft_state=AdopterState.DRAFT,
+        state_enum=AdopterState,
+        spec_lookup=_lookup_adopter_spec,
+        status_field_name="adopter_status",
+        actor_b2c_sub=actor_b2c_sub,
+        actor_role=actor_role,
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
 
 
 async def transition_facilitator(
@@ -552,64 +588,19 @@ async def transition_facilitator(
     Caller controls the transaction boundary — this function flushes but
     does NOT commit.
     """
-    if contact.facilitator_status is None:
-        from_state = FacilitatorState.DRAFT
-    else:
-        try:
-            from_state = FacilitatorState(contact.facilitator_status)
-        except ValueError as e:
-            raise IllegalTransitionError(
-                FacilitatorState.DRAFT, to_state
-            ) from e
-
-    spec = _lookup_facilitator_spec(from_state, to_state)
-
-    if actor_role not in spec.allowed_roles:
-        raise RoleNotPermittedError(actor_role, spec.allowed_roles)
-
-    _validate_reason(spec, reason_code)
-
-    await _lock_and_check_version(session, contact)
-
-    now = datetime.now(UTC)
-    payload = _build_payload(
-        event_type=spec.event_type,
-        contact_id=contact.id,
-        from_state=from_state,
+    return await _transition_generic(
+        session,
+        contact,
         to_state=to_state,
+        draft_state=FacilitatorState.DRAFT,
+        state_enum=FacilitatorState,
+        spec_lookup=_lookup_facilitator_spec,
+        status_field_name="facilitator_status",
         actor_b2c_sub=actor_b2c_sub,
         actor_role=actor_role,
         reason_code=reason_code,
         reason_text=reason_text,
-        timestamp=now,
     )
-
-    # Same suppression-aware path as the adopter side; see comment above.
-    outbox_event_id = emit_outbox(
-        session,
-        event_type=spec.event_type,
-        payload=payload,
-    )
-
-    audit = TransitionAudit(
-        id=uuid.uuid4(),
-        contact_id=contact.id,
-        from_state=from_state.value,
-        to_state=to_state.value,
-        actor_id=actor_b2c_sub,
-        actor_role=actor_role,
-        reason_code=reason_code.value if reason_code is not None else None,
-        reason_text=reason_text,
-        outbox_event_ids=[outbox_event_id] if outbox_event_id is not None else None,
-    )
-    session.add(audit)
-
-    contact.facilitator_status = to_state.value
-    contact.version = contact.version + 1
-    contact.updated_at = now
-
-    await session.flush()
-    return contact
 
 
 __all__ = [

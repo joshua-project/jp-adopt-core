@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,10 +35,11 @@ class Settings(BaseSettings):
     # Comma-separated browser origins for CORS when APP_ENV is production (e.g. https://crm.example.com).
     cors_allow_origins: str = ""
 
-    # Declarative discriminator: only "b2c" is supported in week 1. Future weeks
-    # may introduce alternate IdP strategies; this field exists so the choice is
-    # encoded in config rather than inferred from runtime token issuers.
-    identity_provider: Literal["b2c"] = "b2c"
+    # NOTE: ``identity_provider`` field deleted in F17 (PR #29). The IdP set
+    # is decided by the validator dispatch logic in
+    # ``auth.authenticate_bearer_async`` (issuer regex matching against
+    # B2C / Entra / magic-link), NOT by a config discriminator. Having both
+    # would have invited the two to drift.
 
     # Magic-link side-car: HMAC signing key for the HS256 JWT minted after a
     # successful claim. Must be >= 32 bytes in production (model_validator below).

@@ -52,6 +52,19 @@ class MagicLinkTokenEnvelope(BaseModel):
     expires_in: int
 
 
+class MagicLinkErrorDetail(BaseModel):
+    """Error envelope for the magic-link endpoints. Mirrors the
+    ``HTTPException(detail={"code": ..., "message": ...})`` shape so the
+    generated TS client gets a typed error body to switch on."""
+
+    code: str
+    message: str
+
+
+class MagicLinkError(BaseModel):
+    detail: MagicLinkErrorDetail
+
+
 def _enqueue_send_factory(background_tasks: BackgroundTasks):
     """Return a callable that schedules the send_magic_link_email worker task.
 
@@ -81,6 +94,12 @@ def _enqueue_send_factory(background_tasks: BackgroundTasks):
     "/request",
     response_model=MagicLinkRequestResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        429: {
+            "model": MagicLinkError,
+            "description": "rate_limited (>6 requests/hour for this email)",
+        },
+    },
 )
 async def request_link(
     body: MagicLinkRequest,
@@ -130,7 +149,24 @@ async def request_link(
     return MagicLinkRequestResponse(ok=result.ok, message=result.message)
 
 
-@router.post("/claim", response_model=MagicLinkTokenEnvelope)
+@router.post(
+    "/claim",
+    response_model=MagicLinkTokenEnvelope,
+    responses={
+        400: {
+            "model": MagicLinkError,
+            "description": "invalid_token (no matching token row)",
+        },
+        403: {
+            "model": MagicLinkError,
+            "description": "account_resolution_conflict (B2C-bound email)",
+        },
+        410: {
+            "model": MagicLinkError,
+            "description": "expired or already_claimed",
+        },
+    },
+)
 async def claim_link(
     body: MagicLinkClaim,
     request: Request,

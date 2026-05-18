@@ -131,12 +131,15 @@ def _success_response(
 
 
 def _authenticate(authorization: str | None, settings: Settings) -> str | None:
-    """Return the api_key_id (the raw key string) on success, else None.
+    """Return the api_key_id label on success, else None.
 
-    Multi-key support is implemented as: any matching configured key is valid;
-    the matched key string becomes the `api_key_id` used by idempotency
-    bookkeeping. Production deployments rotate by sending the new key as the
-    first list entry and the old key remains accepted until removed.
+    Multi-key support: any matching configured key is valid. The returned
+    label is the SHA-256/16-hex of the matched configured key — NEVER the
+    raw bearer. This means the api_idempotency_keys table never persists
+    a usable credential, so a leaked DB does not leak the bearer secret.
+    Production rotation is unaffected: sending the new key as the first
+    list entry shifts which hash gets written; the old hash remains valid
+    until the old key is removed from the list.
     """
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
@@ -152,7 +155,7 @@ def _authenticate(authorization: str | None, settings: Settings) -> str | None:
     for candidate in accepted:
         # Constant-time comparison so timing doesn't leak which prefix matched.
         if secrets.compare_digest(candidate, token):
-            return candidate
+            return hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:16]
     return None
 
 
@@ -341,13 +344,23 @@ async def _process_adoption(
     if contact.adopter_status == "do_not_engage":
         # Anti-enumeration: log, return success-shaped 200 with NO submission
         # written so the caller can't probe blocklist membership.
+        #
+        # F15: persist only a PII-light fingerprint of the submission rather
+        # than the raw form payload. Storing the full body indefinitely is a
+        # GDPR/retention liability — the operator-visible audit only needs
+        # enough to recognize the blocked attempt. A future cleanup task
+        # should also apply a TTL purge (~90d) to this table.
         session.add(
             SubmissionBlocked(
                 contact_id=contact.id,
                 email_normalized=email_normalized,
                 reason="do_not_engage",
                 source="adoption_intake",
-                submission_payload=payload.model_dump(mode="json"),
+                submission_payload={
+                    "email_normalized": email_normalized,
+                    "party_kind": payload.party_kind,
+                    "received_at": datetime.now(UTC).isoformat(),
+                },
             )
         )
         return _success_response(
@@ -444,13 +457,19 @@ async def _process_facilitation(
     )
 
     if contact.facilitator_status == "do_not_engage":
+        # See F15 note above on the adoption side: only the minimal
+        # fingerprint is persisted (not the raw payload).
         session.add(
             SubmissionBlocked(
                 contact_id=contact.id,
                 email_normalized=email_normalized,
                 reason="do_not_engage",
                 source="facilitation_intake",
-                submission_payload=payload.model_dump(mode="json"),
+                submission_payload={
+                    "email_normalized": email_normalized,
+                    "party_kind": payload.party_kind,
+                    "received_at": datetime.now(UTC).isoformat(),
+                },
             )
         )
         return _success_response(
@@ -640,7 +659,28 @@ async def _handle(
 # ──────────────────────────────────────────────────────────────────────────
 
 
-@router.post("/adoption")
+# Shared OpenAPI ``responses`` map for both intake endpoints. The handler
+# returns a JSONResponse directly (so it can control status codes precisely),
+# but FastAPI documents the bodies via these per-status entries. Generated
+# clients (``pnpm contracts:generate``) get a typed envelope for each
+# outcome including the error envelope.
+_INTAKE_RESPONSES: dict[int | str, dict[str, object]] = {
+    200: {"model": IntakeSuccess, "description": "Idempotent replay (cached response)"},
+    201: {"model": IntakeSuccess, "description": "First successful processing"},
+    400: {"model": IntakeError, "description": "validation_failed / idempotency_required"},
+    401: {"model": IntakeError, "description": "Bearer missing or unknown"},
+    409: {"model": IntakeError, "description": "Idempotency-Key in-flight"},
+    413: {"model": IntakeError, "description": "payload_too_large"},
+    422: {"model": IntakeError, "description": "idempotency_key_conflict"},
+    503: {"model": IntakeError, "description": "intake_disabled (no API keys configured)"},
+}
+
+
+@router.post(
+    "/adoption",
+    response_model=IntakeSuccess,
+    responses=_INTAKE_RESPONSES,
+)
 async def post_adoption_intake(
     request: Request,
     db: DbSession,
@@ -658,7 +698,11 @@ async def post_adoption_intake(
     )
 
 
-@router.post("/facilitation")
+@router.post(
+    "/facilitation",
+    response_model=IntakeSuccess,
+    responses=_INTAKE_RESPONSES,
+)
 async def post_facilitation_intake(
     request: Request,
     db: DbSession,

@@ -15,6 +15,16 @@ class ContactRead(BaseModel):
     display_name: str
     adopter_status: str | None
     facilitator_status: str | None
+    # F21: U1 added several Contact columns that clients need; the previous
+    # ContactRead omitted them, forcing the UI to re-query or guess. Internal
+    # fields (source_system, source_id, b2c_subject_id,
+    # local_modified_after_import) are intentionally NOT exposed.
+    version: int
+    email_normalized: str | None
+    country_code: str | None
+    language_codes: list[str] | None
+    origin: str | None
+    newsletter_opt_in: bool
     created_at: datetime
     updated_at: datetime
 
