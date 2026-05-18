@@ -371,6 +371,16 @@ async def _process_adoption(
         # the blocked path becomes a deterministic do_not_engage oracle
         # (201 = real, 200 = blocked).
         #
+        # N1 body-shape oracle: accepted submissions always return
+        # ``len(interestIds) >= 1`` (one row per fpg_selection, or one synthetic
+        # row when fpg_selections is empty per the potential_adopter path).
+        # A blocked response that returned ``interestIds=[]`` would therefore
+        # leak blocklist membership through the response body even after the
+        # status-code parity fix. Fabricate ephemeral UUIDs to mirror the
+        # accepted-shape — they are NEVER persisted (no AdopterInterest row is
+        # written for blocked contacts) and used only to defeat the body-shape
+        # oracle.
+        #
         # F15: persist only a PII-light fingerprint of the submission rather
         # than the raw form payload. Storing the full body indefinitely is a
         # GDPR/retention liability — the operator-visible audit only needs
@@ -389,12 +399,18 @@ async def _process_adoption(
                 },
             )
         )
+        # Mirror the accepted-path interest_ids LENGTH so body shape is
+        # indistinguishable: one synthetic id per fpg_selection, or one when the
+        # caller submitted no selections (matching the no_fpg branch below).
+        fabricated_interest_ids = [
+            uuid.uuid4() for _ in (payload.fpg_selections or [None])
+        ]
         return _success_response(
             status.HTTP_201_CREATED,
             submission_id=uuid.uuid4(),
             request_id=request_id,
             contact_id=contact.id,
-            interest_ids=[],
+            interest_ids=fabricated_interest_ids,
         )
 
     # Multi-FPG: one Contact + N AdopterInterest rows. Empty list → mark

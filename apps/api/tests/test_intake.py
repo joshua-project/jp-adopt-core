@@ -536,7 +536,9 @@ async def test_do_not_engage_contact_returns_201_and_logs_block(
     201 (matching the accepted-first-call status) so a third party can't probe
     blocklist membership via response codes. N1: this used to return 200 which
     became a deterministic do_not_engage oracle once F14 changed first-success
-    to 201."""
+    to 201. The body shape must also match: accepted submissions always return
+    ``len(interestIds) >= 1``, so blocked responses fabricate ephemeral UUIDs
+    of the same length (never persisted)."""
     email = f"dne-{uuid.uuid4().hex[:8]}@example.com"
     # Seed a contact at do_not_engage.
     blocked = Contact(
@@ -549,17 +551,21 @@ async def test_do_not_engage_contact_returns_201_and_logs_block(
     session.add(blocked)
     await session.commit()
 
+    fpg_selections = [{"rop3": "AAA01"}]
     r = client.post(
         "/v1/intake/adoption",
-        json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA01"}]),
+        json=_adoption_body(email=email, fpg_selections=fpg_selections),
         headers=_auth_headers(idem=str(uuid.uuid4())),
     )
     assert r.status_code == 201, r.text
     payload = r.json()
     assert payload["ok"] is True
-    assert payload["data"]["interestIds"] == []
+    # N1 body-shape oracle: blocked path must mirror the accepted-path length
+    # exactly (one synthetic id per fpg_selection).
+    assert len(payload["data"]["interestIds"]) == len(fpg_selections)
 
-    # An AdopterInterest must NOT have been created.
+    # An AdopterInterest must NOT have been created (the synthetic UUIDs are
+    # ephemeral — they exist only in the response envelope).
     interests = (
         await session.execute(
             select(AdopterInterest).where(AdopterInterest.contact_id == blocked.id)
@@ -581,6 +587,54 @@ async def test_do_not_engage_contact_returns_201_and_logs_block(
 
     # cleanup
     await _clean_email(session, email)
+
+
+@pytest.mark.asyncio
+async def test_adoption_blocked_and_accepted_responses_have_identical_body_shape(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """N1 body-shape oracle parity: blocked and accepted adoption responses
+    must be indistinguishable in shape (same keys, same interestIds length)
+    for identical inputs. Anything weaker leaks blocklist membership."""
+    blocked_email = f"shape-blk-{uuid.uuid4().hex[:8]}@example.com"
+    accepted_email = f"shape-acc-{uuid.uuid4().hex[:8]}@example.com"
+    blocked = Contact(
+        id=uuid.uuid4(),
+        party_kind="adopter",
+        display_name="Blocked Shape",
+        adopter_status="do_not_engage",
+        email_normalized=blocked_email,
+    )
+    session.add(blocked)
+    await session.commit()
+
+    # Same fpg_selections shape on both calls.
+    fpg = [{"rop3": "AAA01"}, {"rop3": "AAA02"}]
+    r_blocked = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(email=blocked_email, fpg_selections=fpg),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    r_accepted = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(email=accepted_email, fpg_selections=fpg),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r_blocked.status_code == r_accepted.status_code == 201
+
+    b = r_blocked.json()
+    a = r_accepted.json()
+    # Same top-level keys.
+    assert set(b.keys()) == set(a.keys())
+    # Same data keys.
+    assert set(b["data"].keys()) == set(a["data"].keys())
+    # Same interestIds LENGTH (values are random UUIDs in both cases).
+    assert len(b["data"]["interestIds"]) == len(a["data"]["interestIds"])
+    assert len(b["data"]["interestIds"]) == len(fpg)
+
+    # cleanup
+    await _clean_email(session, blocked_email)
+    await _clean_email(session, accepted_email)
 
 
 # ─── intake: facilitation happy path ───────────────────────────────────────
@@ -633,6 +687,54 @@ async def test_facilitation_intake_creates_facilitator_contact(
     # cleanup
     for o in matching:
         await session.execute(delete(Outbox).where(Outbox.id == o.id))
+    await _clean_email(session, email)
+
+
+@pytest.mark.asyncio
+async def test_facilitation_do_not_engage_returns_201_and_logs_block(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """A5: parity test for facilitation. The N1 status-code change applied to
+    both adoption AND facilitation, but only adoption had a test. Note that
+    facilitation always returns ``interestIds=[]`` for accepted submissions,
+    so the body-shape oracle from A1 doesn't apply here — both blocked and
+    accepted return an empty list.
+    """
+    email = f"facdne-{uuid.uuid4().hex[:8]}@example.com"
+    blocked = Contact(
+        id=uuid.uuid4(),
+        party_kind="facilitator",
+        display_name="Blocked Facilitator",
+        facilitator_status="do_not_engage",
+        email_normalized=email,
+    )
+    session.add(blocked)
+    await session.commit()
+
+    r = client.post(
+        "/v1/intake/facilitation",
+        json=_facilitation_body(email=email),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 201, r.text
+    payload = r.json()
+    assert payload["ok"] is True
+    # Facilitation accepted path always returns []; blocked matches.
+    assert payload["data"]["interestIds"] == []
+
+    # A submissions_blocked row must exist (audited).
+    blocks = (
+        await session.execute(
+            select(SubmissionBlocked).where(
+                SubmissionBlocked.email_normalized == email
+            )
+        )
+    ).scalars().all()
+    assert len(blocks) == 1
+    assert blocks[0].reason == "do_not_engage"
+    assert blocks[0].source == "facilitation_intake"
+
+    # cleanup
     await _clean_email(session, email)
 
 
