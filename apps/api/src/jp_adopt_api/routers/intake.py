@@ -37,7 +37,7 @@ from typing import Annotated
 from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.config import Settings
@@ -199,47 +199,67 @@ async def _claim_idempotency_key(
     try:
         await session.flush()
     except IntegrityError:
+        # Expected race-path: uniqueness collision on (api_key_id, key).
+        # Fall through to the lookup below.
         await session.rollback()
-        existing = (
-            await session.execute(
-                select(ApiIdempotencyKey).where(
-                    ApiIdempotencyKey.api_key_id == api_key_id,
-                    ApiIdempotencyKey.key == idempotency_key,
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            # Lost the race AND can't find the winner — extremely rare; treat
-            # as transient and ask the caller to retry.
-            logger.error(
-                "idempotency_lookup_race",
-                extra={"api_key_id": api_key_id, "key": idempotency_key},
-            )
-            return None, _error_response(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                code="internal_error",
-                request_id=request_id,
-            )
-        if existing.request_hash != request_hash:
-            return None, _error_response(
-                422,
-                code="idempotency_key_conflict",
-                request_id=request_id,
-            )
-        if existing.state == "completed" and existing.response_body is not None:
-            return None, JSONResponse(
-                status_code=existing.status_code or status.HTTP_200_OK,
-                content=existing.response_body,
-            )
-        # Pending row from another in-flight request with the same body:
-        # respond with a conservative 202-equivalent so the caller retries.
-        return None, _error_response(
-            status.HTTP_409_CONFLICT,
-            code="idempotency_in_flight",
-            request_id=request_id,
-            message="A request with this Idempotency-Key is still processing.",
+    except SQLAlchemyError:
+        # F39: any non-IntegrityError DB failure means we couldn't even
+        # bookkeep the idempotency claim — surface it explicitly as 500
+        # rather than letting it bubble out as an opaque exception. Log
+        # with exc_info so the cause is captured.
+        await session.rollback()
+        logger.exception(
+            "idempotency_claim_db_error",
+            extra={"api_key_id": api_key_id, "key": idempotency_key},
         )
-    return row, None
+        return None, _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="internal_error",
+            request_id=request_id,
+        )
+    else:
+        return row, None
+
+    # ── Collision path: look up the existing winning row. ─────────────
+    existing = (
+        await session.execute(
+            select(ApiIdempotencyKey).where(
+                ApiIdempotencyKey.api_key_id == api_key_id,
+                ApiIdempotencyKey.key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        # Lost the race AND can't find the winner — extremely rare; treat
+        # as transient and ask the caller to retry.
+        logger.error(
+            "idempotency_lookup_race",
+            extra={"api_key_id": api_key_id, "key": idempotency_key},
+        )
+        return None, _error_response(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="internal_error",
+            request_id=request_id,
+        )
+    if existing.request_hash != request_hash:
+        return None, _error_response(
+            422,
+            code="idempotency_key_conflict",
+            request_id=request_id,
+        )
+    if existing.state == "completed" and existing.response_body is not None:
+        return None, JSONResponse(
+            status_code=existing.status_code or status.HTTP_200_OK,
+            content=existing.response_body,
+        )
+    # Pending row from another in-flight request with the same body:
+    # respond with a conservative 409 so the caller retries.
+    return None, _error_response(
+        status.HTTP_409_CONFLICT,
+        code="idempotency_in_flight",
+        request_id=request_id,
+        message="A request with this Idempotency-Key is still processing.",
+    )
 
 
 async def _finalize_idempotency_key(

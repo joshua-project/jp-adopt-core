@@ -11,6 +11,7 @@ hands off when the API is run without ARQ (e.g. dev or tests).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -98,14 +99,34 @@ async def send_magic_link_email_inline(
             "html": html,
         },
     }
-    # ACS SDK exposes a long-running begin_send; we await its completion.
     poller = client.begin_send(message)
-    # poller.result() is sync but cheap in practice; if it ever stalls, the
-    # ARQ tick budget handles cancellation.
-    result = poller.result()
+    # F10: poller.result() is synchronous and can block for the full HTTP
+    # round-trip. Dispatch it to a worker thread with a hard 30s timeout so
+    # a stalled ACS endpoint cannot freeze the asyncio loop. On timeout we
+    # raise so ARQ's retry policy fires (capped at max_tries=2 per F41).
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(poller.result), timeout=30.0
+        )
+    except asyncio.TimeoutError:
+        logger.error("magic_link.email.acs_timeout recipient=%s", email)
+        raise
     logger.info("magic_link.email.sent recipient=%s message_id=%s", email, result)
+
+
+# F41: cap ARQ retries at 2 so a partial failure on a transient ACS error
+# doesn't result in N duplicate emails to the same recipient. ARQ reads
+# ``max_tries`` from the task function object when scheduling.
+send_magic_link_email_max_tries = 2
 
 
 async def send_magic_link_email(ctx: dict[str, Any], **kwargs: Any) -> None:
     """ARQ wrapper: same signature contract, takes the worker ctx."""
     await send_magic_link_email_inline(**kwargs)
+
+
+# Surface the max_tries hint to ARQ via attribute lookup; ARQ inspects the
+# function for ``max_tries`` (see arq.jobs). We expose it as both the
+# module-level constant above (for documentation) and as an attribute on
+# the function (where the scheduler actually reads it).
+send_magic_link_email.max_tries = send_magic_link_email_max_tries  # type: ignore[attr-defined]

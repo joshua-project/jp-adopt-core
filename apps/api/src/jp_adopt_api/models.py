@@ -16,6 +16,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -483,6 +484,14 @@ class ApiIdempotencyKey(Base):
         CheckConstraint(
             "state IN ('pending', 'completed')",
             name="ck_api_idempotency_keys_state",
+        ),
+        # F42: mirror the DDL constraint created by migration 0004 so the
+        # ORM-level declarative model carries the same uniqueness contract.
+        # Without it, ``Base.metadata`` does not know the column pair is
+        # unique and tooling that introspects the model would propose
+        # adding a duplicate constraint.
+        UniqueConstraint(
+            "api_key_id", "key", name="uq_api_idempotency_keys_apikey_key"
         ),
         Index("ix_api_idempotency_keys_expires_at", "expires_at"),
     )

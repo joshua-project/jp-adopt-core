@@ -10,7 +10,9 @@ is rejected with 403 ``tenant_not_provisioned``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import defaultdict
 from functools import lru_cache
 from typing import Any
 
@@ -25,6 +27,12 @@ from jp_adopt_api.config import Settings
 from jp_adopt_api.models import PartnerTenant
 
 logger = logging.getLogger(__name__)
+
+# F11: per-tid asyncio.Lock so a cold-cache thundering-herd (N concurrent
+# requests from the same partner tenant on a fresh process) collapses to a
+# single discovery fetch. The dict is module-global; entries are never
+# removed (tids are O(dozens) so memory is irrelevant).
+_DISCOVERY_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 class TenantNotProvisionedError(Exception):
@@ -44,12 +52,13 @@ def _expected_issuer(tid: str) -> str:
 
 
 @lru_cache(maxsize=64)
-def _cached_discovery(tid: str) -> dict[str, Any]:
+def _cached_discovery_sync(tid: str) -> dict[str, Any]:
     """Synchronously fetch the OIDC discovery document for ``tid``.
 
-    Cached process-wide. PyJWKClient is itself synchronous, so we keep a sync
-    httpx call here for symmetry; the surrounding decoder is async and
-    delegates to a thread when needed.
+    Cached process-wide. Use :func:`_get_discovery` (async) on the request
+    path so the blocking httpx.get runs on a thread; this sync function is
+    kept ``@lru_cache``-decorated so the cache key is per-tid and
+    process-wide just like before.
     """
     resp = httpx.get(_discovery_url(tid), timeout=10.0)
     if resp.status_code != 200:
@@ -64,16 +73,38 @@ def _cached_discovery(tid: str) -> dict[str, Any]:
     return body
 
 
+async def _get_discovery(tid: str) -> dict[str, Any]:
+    """Async wrapper around :func:`_cached_discovery_sync`.
+
+    F11: previously every Entra token validation called the sync httpx.get
+    on the asyncio event loop, freezing the FastAPI request pipeline for
+    whatever the discovery endpoint took to respond (up to 10s). Now the
+    call is dispatched to a worker thread, and a per-tid asyncio.Lock
+    collapses a cold-cache thundering herd to a single upstream fetch.
+    """
+    async with _DISCOVERY_LOCKS[tid]:
+        return await asyncio.to_thread(_cached_discovery_sync, tid)
+
+
 @lru_cache(maxsize=64)
-def get_entra_jwks_client(tid: str) -> PyJWKClient:
-    """Return a cached PyJWKClient for a partner tenant."""
-    doc = _cached_discovery(tid)
+def _cached_jwks_client(jwks_uri: str) -> PyJWKClient:
     return PyJWKClient(
-        doc["jwks_uri"],
+        jwks_uri,
         cache_keys=True,
         max_cached_keys=16,
         lifespan=3600,
     )
+
+
+async def get_entra_jwks_client(tid: str) -> PyJWKClient:
+    """Return a cached PyJWKClient for a partner tenant.
+
+    Now async because discovery is async; the per-jwks_uri PyJWKClient
+    cache is still keyed on the resolved URI so a single client instance
+    is reused process-wide once discovery resolves.
+    """
+    doc = await _get_discovery(tid)
+    return _cached_jwks_client(doc["jwks_uri"])
 
 
 async def _tenant_is_provisioned(session: AsyncSession, tid: str) -> bool:
@@ -117,7 +148,7 @@ async def decode_entra_direct_token(
             f"Microsoft tenant {tid} is not in partner_tenants"
         )
 
-    jwk_client = get_entra_jwks_client(str(tid))
+    jwk_client = await get_entra_jwks_client(str(tid))
     signing_key = jwk_client.get_signing_key_from_jwt(token)
     payload = jwt.decode(
         token,

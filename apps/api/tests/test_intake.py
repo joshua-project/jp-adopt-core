@@ -341,8 +341,21 @@ async def test_first_adoption_submission_creates_contact_and_interest(
         o for o in out if o.payload_json["contact_id"] == str(contact_id)
     ]
     assert len(out_for_contact) == 1
-    assert out_for_contact[0].payload_json["party_kind"] == "adopter"
-    assert out_for_contact[0].payload_json["contact_created"] is True
+    # F27: fully assert the outbox payload shape so any future drift is
+    # surfaced at the test level (rather than being silently observed
+    # downstream as a "where did key X go?" defect in a webhook subscriber).
+    payload = out_for_contact[0].payload_json
+    assert payload["event"] == "jp.adopt.v1.submission.received"
+    assert payload["schema_version"] == "jp.adopt.v1"
+    assert payload["party_kind"] == "adopter"
+    assert payload["contact_created"] is True
+    assert payload["contact_id"] == str(contact_id)
+    assert "submission_id" in payload
+    assert "request_id" in payload
+    assert isinstance(payload["interest_ids"], list)
+    assert isinstance(payload["fpg_selections"], list)
+    assert "origin" in payload
+    assert isinstance(payload["newsletter_opt_in"], bool)
 
     # cleanup
     await session.execute(delete(Outbox).where(Outbox.id == out_for_contact[0].id))
@@ -599,7 +612,20 @@ async def test_facilitation_intake_creates_facilitator_contact(
     ).scalars().all()
     matching = [o for o in out if o.payload_json["contact_id"] == str(contact_id)]
     assert len(matching) == 1
-    assert matching[0].payload_json["party_kind"] == "facilitator"
+    # F27: fully assert the facilitation outbox payload — including the
+    # facilitation-specific ``organization_name`` so the downstream router
+    # always has the org name to display alongside the facilitator contact.
+    payload = matching[0].payload_json
+    assert payload["event"] == "jp.adopt.v1.submission.received"
+    assert payload["schema_version"] == "jp.adopt.v1"
+    assert payload["party_kind"] == "facilitator"
+    assert payload["contact_id"] == str(contact_id)
+    assert "submission_id" in payload
+    assert "request_id" in payload
+    assert "contact_created" in payload
+    assert "organization_name" in payload
+    assert "origin" in payload
+    assert isinstance(payload["newsletter_opt_in"], bool)
 
     # cleanup
     for o in matching:

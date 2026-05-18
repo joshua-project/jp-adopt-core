@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import jwt
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.auth import AuthUser
@@ -145,6 +145,17 @@ async def request_magic_link(
     (which the router translates to HTTP 429).
     """
     email_normalized = normalize_email(email)
+    # F35: previously COUNT-then-INSERT was a TOCTOU window — N concurrent
+    # callers all saw "5 recent" and all inserted a 6th row, blowing past
+    # the limit. ``pg_advisory_xact_lock(hashtext(email))`` serializes the
+    # COUNT for the same email within the surrounding transaction so only
+    # one caller crosses the threshold per request. The lock is released
+    # automatically on COMMIT/ROLLBACK (no leak risk).
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:e))").bindparams(
+            e=email_normalized
+        )
+    )
     recent = await _count_recent_requests(session, email_normalized)
     if recent >= MAGIC_LINK_RATE_LIMIT_PER_HOUR:
         raise RateLimitedError(

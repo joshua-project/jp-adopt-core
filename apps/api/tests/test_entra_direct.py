@@ -128,7 +128,10 @@ async def test_provisioned_tenant_with_valid_token_returns_auth_user(
     # function itself; replace the import sites used by the decoder.
     import jp_adopt_api.auth_entra as ae
 
-    monkeypatch.setattr(ae, "get_entra_jwks_client", lambda _tid: _StubJwk())
+    async def _stub_get_entra_jwks_client(_tid: str) -> _StubJwk:
+        return _StubJwk()
+
+    monkeypatch.setattr(ae, "get_entra_jwks_client", _stub_get_entra_jwks_client)
 
     try:
         user = await decode_entra_direct_token(session, token, settings)
@@ -182,7 +185,10 @@ async def test_expired_token_raises_jwt_error(
 
     import jp_adopt_api.auth_entra as ae
 
-    monkeypatch.setattr(ae, "get_entra_jwks_client", lambda _tid: _StubJwk())
+    async def _stub_get_entra_jwks_client(_tid: str) -> _StubJwk:
+        return _StubJwk()
+
+    monkeypatch.setattr(ae, "get_entra_jwks_client", _stub_get_entra_jwks_client)
 
     try:
         with pytest.raises(jwt.ExpiredSignatureError):

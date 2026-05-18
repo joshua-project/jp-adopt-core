@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { EventType, PublicClientApplication } from "@azure/msal-browser";
-import type { EventMessage } from "@azure/msal-browser";
+import type { AuthenticationResult, EventMessage } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 
 import { buildMsalConfiguration, isB2cClientConfigured } from "../lib/b2c/msalConfig";
@@ -57,14 +57,15 @@ export function MsalClientProvider({ children }: { children: React.ReactNode }) 
           pca.setActiveAccount(pca.getAllAccounts()[0]!);
         }
         // Keep the active account in sync on subsequent successful sign-ins.
+        // F46: payload duck-typing replaced with a real type guard. MSAL v5's
+        // LOGIN_SUCCESS event always carries an ``AuthenticationResult``;
+        // narrowing on it lets TypeScript verify ``payload.account`` exists
+        // instead of relying on a runtime ``"account" in event.payload`` check.
         pca.addEventCallback((event: EventMessage) => {
-          if (
-            event.eventType === EventType.LOGIN_SUCCESS &&
-            event.payload &&
-            "account" in event.payload &&
-            event.payload.account
-          ) {
-            pca.setActiveAccount(event.payload.account);
+          if (event.eventType !== EventType.LOGIN_SUCCESS) return;
+          const payload = event.payload as AuthenticationResult | null;
+          if (payload && payload.account) {
+            pca.setActiveAccount(payload.account);
           }
         });
         setInstance(pca);
