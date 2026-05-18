@@ -688,6 +688,7 @@
             "title": "Display Name"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "ContactPatch"
       },
