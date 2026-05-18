@@ -159,6 +159,16 @@ class IdentityLink(Base):
             unique=True,
             postgresql_where="b2c_subject_id IS NOT NULL",
         ),
+        # Fail-closed guard on the magic-link first-claim race: at most one
+        # ``magic_link`` IdentityLink per email_normalized. The CAS update on
+        # ``magic_link_token.claimed_at`` blocks token reuse; this index
+        # blocks the rare pre-CAS duplicate IdentityLink insert.
+        Index(
+            "uq_identity_link_magic_email",
+            "email_normalized",
+            unique=True,
+            postgresql_where="idp_name = 'magic_link'",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

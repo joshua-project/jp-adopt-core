@@ -65,10 +65,12 @@ def _enqueue_send_factory(background_tasks: BackgroundTasks):
                 send_magic_link_email_inline,
             )
         except Exception:  # pragma: no cover - worker pkg optional in some envs
+            # NEVER log kwargs here: it carries the raw token. Log only a
+            # PII-free counter so an operator knows the worker is missing.
             logger.warning(
-                "magic_link.enqueue: jp_adopt_worker not importable; logging only"
+                "magic_link.enqueue.worker_pkg_unavailable email=%s",
+                kwargs.get("email"),
             )
-            logger.info("magic_link.email_skipped %s", kwargs)
             return
         background_tasks.add_task(send_magic_link_email_inline, **kwargs)
 
@@ -98,13 +100,16 @@ async def request_link(
             ok=True, message="If we have your email, we sent a link."
         )
     try:
-        result = await request_magic_link(
+        result, raw_token, _email_normalized = await request_magic_link(
             db,
             email=email,
             ip=ip,
             settings=settings,
-            enqueue=_enqueue_send_factory(background_tasks),
         )
+        # Commit BEFORE enqueueing so the worker never sends a magic-link
+        # email referencing a token row that doesn't exist (e.g. if the
+        # surrounding transaction rolled back for any reason). If commit
+        # fails, the email is never enqueued.
         await db.commit()
     except RateLimitedError as e:
         await db.rollback()
@@ -112,6 +117,16 @@ async def request_link(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"code": "rate_limited", "message": str(e)},
         ) from None
+    # Post-commit fire-and-forget: any failure in enqueue is logged inside
+    # the factory; we still return 202 (anti-enumeration shape) regardless.
+    enqueue = _enqueue_send_factory(background_tasks)
+    enqueue(
+        email=email,
+        raw_token=raw_token,
+        click_url_base=settings.magic_link_click_base_url,
+        acs_connection_string=settings.acs_connection_string,
+        acs_sender_address=settings.acs_sender_address,
+    )
     return MagicLinkRequestResponse(ok=result.ok, message=result.message)
 
 

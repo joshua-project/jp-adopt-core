@@ -13,10 +13,10 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Literal
 
 import jwt
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.auth import AuthUser
@@ -131,13 +131,18 @@ async def request_magic_link(
     email: str,
     ip: str | None,
     settings: Settings,
-    enqueue: Any | None = None,
-) -> MagicLinkRequestResult:
-    """Generate + persist a magic-link token row; enqueue the email send.
+) -> tuple[MagicLinkRequestResult, str | None, str]:
+    """Generate + persist a magic-link token row.
 
-    Returns an anti-enumeration response: identical shape whether the email
-    is known or not. Rate-limit denial raises ``RateLimitedError`` (which
-    the router translates to HTTP 429).
+    Returns ``(result, raw_token, email_normalized)``. The router is
+    responsible for committing the transaction BEFORE handing ``raw_token``
+    off to the worker — if we enqueued from inside this function and the
+    surrounding transaction rolled back, the worker would deliver an email
+    containing a token that does not exist in the DB.
+
+    Anti-enumeration: the public response shape is identical whether the
+    email is known or not. Rate-limit denial raises ``RateLimitedError``
+    (which the router translates to HTTP 429).
     """
     email_normalized = normalize_email(email)
     recent = await _count_recent_requests(session, email_normalized)
@@ -171,28 +176,21 @@ async def request_magic_link(
     )
     await session.flush()
 
-    if enqueue is not None:
-        # The router commits the DB write; only after commit do we hand the
-        # send off to the worker. ``enqueue`` is the FastAPI BackgroundTasks
-        # add_task callback (or a stub in tests).
-        enqueue(
-            email=email,
-            raw_token=raw,
-            click_url_base=settings.magic_link_click_base_url,
-            acs_connection_string=settings.acs_connection_string,
-            acs_sender_address=settings.acs_sender_address,
-        )
-    else:
-        # No enqueue provided (e.g. tests): log the raw token to stdout so
-        # the developer can complete the flow.
-        logger.info(
-            "magic_link.request email=%s click_url=%s/auth/claim?token=%s",
-            email_normalized,
-            settings.magic_link_click_base_url,
-            raw,
-        )
+    # Structured, PII-aware log: ONLY the token-hash prefix as a correlation
+    # handle. The raw token is a single-use bearer secret and is NEVER
+    # logged. See the magic-link side-car runbook for the dev claim
+    # procedure when ACS is not configured.
+    logger.info(
+        "magic_link.request.issued email=%s token_id_prefix=%s",
+        email_normalized,
+        token_hash[:8],
+    )
 
-    return MagicLinkRequestResult(ok=True, message=ANTI_ENUMERATION_MESSAGE)
+    return (
+        MagicLinkRequestResult(ok=True, message=ANTI_ENUMERATION_MESSAGE),
+        raw,
+        email_normalized,
+    )
 
 
 async def claim_magic_link(
@@ -203,25 +201,68 @@ async def claim_magic_link(
     user_agent: str | None,
     settings: Settings,
 ) -> ClaimResult:
-    """Validate the raw token, mark it claimed, bridge identity_link, mint JWT."""
+    """Validate the raw token, mark it claimed, bridge identity_link, mint JWT.
+
+    Token claim is an atomic CAS (``UPDATE ... WHERE claimed_at IS NULL
+    RETURNING *``). Two concurrent clicks therefore cannot both succeed: the
+    loser sees zero rows updated, looks the token up again to disambiguate,
+    and raises either ``MagicLinkAlreadyClaimedError`` or
+    ``MagicLinkExpiredError``.
+    """
     token_hash = _hash_token(raw_token, settings.magic_link_signing_key)
-    stmt = select(MagicLinkToken).where(MagicLinkToken.token_hash == token_hash)
-    row = (await session.execute(stmt)).scalar_one_or_none()
-    if row is None:
-        raise MagicLinkInvalidError("Unknown magic-link token")
     now = datetime.now(UTC)
-    if row.claimed_at is not None:
+
+    # Atomic claim: only the row where claimed_at IS NULL is updated; the
+    # RETURNING clause hands us back the row state from after the update so
+    # one network round-trip covers the whole claim.
+    cas_stmt = (
+        update(MagicLinkToken)
+        .where(
+            MagicLinkToken.token_hash == token_hash,
+            MagicLinkToken.claimed_at.is_(None),
+        )
+        .values(
+            claimed_at=now,
+            claimed_ip=click_ip,
+            claimed_user_agent=user_agent,
+        )
+        .returning(MagicLinkToken)
+    )
+    cas_result = await session.execute(cas_stmt)
+    row = cas_result.scalar_one_or_none()
+    if row is None:
+        # CAS lost — either the token never existed or another caller already
+        # claimed it (or it has expired and the expires_at gate below would
+        # have rejected it). Disambiguate with a follow-up read; either way
+        # we never mint a JWT.
+        existing_token = (
+            await session.execute(
+                select(MagicLinkToken).where(
+                    MagicLinkToken.token_hash == token_hash
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_token is None:
+            raise MagicLinkInvalidError("Unknown magic-link token")
+        if existing_token.expires_at <= now:
+            raise MagicLinkExpiredError("Token expired")
         raise MagicLinkAlreadyClaimedError("Token already claimed")
+
     if row.expires_at <= now:
+        # We did claim the row but it had already expired by the time we got
+        # here. Fail closed and rely on the surrounding transaction rolling
+        # back so claimed_at is not persisted.
         raise MagicLinkExpiredError("Token expired")
 
-    row.claimed_at = now
-    row.claimed_ip = click_ip
-    row.claimed_user_agent = user_agent
-
     email_normalized = row.email_normalized
-    link_stmt = select(IdentityLink).where(
-        IdentityLink.email_normalized == email_normalized
+    # ORDER BY linked_at ASC LIMIT 1 so any pre-existing duplicate (predating
+    # the uq_identity_link_magic_email partial unique index) resolves to the
+    # oldest row — the one the rest of the system has already referenced.
+    link_stmt = (
+        select(IdentityLink)
+        .where(IdentityLink.email_normalized == email_normalized)
+        .order_by(IdentityLink.linked_at.asc())
+        .limit(1)
     )
     existing = (await session.execute(link_stmt)).scalars().first()
 

@@ -106,8 +106,8 @@ async def test_request_happy_path_persists_token_and_rate_limit(
     email = f"happy-{uuid.uuid4().hex[:8]}@example.test"
     await _clean(session, normalize_email(email))
     try:
-        result = await request_magic_link(
-            session, email=email, ip="127.0.0.1", settings=settings, enqueue=None
+        result, _raw, _norm = await request_magic_link(
+            session, email=email, ip="127.0.0.1", settings=settings
         )
         await session.commit()
         assert result.ok is True
@@ -136,13 +136,13 @@ async def test_request_rate_limit_after_n_requests(session: AsyncSession) -> Non
     try:
         for _ in range(MAGIC_LINK_RATE_LIMIT_PER_HOUR):
             await request_magic_link(
-                session, email=email, ip="127.0.0.1", settings=settings, enqueue=None
+                session, email=email, ip="127.0.0.1", settings=settings
             )
         await session.commit()
 
         with pytest.raises(RateLimitedError):
             await request_magic_link(
-                session, email=email, ip="127.0.0.1", settings=settings, enqueue=None
+                session, email=email, ip="127.0.0.1", settings=settings
             )
         await session.rollback()
     finally:

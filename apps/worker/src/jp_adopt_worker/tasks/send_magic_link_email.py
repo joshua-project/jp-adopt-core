@@ -66,10 +66,12 @@ async def send_magic_link_email_inline(
     click_url = f"{click_url_base.rstrip('/')}/auth/claim?token={raw_token}"
 
     if not acs_connection_string:
+        # Dev fallback: never log the click URL — it embeds the raw token, a
+        # single-use bearer secret. Log only enough to confirm the path fired
+        # and which recipient it would have been sent to.
         logger.info(
-            "magic_link.email.dev_fallback recipient=%s url=%s",
+            "magic_link.email.dev_fallback recipient=%s",
             email,
-            click_url,
         )
         return
 
