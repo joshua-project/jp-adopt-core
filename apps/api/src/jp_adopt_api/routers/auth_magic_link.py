@@ -70,6 +70,27 @@ def _enqueue_send_factory(background_tasks: BackgroundTasks):
 
     The worker module is imported lazily so the API process does not import
     azure-communication-email at startup (worker pkg owns that dependency).
+
+    N4 (TODO — durability gap): this scheduler uses FastAPI's in-process
+    ``BackgroundTasks``. If the API worker dies between ``db.commit()`` (which
+    persists the token row) and the BackgroundTask actually firing, the user
+    sees a 202 but never gets an email — the token row sits in the DB unsent.
+
+    The intended fix is to enqueue ``send_magic_link_email`` via ARQ (Redis-
+    backed durable queue) instead, mirroring the path the worker already
+    exposes. That migration was scoped out of the third fixer pass because it
+    requires:
+      * adding ``arq`` as an API dependency,
+      * managing the Redis pool in the FastAPI ``lifespan`` so it's reused
+        across requests rather than reconnecting per call,
+      * adding a Redis dep to the test fixtures (or stubbing the pool),
+      * widening ``request_magic_link``'s contract to accept an enqueue
+        callable bound to that pool.
+
+    Until that lands, an operator who needs at-least-once delivery should
+    run the API and the worker against the same Postgres and treat the
+    BackgroundTask path as best-effort. A follow-up unit should track this
+    as a hardening item.
     """
 
     def _enqueue(**kwargs):
