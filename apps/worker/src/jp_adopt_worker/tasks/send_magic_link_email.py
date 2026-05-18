@@ -121,8 +121,34 @@ send_magic_link_email_max_tries = 2
 
 
 async def send_magic_link_email(ctx: dict[str, Any], **kwargs: Any) -> None:
-    """ARQ wrapper: same signature contract, takes the worker ctx."""
-    await send_magic_link_email_inline(**kwargs)
+    """ARQ wrapper: same signature contract, takes the worker ctx.
+
+    B5: log a ``magic_link.email.permanent_failure`` event when ARQ is
+    about to give up (i.e. this is the last retry). Without it, a flaky
+    ACS endpoint silently swallows the user's sign-in request: ARQ retries
+    twice, the second attempt fails, and the user simply never gets an
+    email. The 202 envelope is anti-enumeration, so the user has no way
+    to tell from the response either.
+
+    ARQ provides ``job_try`` and ``max_tries`` in ``ctx``; log on the
+    final attempt before re-raising.
+    """
+    try:
+        await send_magic_link_email_inline(**kwargs)
+    except Exception as e:
+        job_try = ctx.get("job_try")
+        max_tries = ctx.get("max_tries")
+        if (
+            isinstance(job_try, int)
+            and isinstance(max_tries, int)
+            and job_try >= max_tries
+        ):
+            logger.error(
+                "magic_link.email.permanent_failure recipient=%s error_type=%s",
+                kwargs.get("email"),
+                type(e).__name__,
+            )
+        raise
 
 
 # Surface the max_tries hint to ARQ via attribute lookup; ARQ inspects the

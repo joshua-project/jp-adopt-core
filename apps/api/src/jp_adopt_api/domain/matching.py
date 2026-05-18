@@ -58,6 +58,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.domain.matching_config import (
@@ -431,6 +432,52 @@ def _outbox_payload_for_attempt(
     }
 
 
+async def _insert_match_with_conflict_guard(
+    session: AsyncSession,
+    *,
+    match: Match,
+    interest_id: uuid.UUID,
+) -> tuple[Match, bool]:
+    """Insert a Match row, tolerating the ``uq_match_open_per_interest`` race.
+
+    B1: a concurrent triage assignment (e.g. Amy's UI promoting a routed
+    match while the matcher is mid-run) can race the unique partial index
+    and surface as ``IntegrityError`` here. Without a guard, the entire
+    ``match_or_route`` call aborts and the MatchAttempt audit rows for
+    all subsequent interests are lost.
+
+    On conflict, rollback to the savepoint and refetch the existing open
+    Match for this interest. Return ``(match, created)`` where
+    ``created=False`` indicates the conflict path was taken.
+    """
+    try:
+        async with session.begin_nested():
+            session.add(match)
+            await session.flush()
+        return match, True
+    except IntegrityError:
+        # The savepoint has been rolled back automatically by the nested
+        # transaction context manager — we can still query and continue.
+        existing = (
+            await session.execute(
+                select(Match)
+                .where(Match.adopter_interest_id == interest_id)
+                .where(Match.status.in_(("triage", "recommended")))
+            )
+        ).scalar_one_or_none()
+        logger.info(
+            "match.concurrent_conflict interest=%s existing_match=%s",
+            interest_id,
+            existing.id if existing else None,
+        )
+        if existing is None:
+            # Race lost but the winner's open match disappeared by the time
+            # we queried (status moved off triage/recommended). Re-raise so
+            # the caller knows something is genuinely off.
+            raise
+        return existing, False
+
+
 async def _process_interest(
     session: AsyncSession,
     *,
@@ -452,8 +499,9 @@ async def _process_interest(
             facilitator_org_id=triage_org.id,
             status="triage",
         )
-        session.add(match)
-        await session.flush()
+        match, _created = await _insert_match_with_conflict_guard(
+            session, match=match, interest_id=interest.id
+        )
         outcome.triage_match_id = match.id
         outcome.reason = "no_fpg"
         logger.info(
@@ -533,8 +581,9 @@ async def _process_interest(
             facilitator_org_id=triage_org.id,
             status="triage",
         )
-        session.add(match)
-        await session.flush()
+        match, _created = await _insert_match_with_conflict_guard(
+            session, match=match, interest_id=interest.id
+        )
         outcome.triage_match_id = match.id
         outcome.reason = "no_coverage"
         logger.info(
@@ -575,9 +624,12 @@ async def _process_interest(
             facilitator_org_id=top_cand.facilitator.id,
             status="recommended",
         )
-        session.add(match)
+        match, _created = await _insert_match_with_conflict_guard(
+            session, match=match, interest_id=interest.id
+        )
         outcome.recommended_match_ids.append(match.id)
-    await session.flush()
+    else:
+        await session.flush()
     outcome.reason = "scored"
     logger.info(
         "matching: scored interest=%s contact=%s rop3=%s candidates=%d "
