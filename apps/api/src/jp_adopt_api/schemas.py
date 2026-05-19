@@ -135,7 +135,13 @@ class AdoptionIntake(IntakeBase):
     """Form B (`/adopt`) payload: an adopter, possibly multi-FPG."""
 
     party_kind: Literal["adopter"] = "adopter"
-    fpg_selections: list[FpgInterestIn] = Field(default_factory=list)
+    # adv4-001: bound the FPG selection list. Without a max_length an
+    # attacker can pad a 64KB body with ~3500 FpgInterestIn entries, each
+    # of which the A1 fabrication path allocates a UUID for. The Form B UI
+    # exposes a handful of selections at a time; 20 is a generous ceiling
+    # that no legitimate submission will hit (review with product if it ever
+    # does — likely a different schema is appropriate at that scale).
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=20)
 
 
 class FacilitationIntake(IntakeBase):

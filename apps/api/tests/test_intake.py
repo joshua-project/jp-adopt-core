@@ -289,6 +289,29 @@ def test_intake_rejects_payload_too_large(client: TestClient) -> None:
     assert r.json()["error"]["code"] == "payload_too_large"
 
 
+def test_intake_rejects_oversized_fpg_selections(client: TestClient) -> None:
+    """adv4-001: ``fpg_selections`` is bounded at 20 entries. 21 entries
+    must be rejected at the schema layer (400 ``validation_failed``).
+    Without the cap a 64KB body can carry ~3500 FpgInterestIn entries that
+    the A1 fabrication path allocates a UUID for, opening an enumeration /
+    amplification vector."""
+    email = f"bigfpg-{uuid.uuid4().hex[:6]}@example.com"
+    fpg_selections = [{"rop3": f"R{i:04d}"} for i in range(21)]
+    r = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(email=email, fpg_selections=fpg_selections),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 400, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "validation_failed"
+    # The field-error map should mention fpg_selections so an operator can
+    # see WHY the request bounced.
+    fields = body["error"].get("fields") or {}
+    assert any("fpg_selections" in k for k in fields), fields
+
+
 # ─── intake: happy paths ────────────────────────────────────────────────────
 
 
