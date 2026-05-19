@@ -402,7 +402,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "required": false,
+            "required": true,
             "schema": {
               "anyOf": [
                 {
@@ -497,7 +497,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "IntakeBearerKey": []
+          }
+        ]
       }
     },
     "/v1/intake/facilitation": {
@@ -527,7 +532,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "required": false,
+            "required": true,
             "schema": {
               "anyOf": [
                 {
@@ -622,7 +627,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "IntakeBearerKey": []
+          }
+        ]
       }
     }
   },
@@ -1098,6 +1108,13 @@
           "type"
         ],
         "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "IntakeBearerKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Intake API key, sent as ``Authorization: Bearer <key>``. The key must match one of the comma-separated entries in the server's ``INTAKE_API_KEYS`` setting."
       }
     }
   }

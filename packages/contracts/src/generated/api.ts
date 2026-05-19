@@ -585,9 +585,9 @@ export interface operations {
     post_adoption_intake_v1_intake_adoption_post: {
         parameters: {
             query?: never;
-            header?: {
+            header: {
                 authorization?: string | null;
-                "Idempotency-Key"?: string | null;
+                "Idempotency-Key": string | null;
             };
             path?: never;
             cookie?: never;
@@ -671,9 +671,9 @@ export interface operations {
     post_facilitation_intake_v1_intake_facilitation_post: {
         parameters: {
             query?: never;
-            header?: {
+            header: {
                 authorization?: string | null;
-                "Idempotency-Key"?: string | null;
+                "Idempotency-Key": string | null;
             };
             path?: never;
             cookie?: never;

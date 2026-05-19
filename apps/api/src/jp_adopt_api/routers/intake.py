@@ -713,10 +713,24 @@ _INTAKE_RESPONSES: dict[int | str, dict[str, object]] = {
 }
 
 
+# AC-10: ``Idempotency-Key`` is required by the server (handler returns 400
+# ``idempotency_required`` when missing) but FastAPI's auto-generated OpenAPI
+# marks it ``required: false`` because the param is typed ``str | None``.
+# Generated clients then don't send it and hit the 400 at runtime. The
+# ``main.py`` custom-openapi function post-processes this flag to ``true``
+# on the two intake operations.
+# AC-13: also declare the IntakeBearerKey security requirement on each
+# intake operation so generated clients auto-inject the Authorization header.
+_INTAKE_OPENAPI_EXTRA: dict[str, object] = {
+    "security": [{"IntakeBearerKey": []}],
+}
+
+
 @router.post(
     "/adoption",
     response_model=IntakeSuccess,
     responses=_INTAKE_RESPONSES,
+    openapi_extra=_INTAKE_OPENAPI_EXTRA,
 )
 async def post_adoption_intake(
     request: Request,
@@ -739,6 +753,7 @@ async def post_adoption_intake(
     "/facilitation",
     response_model=IntakeSuccess,
     responses=_INTAKE_RESPONSES,
+    openapi_extra=_INTAKE_OPENAPI_EXTRA,
 )
 async def post_facilitation_intake(
     request: Request,
