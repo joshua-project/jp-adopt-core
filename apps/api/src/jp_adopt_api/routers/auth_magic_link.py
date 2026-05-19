@@ -253,6 +253,17 @@ async def claim_link(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "account_resolution_conflict", "message": str(e)},
         ) from None
+    except Exception:
+        # R-B6-1: parallel to request_link's catch-all (B6/SR5). The four
+        # specific clauses above cover every error type ``claim_magic_link``
+        # raises today, but leaving an unspecified failure to propagate
+        # without an explicit rollback is a maintenance hazard: any future
+        # refactor that adds a new exception type (or swaps the DB dep for
+        # one without auto-rollback) would silently leak partially-written
+        # state across requests. Rollback explicitly and re-raise so the
+        # global handler still produces the right response.
+        await db.rollback()
+        raise
     return MagicLinkTokenEnvelope(
         access_token=result.access_token,
         token_type=result.token_type,
