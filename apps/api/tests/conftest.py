@@ -22,10 +22,10 @@ _WORKER_SRC = Path(__file__).resolve().parents[2] / "worker" / "src"
 if _WORKER_SRC.is_dir() and str(_WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(_WORKER_SRC))
 
-import pytest
-from fastapi.testclient import TestClient
+import pytest  # noqa: E402  — must follow env / sys.path setup above.
+from fastapi.testclient import TestClient  # noqa: E402
 
-from jp_adopt_api.main import app
+from jp_adopt_api.main import app  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

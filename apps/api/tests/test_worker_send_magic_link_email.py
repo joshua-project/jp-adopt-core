@@ -17,7 +17,6 @@ import logging
 from unittest.mock import patch
 
 import pytest
-
 from jp_adopt_worker.tasks.send_magic_link_email import (
     send_magic_link_email,
     send_magic_link_email_max_tries,

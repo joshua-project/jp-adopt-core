@@ -627,7 +627,8 @@ async def _process_interest(
         )
         if match_row is None:
             logger.warning(
-                "match.concurrent_conflict_unrecoverable interest=%s contact=%s rop3=%s",
+                "match.concurrent_conflict_unrecoverable interest=%s "
+                "contact=%s rop3=%s",
                 interest.id, contact.id, rop3,
             )
             outcome.reason = "concurrent_conflict_unrecoverable"
@@ -681,7 +682,8 @@ async def _process_interest(
         )
         if match_row is None:
             logger.warning(
-                "match.concurrent_conflict_unrecoverable interest=%s contact=%s rop3=%s",
+                "match.concurrent_conflict_unrecoverable interest=%s "
+                "contact=%s rop3=%s",
                 interest.id, contact.id, rop3,
             )
             outcome.reason = "concurrent_conflict_unrecoverable"
