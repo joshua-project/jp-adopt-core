@@ -130,18 +130,22 @@ async def send_magic_link_email(ctx: dict[str, Any], **kwargs: Any) -> None:
     email. The 202 envelope is anti-enumeration, so the user has no way
     to tell from the response either.
 
-    ARQ provides ``job_try`` and ``max_tries`` in ``ctx``; log on the
-    final attempt before re-raising.
+    F-R-B5-1: ARQ 0.28.0's worker only injects ``{job_id, job_try,
+    enqueue_time, score}`` into ``ctx`` — there is no ``max_tries`` key.
+    The previous implementation read ``ctx.get("max_tries")`` and required
+    it to be an int, so the isinstance branch never fired and the
+    permanent-failure log was dead code. Compare ``job_try`` directly to
+    the module-level constant ``send_magic_link_email_max_tries`` instead,
+    which is also what ARQ uses to decide retry-cap behavior (see
+    ``send_magic_link_email.max_tries = ...`` at the bottom of this file).
     """
     try:
         await send_magic_link_email_inline(**kwargs)
     except Exception as e:
         job_try = ctx.get("job_try")
-        max_tries = ctx.get("max_tries")
         if (
             isinstance(job_try, int)
-            and isinstance(max_tries, int)
-            and job_try >= max_tries
+            and job_try >= send_magic_link_email_max_tries
         ):
             logger.error(
                 "magic_link.email.permanent_failure recipient=%s error_type=%s",

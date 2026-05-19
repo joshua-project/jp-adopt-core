@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 # Default matches docker-compose and CI Postgres (localhost from the test process).
 os.environ.setdefault(
     "DATABASE_URL",
     "postgresql+asyncpg://jp_adopt:jp_adopt@127.0.0.1:5434/jp_adopt",
 )
+
+# Make the worker package importable in API test runs. The worker is a sibling
+# uv workspace member that isn't installed into the API venv, but its source
+# tree is right next door — exposing it on sys.path lets tests exercise worker
+# tasks (e.g. the ARQ permanent_failure log path) without standing up a
+# separate test runner. The API ``routers/auth_magic_link`` already imports
+# the worker lazily at runtime via this same module path.
+_WORKER_SRC = Path(__file__).resolve().parents[2] / "worker" / "src"
+if _WORKER_SRC.is_dir() and str(_WORKER_SRC) not in sys.path:
+    sys.path.insert(0, str(_WORKER_SRC))
 
 import pytest
 from fastapi.testclient import TestClient
