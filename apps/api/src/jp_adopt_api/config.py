@@ -11,6 +11,47 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # duplicating the string (and so a test importing it stays in sync).
 _DEV_MAGIC_LINK_SIGNING_KEY = "dev-magic-link-signing-key-please-change-32b"
 
+# Sanity floor for ACS accesskey length. Real keys are base64-encoded and
+# typically 88 chars; 20 is conservative enough to admit any legitimate key
+# while still rejecting placeholder values like "x" or "abc". Tracked as a
+# module-level constant so the test file can document the floor.
+_ACS_ACCESSKEY_MIN_LEN = 20
+
+
+def _looks_like_acs_connection_string(cs: str) -> bool:
+    """Structural check for an ACS Email connection string.
+
+    adv4-004 / CORR-6: the prior substring check (``'endpoint=' in cs and
+    'accesskey=' in cs``) accepted obviously-broken strings like
+    ``'endpoint=;accesskey='`` (empty values) and
+    ``'endpoint=foo accesskey=bar'`` (no semicolon delimiter, single token).
+    Parse the connection string as semicolon-separated ``key=value`` pairs
+    instead and require:
+
+      * ``endpoint`` value starts with ``https://`` and has at least one
+        character after the scheme (so ``https://`` alone is rejected);
+      * ``accesskey`` value is at least ``_ACS_ACCESSKEY_MIN_LEN`` chars.
+
+    Keys are case-insensitive (Azure docs vary on casing). Returns True if
+    the string is shaped like a real ACS connection string, False otherwise.
+    """
+    parts: dict[str, str] = {}
+    for raw in cs.split(";"):
+        raw = raw.strip()
+        if not raw or "=" not in raw:
+            continue
+        key, _, value = raw.partition("=")
+        parts[key.strip().lower()] = value.strip()
+    endpoint = parts.get("endpoint", "")
+    accesskey = parts.get("accesskey", "")
+    if not endpoint.lower().startswith("https://"):
+        return False
+    if len(endpoint) <= len("https://"):
+        return False  # https:// with no host
+    if len(accesskey) < _ACS_ACCESSKEY_MIN_LEN:
+        return False
+    return True
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -138,19 +179,27 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def acs_connection_string_required_in_production(self) -> Self:
-        """N5: without an ACS connection string the magic-link worker silently
-        logs the magic-link URL to stdout instead of emailing it. In production
-        that means a user submits a magic-link request, receives a 202 (anti-
-        enumeration shape), and never gets the email — the misconfiguration
-        is invisible from the outside because the success envelope is identical
-        whether email delivery succeeded or not. Refuse to boot when ACS is
-        unconfigured in production.
+        """N5 / adv4-004 / CORR-6: without an ACS connection string the
+        magic-link worker silently logs the magic-link URL to stdout instead
+        of emailing it. In production that means a user submits a magic-link
+        request, receives a 202 (anti-enumeration shape), and never gets the
+        email — the misconfiguration is invisible from the outside because
+        the success envelope is identical whether email delivery succeeded or
+        not. Refuse to boot when ACS is unconfigured in production.
 
         Bare presence is not enough: placeholders like ``'TODO-fill-in-vault'``
         also pass ``not self.acs_connection_string`` but blow up at first
-        send. Validate the shape — an ACS connection string is of the form
-        ``endpoint=https://...;accesskey=...``; reject anything missing
-        either substring (case-insensitive, since Azure docs vary on casing).
+        send. The previous substring check (``'endpoint=' in s and
+        'accesskey=' in s``) was too permissive — strings like
+        ``'endpoint=;accesskey='`` (empty values) and
+        ``'endpoint=foo accesskey=bar'`` (no semicolon delimiter) both
+        passed. Parse the string as semicolon-separated ``key=value`` pairs
+        and verify:
+          * ``endpoint`` is present, non-empty, and starts with
+            ``https://``;
+          * ``accesskey`` is present and at least 20 chars (real ACS keys
+            are base64-encoded and much longer; 20 is a sanity floor that
+            still catches placeholder values).
         """
         if not self.is_production:
             return self
@@ -163,14 +212,15 @@ class Settings(BaseSettings):
                 "responses with no email arriving."
             )
             raise ValueError(msg)
-        cs_lower = cs.lower()
-        if "endpoint=" not in cs_lower or "accesskey=" not in cs_lower:
+        if not _looks_like_acs_connection_string(cs):
             msg = (
                 "ACS_CONNECTION_STRING is set but does not look like a valid "
-                "ACS connection string (expected 'endpoint=...;accesskey=...'). "
-                "Placeholder values like 'TODO-fill-in-vault' boot fine but "
-                "blow up at first send; reject them here so the misconfiguration "
-                "surfaces at startup instead of at first magic-link request."
+                "ACS connection string (expected "
+                "'endpoint=https://...;accesskey=<>=20-char key>'). "
+                "Placeholder values, empty endpoint/accesskey, missing semicolon "
+                "delimiter, and non-https endpoints are all rejected here so the "
+                "misconfiguration surfaces at startup instead of at first "
+                "magic-link request."
             )
             raise ValueError(msg)
         return self

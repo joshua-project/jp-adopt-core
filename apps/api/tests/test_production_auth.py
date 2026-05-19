@@ -23,7 +23,10 @@ def test_production_env_accepts_strict_auth_on() -> None:
         app_env="production",
         strict_auth=True,
         magic_link_signing_key="a" * 48,
-        acs_connection_string="endpoint=https://example.com;accesskey=x",
+        acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
     )
     assert s.is_production
 
@@ -33,7 +36,10 @@ def test_prod_alias_env_var_name() -> None:
         app_env="prod",
         strict_auth=True,
         magic_link_signing_key="a" * 48,
-        acs_connection_string="endpoint=https://example.com;accesskey=x",
+        acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
     )
     assert s.is_production
 
@@ -61,7 +67,10 @@ def test_production_rejects_default_magic_link_signing_key() -> None:
             app_env="production",
             strict_auth=True,
             magic_link_signing_key=_DEV_MAGIC_LINK_SIGNING_KEY,
-            acs_connection_string="endpoint=https://example.com;accesskey=x",
+            acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
         )
 
 
@@ -75,7 +84,10 @@ def test_production_rejects_default_magic_link_signing_key_with_whitespace() -> 
             app_env="production",
             strict_auth=True,
             magic_link_signing_key=padded,
-            acs_connection_string="endpoint=https://example.com;accesskey=x",
+            acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
         )
 
 
@@ -90,7 +102,10 @@ def test_production_rejects_default_magic_link_signing_key_with_case_variant() -
             app_env="production",
             strict_auth=True,
             magic_link_signing_key=upper,
-            acs_connection_string="endpoint=https://example.com;accesskey=x",
+            acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
         )
 
 
@@ -100,7 +115,10 @@ def test_production_accepts_rotated_magic_link_signing_key() -> None:
         app_env="production",
         strict_auth=True,
         magic_link_signing_key="a" * 48,
-        acs_connection_string="endpoint=https://example.com;accesskey=x",
+        acs_connection_string=(
+            "endpoint=https://example.communication.azure.com/;"
+            "accesskey=abcdef0123456789abcdef0123456789"
+        ),
     )
     assert s.is_production
     assert s.magic_link_signing_key == "a" * 48
@@ -157,12 +175,106 @@ def test_production_rejects_noise_acs_connection_string() -> None:
 
 
 def test_production_accepts_well_formed_acs_connection_string() -> None:
-    """A4: a string that contains both ``endpoint=`` and ``accesskey=``
-    substrings is accepted (case-insensitive)."""
+    """A4 / adv4-004: a well-formed semicolon-delimited connection string with
+    an https endpoint and a >=20 char accesskey is accepted."""
     s = Settings(
         app_env="production",
         strict_auth=True,
         magic_link_signing_key="a" * 48,
-        acs_connection_string="endpoint=https://x.communication.azure.com/;accesskey=abc",
+        acs_connection_string=(
+            "endpoint=https://x.communication.azure.com/;"
+            "accesskey=abc123def456ghi789jkl"
+        ),
+    )
+    assert s.is_production
+
+
+# ─── adv4-004 / CORR-6: structural ACS validation ──────────────────────────
+
+
+def test_production_rejects_acs_with_empty_values() -> None:
+    """adv4-004: 'endpoint=;accesskey=' (both empty) used to pass the
+    substring-only check. Structural parse rejects it."""
+    with pytest.raises(ValueError, match="does not look like a valid"):
+        Settings(
+            app_env="production",
+            strict_auth=True,
+            magic_link_signing_key="a" * 48,
+            acs_connection_string="endpoint=;accesskey=foo",
+        )
+
+
+def test_production_rejects_acs_with_empty_accesskey() -> None:
+    """adv4-004: empty accesskey but a valid endpoint still gets rejected —
+    the SDK would 401 at first send, but the misconfiguration must surface
+    at boot."""
+    with pytest.raises(ValueError, match="does not look like a valid"):
+        Settings(
+            app_env="production",
+            strict_auth=True,
+            magic_link_signing_key="a" * 48,
+            acs_connection_string=(
+                "endpoint=https://x.communication.azure.com/;accesskey="
+            ),
+        )
+
+
+def test_production_rejects_acs_with_non_https_endpoint() -> None:
+    """adv4-004: 'endpoint=foo;accesskey=...' (no https://) is rejected. ACS
+    endpoints are always https — a non-https endpoint is a clear placeholder
+    or typo."""
+    with pytest.raises(ValueError, match="does not look like a valid"):
+        Settings(
+            app_env="production",
+            strict_auth=True,
+            magic_link_signing_key="a" * 48,
+            acs_connection_string=(
+                "endpoint=foo;accesskey=abc123def456ghi789jkl"
+            ),
+        )
+
+
+def test_production_rejects_acs_with_short_accesskey() -> None:
+    """adv4-004: a 'real-looking' string with a too-short accesskey is
+    rejected. Real ACS keys are base64-encoded and much longer than 20
+    chars — anything under that is a placeholder or test stub."""
+    with pytest.raises(ValueError, match="does not look like a valid"):
+        Settings(
+            app_env="production",
+            strict_auth=True,
+            magic_link_signing_key="a" * 48,
+            acs_connection_string=(
+                "endpoint=https://x.communication.azure.com/;accesskey=abc"
+            ),
+        )
+
+
+def test_production_rejects_acs_without_semicolon_delimiter() -> None:
+    """adv4-004 / CORR-6: 'endpoint=foo accesskey=bar' (space, no semicolon)
+    was a substring match under the old check but is structurally broken —
+    the parser splits on ';' so the whole thing becomes one key with no
+    second pair, and accesskey is absent."""
+    with pytest.raises(ValueError, match="does not look like a valid"):
+        Settings(
+            app_env="production",
+            strict_auth=True,
+            magic_link_signing_key="a" * 48,
+            acs_connection_string=(
+                "endpoint=https://x.communication.azure.com/ "
+                "accesskey=abc123def456ghi789jkl"
+            ),
+        )
+
+
+def test_production_accepts_real_world_acs_shape() -> None:
+    """adv4-004: a real-world-shaped ACS connection string is accepted."""
+    s = Settings(
+        app_env="production",
+        strict_auth=True,
+        magic_link_signing_key="a" * 48,
+        acs_connection_string=(
+            "endpoint=https://x.communication.azure.com/;"
+            "accesskey=abc123def456ghi789jkl"
+        ),
     )
     assert s.is_production
