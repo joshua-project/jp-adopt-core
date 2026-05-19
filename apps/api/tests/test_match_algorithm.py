@@ -350,6 +350,41 @@ def test_score_breakdown_round_trips_to_dict() -> None:
     }
 
 
+def test_open_match_statuses_constant_matches_migration() -> None:
+    """adv5-002 / RR-1: guard against drift between matching.py's
+    ``_OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH`` and migration 0005's
+    ``OPEN_MATCH_STATUSES``. The two MUST list the same statuses or the
+    conflict-guard refetch will miss winners with statuses the index covers
+    but the constant omits — silently re-raising or skipping a still-recoverable
+    Match. The cross-reference comment is the only guard today; this test
+    makes drift surface at CI time, not at production-incident time.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    from jp_adopt_api.domain.matching import (
+        _OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH,
+    )
+
+    mig_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260517_0005_match_domain.py"
+    )
+    spec = importlib.util.spec_from_file_location("_mig_0005_drift", mig_path)
+    assert spec is not None and spec.loader is not None
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    assert set(_OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH) == set(
+        mig.OPEN_MATCH_STATUSES
+    ), (
+        "matching.py's _OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH has drifted "
+        "from migration 0005's OPEN_MATCH_STATUSES. Update both."
+    )
+
+
 # ─── integration tests against a live DB ───────────────────────────────────
 
 
