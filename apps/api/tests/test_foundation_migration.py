@@ -317,3 +317,38 @@ async def test_identity_link_unique_b2c_subject_id(conn: AsyncConnection) -> Non
                 ),
                 {"id": b, "sub": sub},
             )
+
+
+async def test_identity_link_unique_magic_email(conn: AsyncConnection) -> None:
+    """C1 / T-09: migration 0007 added a partial unique index keyed on
+    (email_normalized) for rows with ``idp_name='magic_link'`` (i.e.
+    enforces "one magic-link link per normalized email"). The B2C dedup
+    test above covers ``idp_name='entra'``; this one covers magic_link
+    so the live index is exercised end-to-end."""
+    email_norm = f"magic-uniq-{uuid.uuid4().hex[:8]}@example.com"
+    a = uuid.uuid4()
+    b = uuid.uuid4()
+    async with conn.begin():
+        await conn.execute(
+            text(
+                """
+                INSERT INTO identity_link
+                    (id, email, email_normalized, idp_name)
+                VALUES
+                    (:id, :email, :email_norm, 'magic_link')
+                """
+            ),
+            {"id": a, "email": email_norm, "email_norm": email_norm},
+        )
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO identity_link
+                        (id, email, email_normalized, idp_name)
+                    VALUES
+                        (:id, :email, :email_norm, 'magic_link')
+                    """
+                ),
+                {"id": b, "email": email_norm, "email_norm": email_norm},
+            )

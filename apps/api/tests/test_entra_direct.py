@@ -218,3 +218,63 @@ async def test_wrong_alg_raises_invalid_algorithm(
     )
     with pytest.raises(jwt.InvalidAlgorithmError):
         await decode_entra_direct_token(session, token, settings)
+
+
+@pytest.mark.asyncio
+async def test_get_discovery_per_tid_lock_collapses_thundering_herd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C4 / T-13: F11's per-tid asyncio.Lock should collapse a cold-cache
+    thundering herd to a single sync discovery fetch. With N concurrent
+    coroutines awaiting ``_get_discovery(tid)`` on a fresh process, the
+    sync-fetch helper must be called only once.
+
+    The underlying cache is ``@lru_cache``, so we must clear it before the
+    test and re-instantiate the lock (otherwise prior calls from another
+    test have already filled the cache and the helper is never invoked at
+    all)."""
+    import asyncio
+    from collections import defaultdict
+
+    from jp_adopt_api import auth_entra as ae
+
+    # Reset the cache + lock map so the test starts cold.
+    ae._cached_discovery_sync.cache_clear()
+    monkeypatch.setattr(
+        ae, "_DISCOVERY_LOCKS", defaultdict(asyncio.Lock)
+    )
+
+    call_count = 0
+    cache: dict[str, dict[str, object]] = {}
+
+    def _fake_sync(tid: str) -> dict[str, object]:
+        """Mirror the @lru_cache + httpx.get pattern of the real
+        ``_cached_discovery_sync``: cache hit is free, cache miss simulates
+        an upstream call and records it. This is what makes the lock-vs-no-
+        lock distinction visible: without the per-tid lock, all 10 coroutines
+        race past the cache check before any of them populates it, so the
+        counter would be 10. With the lock, only the first coroutine sees
+        an empty cache; the rest see the populated entry."""
+        nonlocal call_count
+        if tid in cache:
+            return cache[tid]
+        call_count += 1
+        # Just enough sleep that the asyncio.to_thread dispatches overlap
+        # in time. Without the lock, all 10 would observe the miss path.
+        import time as _time
+        _time.sleep(0.05)
+        cache[tid] = {"jwks_uri": f"https://example.test/{tid}/keys"}
+        return cache[tid]
+
+    monkeypatch.setattr(ae, "_cached_discovery_sync", _fake_sync)
+
+    tid = "f11-test-tid"
+    # 10 concurrent _get_discovery callers.
+    results = await asyncio.gather(*[ae._get_discovery(tid) for _ in range(10)])
+    # All callers see the same dict.
+    assert all(r["jwks_uri"].endswith(f"/{tid}/keys") for r in results)
+    # The sync helper ran exactly once — the lock collapsed the herd.
+    assert call_count == 1, (
+        f"expected 1 discovery fetch, got {call_count} — "
+        "the per-tid lock isn't collapsing concurrent callers"
+    )

@@ -443,6 +443,154 @@ async def test_second_submission_same_email_appends_interest(
 
 
 @pytest.mark.asyncio
+async def test_purge_idempotency_keys_sql_drops_expired_and_stuck_pending(
+    session: AsyncSession,
+) -> None:
+    """C3 / T-12: validate the SQL predicates the worker's
+    ``purge_idempotency_keys`` cron uses (B2 widened it to also sweep stuck-
+    pending rows). The worker function itself can't be imported here because
+    the API test venv doesn't carry ``arq`` (worker dependency); test the
+    raw SQL it issues against a real Postgres instead. This still catches
+    SQL drift (e.g. wrong column name, wrong state literal).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    now = datetime.now(UTC)
+    # Seed three rows: fresh-pending (must survive), stuck-pending (must die),
+    # expired-completed (must die), fresh-completed (must survive).
+    fresh_pending = uuid.uuid4()
+    stuck_pending = uuid.uuid4()
+    expired_completed = uuid.uuid4()
+    fresh_completed = uuid.uuid4()
+    tag = uuid.uuid4().hex[:12]
+    for row_id, state, created_offset_minutes, expires_offset_hours in [
+        (fresh_pending, "pending", -5, 24),
+        (stuck_pending, "pending", -120, 22),
+        (expired_completed, "completed", -2880, -1),
+        (fresh_completed, "completed", -30, 23),
+    ]:
+        await session.execute(
+            text(
+                """
+                INSERT INTO api_idempotency_keys
+                    (id, api_key_id, key, request_hash, state, created_at, expires_at)
+                VALUES
+                    (:id, 'test_purge', :key, 'hash', :state, :created, :expires)
+                """
+            ),
+            {
+                "id": row_id,
+                "key": f"{tag}-{row_id}",
+                "state": state,
+                "created": now + timedelta(minutes=created_offset_minutes),
+                "expires": now + timedelta(hours=expires_offset_hours),
+            },
+        )
+    await session.commit()
+
+    # Mirror the predicate from worker_settings.purge_idempotency_keys exactly,
+    # scoped to api_key_id='test_purge' so leftover rows from prior runs don't
+    # inflate the rowcount.
+    result = await session.execute(
+        text(
+            """
+            DELETE FROM api_idempotency_keys
+            WHERE api_key_id = 'test_purge'
+              AND id IN (
+                SELECT id FROM api_idempotency_keys
+                WHERE api_key_id = 'test_purge'
+                  AND (expires_at < now()
+                       OR (state = 'pending'
+                           AND created_at < now() - interval '1 hour'))
+                LIMIT 1000
+            )
+            """
+        )
+    )
+    await session.commit()
+    # 2 rows: stuck-pending + expired-completed.
+    assert result.rowcount == 2
+
+    surviving = (
+        await session.execute(
+            select(ApiIdempotencyKey.id).where(
+                ApiIdempotencyKey.api_key_id == "test_purge"
+            )
+        )
+    ).scalars().all()
+    surviving_set = set(surviving)
+    assert fresh_pending in surviving_set
+    assert fresh_completed in surviving_set
+    assert stuck_pending not in surviving_set
+    assert expired_completed not in surviving_set
+
+    # cleanup
+    await session.execute(
+        text("DELETE FROM api_idempotency_keys WHERE api_key_id = 'test_purge'")
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_purge_magic_link_rate_limits_sql_drops_old_only(
+    session: AsyncSession,
+) -> None:
+    """C3 / T-12: companion test for ``purge_magic_link_rate_limits`` SQL
+    predicate (``requested_at < now() - interval '2 hours'``)."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    now = datetime.now(UTC)
+    fresh = uuid.uuid4()
+    old = uuid.uuid4()
+    tag = f"purge-rl-{uuid.uuid4().hex[:8]}"
+    await session.execute(
+        text(
+            """
+            INSERT INTO magic_link_rate_limit (id, email_normalized, requested_at)
+            VALUES (:fresh, :tag, :fresh_ts), (:old, :tag, :old_ts)
+            """
+        ),
+        {
+            "fresh": fresh,
+            "old": old,
+            "tag": tag,
+            "fresh_ts": now - timedelta(minutes=30),
+            "old_ts": now - timedelta(hours=3),
+        },
+    )
+    await session.commit()
+
+    result = await session.execute(
+        text(
+            """
+            DELETE FROM magic_link_rate_limit
+            WHERE email_normalized = :tag
+              AND id IN (
+                SELECT id FROM magic_link_rate_limit
+                WHERE email_normalized = :tag
+                  AND requested_at < now() - interval '2 hours'
+                LIMIT 1000
+            )
+            """
+        ),
+        {"tag": tag},
+    )
+    await session.commit()
+    assert result.rowcount == 1
+
+    # cleanup
+    await session.execute(
+        text("DELETE FROM magic_link_rate_limit WHERE email_normalized = :tag"),
+        {"tag": tag},
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_idempotency_replay_returns_cached_response(
     client: TestClient, session: AsyncSession
 ) -> None:
@@ -469,6 +617,22 @@ async def test_idempotency_replay_returns_cached_response(
         )
     ).scalars().all()
     assert len(interests) == 1
+
+    # C2 / T-11: assert the cached idempotency row stores a SHA-256 prefix of
+    # the bearer key, never the raw bearer itself. A leaked DB must not leak
+    # a usable credential.
+    import hashlib as _hashlib
+    expected_id = _hashlib.sha256(TEST_INTAKE_KEY.encode("utf-8")).hexdigest()[:16]
+    idem_row = (
+        await session.execute(
+            select(ApiIdempotencyKey).where(ApiIdempotencyKey.key == idem)
+        )
+    ).scalar_one()
+    assert idem_row.api_key_id == expected_id
+    assert idem_row.api_key_id != TEST_INTAKE_KEY
+    # Defensive: the raw bearer should not appear in any persisted column.
+    assert TEST_INTAKE_KEY not in idem_row.api_key_id
+    assert TEST_INTAKE_KEY not in idem_row.key
 
     # cleanup
     out = (
