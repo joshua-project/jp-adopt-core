@@ -684,3 +684,160 @@ async def test_missing_triage_org_raises(session: AsyncSession) -> None:
         if triage is not None:
             triage.is_triage_org = True
             await session.commit()
+
+
+# ─── B1 / adv4-010 conflict-guard tests ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conflict_does_not_abort_run(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """B1 / adv4-010: when uq_match_open_per_interest fires on one interest
+    (because an open Match row already exists), the algorithm must skip that
+    interest gracefully and complete the run — every OTHER interest should
+    still get its MatchAttempt audit rows.
+
+    Setup: contact has two interests. We pre-seed an open recommended Match
+    row for the FIRST interest (simulating a concurrent triage assignment by
+    Amy's UI). When match_or_route walks the contact, the first interest hits
+    the conflict guard; the second proceeds normally.
+    """
+    import logging
+
+    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    contact = await _make_contact(session, country="US", languages=["en"])
+    interest_conflict = await _make_interest(session, contact, rop3=rop3)
+    interest_ok = await _make_interest(session, contact, rop3=rop3)
+    # Pre-seed an open Match for the first interest. The matcher will try to
+    # insert a recommended Match → uq_match_open_per_interest conflict.
+    pre_seeded = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest_conflict.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(pre_seeded)
+    await session.commit()
+
+    caplog.set_level(logging.INFO)
+    outcome = await match_or_route(session, contact)
+    await session.commit()
+
+    # The run completed without raising — both interest outcomes are present.
+    assert len(outcome.interest_outcomes) == 2
+    reasons = {o.interest_id: o.reason for o in outcome.interest_outcomes}
+    # The conflicted interest's outcome reflects the conflict path. The
+    # refetch in the guard finds the pre-seeded recommended row, so the
+    # returned reason is "scored" (the guard returned the existing match,
+    # not None). Either "scored" or "concurrent_conflict_unrecoverable" is
+    # acceptable depending on whether the refetch succeeds.
+    assert reasons[interest_conflict.id] in (
+        "scored",
+        "concurrent_conflict_unrecoverable",
+    )
+    assert reasons[interest_ok.id] == "scored"
+
+    # The non-conflicted interest got its MatchAttempt audit rows — this is
+    # the load-bearing assertion for adv4-010 (re-raise would have wiped them).
+    ok_attempts = (
+        await session.execute(
+            select(MatchAttempt).where(
+                MatchAttempt.adopter_interest_id == interest_ok.id,
+                MatchAttempt.run_id == outcome.run_id,
+            )
+        )
+    ).scalars().all()
+    assert len(ok_attempts) >= 3  # at least the three covering orgs
+
+    # The conflict log fired at least once for the conflicted interest.
+    conflict_logs = [
+        r for r in caplog.records if "match.concurrent_conflict" in r.message
+    ]
+    assert len(conflict_logs) >= 1
+
+    await _cleanup_contact(session, contact)
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])
+
+
+@pytest.mark.asyncio
+async def test_match_attempt_audit_survives_conflict_rollback(
+    session: AsyncSession,
+) -> None:
+    """CORR-1: MatchAttempt rows added in the candidate loop must be flushed
+    to the OUTER transaction BEFORE ``begin_nested`` opens the savepoint.
+    Otherwise SQLAlchemy autoflush flushes them inside the savepoint, and a
+    rollback on conflict undoes them.
+
+    Verify by seeding an open Match (forces conflict) and checking that the
+    MatchAttempt rows for the conflicted interest still landed in the DB.
+    """
+    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    contact = await _make_contact(session, country="US", languages=["en"])
+    interest = await _make_interest(session, contact, rop3=rop3)
+    pre_seeded = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(pre_seeded)
+    await session.commit()
+
+    outcome = await match_or_route(session, contact)
+    await session.commit()
+
+    # MatchAttempt rows for THIS run survived the savepoint rollback.
+    attempts = (
+        await session.execute(
+            select(MatchAttempt).where(
+                MatchAttempt.adopter_interest_id == interest.id,
+                MatchAttempt.run_id == outcome.run_id,
+            )
+        )
+    ).scalars().all()
+    assert len(attempts) >= 3, (
+        "MatchAttempt audit rows must persist even when the Match insert "
+        "rolls back via the savepoint conflict guard."
+    )
+
+    await _cleanup_contact(session, contact)
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])
+
+
+@pytest.mark.asyncio
+async def test_conflict_refetch_finds_accepted_status_match(
+    session: AsyncSession,
+) -> None:
+    """R-B1-1: the refetch predicate must mirror uq_match_open_per_interest
+    exactly. If a row in status='accepted' (covered by the partial index)
+    is the conflict winner, the refetch must find it — otherwise the guard
+    returns (None, False) and the interest is incorrectly skipped.
+    """
+    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    contact = await _make_contact(session, country="US", languages=["en"])
+    interest = await _make_interest(session, contact, rop3=rop3)
+    pre_seeded = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="accepted",  # also covered by uq_match_open_per_interest
+    )
+    session.add(pre_seeded)
+    await session.commit()
+
+    outcome = await match_or_route(session, contact)
+    await session.commit()
+
+    # The interest's outcome must NOT be 'concurrent_conflict_unrecoverable'
+    # — the refetch found the accepted row, so the guard returned it.
+    out = outcome.interest_outcomes[0]
+    assert out.reason != "concurrent_conflict_unrecoverable", (
+        "Refetch predicate must include 'accepted' (partial-index status)."
+    )
+
+    await _cleanup_contact(session, contact)
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])

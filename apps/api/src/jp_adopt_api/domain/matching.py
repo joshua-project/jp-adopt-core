@@ -432,12 +432,25 @@ def _outbox_payload_for_attempt(
     }
 
 
+# The set of Match statuses covered by the ``uq_match_open_per_interest``
+# partial unique index. Keep in lockstep with ``OPEN_MATCH_STATUSES`` in
+# alembic/versions/20260517_0005_match_domain.py — both must list the same
+# statuses or the refetch in ``_insert_match_with_conflict_guard`` will miss
+# the winner's row and the conflict guard will incorrectly re-raise / skip.
+_OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH = (
+    "recommended",
+    "accepted",
+    "active",
+    "triage",
+)
+
+
 async def _insert_match_with_conflict_guard(
     session: AsyncSession,
     *,
     match: Match,
     interest_id: uuid.UUID,
-) -> tuple[Match, bool]:
+) -> tuple[Match | None, bool]:
     """Insert a Match row, tolerating the ``uq_match_open_per_interest`` race.
 
     B1: a concurrent triage assignment (e.g. Amy's UI promoting a routed
@@ -447,8 +460,17 @@ async def _insert_match_with_conflict_guard(
     all subsequent interests are lost.
 
     On conflict, rollback to the savepoint and refetch the existing open
-    Match for this interest. Return ``(match, created)`` where
-    ``created=False`` indicates the conflict path was taken.
+    Match for this interest. Returns ``(match, created)``:
+      * ``(match, True)``  — insert succeeded.
+      * ``(existing_match, False)`` — winner's row found on refetch.
+      * ``(None, False)`` — refetch returned nothing (the winner's status
+        flipped off the open-statuses set between the conflict and the
+        refetch). Caller treats this as an unrecoverable per-interest
+        skip and continues the run (R-adv4-010).
+
+    R-B1-1: the refetch's ``status IN (...)`` predicate must mirror
+    ``uq_match_open_per_interest``'s partial index exactly. See
+    ``_OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH`` above.
     """
     try:
         async with session.begin_nested():
@@ -462,7 +484,9 @@ async def _insert_match_with_conflict_guard(
             await session.execute(
                 select(Match)
                 .where(Match.adopter_interest_id == interest_id)
-                .where(Match.status.in_(("triage", "recommended")))
+                .where(
+                    Match.status.in_(_OPEN_MATCH_STATUSES_FOR_CONFLICT_REFETCH)
+                )
             )
         ).scalar_one_or_none()
         logger.info(
@@ -470,11 +494,6 @@ async def _insert_match_with_conflict_guard(
             interest_id,
             existing.id if existing else None,
         )
-        if existing is None:
-            # Race lost but the winner's open match disappeared by the time
-            # we queried (status moved off triage/recommended). Re-raise so
-            # the caller knows something is genuinely off.
-            raise
         return existing, False
 
 
@@ -493,20 +512,36 @@ async def _process_interest(
 
     # --- No-FPG path ---------------------------------------------------
     if interest.rop3 is None:
+        # CORR-1: flush ANY pending objects to the outer transaction
+        # BEFORE opening the savepoint. Autoflush inside ``begin_nested``
+        # would flush them within the savepoint, so a savepoint rollback
+        # on conflict would undo unrelated audit inserts too. (No-FPG
+        # path has no audit rows yet, but mirror the pattern for safety
+        # if ``_process_interest`` ever grows a pre-savepoint mutation.)
+        await session.flush()
         match = Match(
             id=uuid.uuid4(),
             adopter_interest_id=interest.id,
             facilitator_org_id=triage_org.id,
             status="triage",
         )
-        match, _created = await _insert_match_with_conflict_guard(
+        match_row, _created = await _insert_match_with_conflict_guard(
             session, match=match, interest_id=interest.id
         )
-        outcome.triage_match_id = match.id
+        if match_row is None:
+            # adv4-010: conflict path, winner's row gone by refetch → skip
+            # this interest rather than aborting the whole run.
+            logger.warning(
+                "match.concurrent_conflict_unrecoverable interest=%s contact=%s",
+                interest.id, contact.id,
+            )
+            outcome.reason = "concurrent_conflict_unrecoverable"
+            return outcome
+        outcome.triage_match_id = match_row.id
         outcome.reason = "no_fpg"
         logger.info(
             "matching: no_fpg interest=%s contact=%s → triage match=%s",
-            interest.id, contact.id, match.id,
+            interest.id, contact.id, match_row.id,
         )
         return outcome
 
@@ -575,20 +610,33 @@ async def _process_interest(
 
     # Hard-filter shut out everyone → triage queue.
     if not scored:
+        # CORR-1: flush the MatchAttempt rows added in the candidate loop
+        # to the OUTER transaction before opening the savepoint. Otherwise
+        # SQLAlchemy autoflush would flush them inside ``begin_nested``,
+        # and a savepoint rollback on conflict would undo every audit row
+        # we just spent the loop computing.
+        await session.flush()
         match = Match(
             id=uuid.uuid4(),
             adopter_interest_id=interest.id,
             facilitator_org_id=triage_org.id,
             status="triage",
         )
-        match, _created = await _insert_match_with_conflict_guard(
+        match_row, _created = await _insert_match_with_conflict_guard(
             session, match=match, interest_id=interest.id
         )
-        outcome.triage_match_id = match.id
+        if match_row is None:
+            logger.warning(
+                "match.concurrent_conflict_unrecoverable interest=%s contact=%s rop3=%s",
+                interest.id, contact.id, rop3,
+            )
+            outcome.reason = "concurrent_conflict_unrecoverable"
+            return outcome
+        outcome.triage_match_id = match_row.id
         outcome.reason = "no_coverage"
         logger.info(
             "matching: no_coverage interest=%s contact=%s rop3=%s → triage match=%s",
-            interest.id, contact.id, rop3, match.id,
+            interest.id, contact.id, rop3, match_row.id,
         )
         return outcome
 
@@ -618,16 +666,27 @@ async def _process_interest(
     # MatchAttempt with rank 2/3 for U7's "route-elsewhere" UI.
     if promoted:
         top_cand, _top_total = promoted[0]
+        # CORR-1: flush MatchAttempt audit rows to the outer transaction
+        # BEFORE the savepoint opens, so a conflict rollback does not also
+        # undo the audit inserts we just spent the candidate loop computing.
+        await session.flush()
         match = Match(
             id=uuid.uuid4(),
             adopter_interest_id=interest.id,
             facilitator_org_id=top_cand.facilitator.id,
             status="recommended",
         )
-        match, _created = await _insert_match_with_conflict_guard(
+        match_row, _created = await _insert_match_with_conflict_guard(
             session, match=match, interest_id=interest.id
         )
-        outcome.recommended_match_ids.append(match.id)
+        if match_row is None:
+            logger.warning(
+                "match.concurrent_conflict_unrecoverable interest=%s contact=%s rop3=%s",
+                interest.id, contact.id, rop3,
+            )
+            outcome.reason = "concurrent_conflict_unrecoverable"
+            return outcome
+        outcome.recommended_match_ids.append(match_row.id)
     else:
         await session.flush()
     outcome.reason = "scored"
