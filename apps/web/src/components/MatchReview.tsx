@@ -7,22 +7,12 @@ import { useRouter } from "next/navigation";
 import type { paths } from "@jp-adopt/contracts";
 
 import { ApiError, decideMatch, getMatch } from "../lib/api-client";
+import { REASON_CODES, isReasonCode, type ReasonCode } from "../lib/reason-codes";
 import { useApiContext } from "../lib/useApiContext";
 
 type Match =
   paths["/v1/matches/{match_id}"]["get"]["responses"]["200"]["content"]["application/json"];
 type Candidate = NonNullable<Match["candidates"]>[number];
-type ReasonCode =
-  paths["/v1/matches/{match_id}/decide"]["post"]["requestBody"]["content"]["application/json"]["reason_code"];
-
-const REASON_CODES: NonNullable<ReasonCode>[] = [
-  "capacity_full",
-  "geography_mismatch",
-  "language",
-  "theological_concern",
-  "not_ready",
-  "other",
-];
 
 function CandidateRow({
   c,
@@ -219,9 +209,13 @@ export function MatchReview({ matchId }: { matchId: string }) {
             <select
               className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
               value={reason ?? ""}
-              onChange={(e) =>
-                setReason((e.target.value || undefined) as ReasonCode)
-              }
+              onChange={(e) => {
+                // F29: never trust the raw DOM value — narrow through a type
+                // guard so an injected option (devtools, extensions) can't
+                // smuggle an unknown reason code into the request body.
+                const v = e.target.value;
+                setReason(isReasonCode(v) ? v : undefined);
+              }}
             >
               <option value="">—</option>
               {REASON_CODES.map((r) => (

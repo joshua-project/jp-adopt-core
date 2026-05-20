@@ -104,13 +104,24 @@ export interface ApiRequestInit {
   headers?: Record<string, string>;
   /** Caller-supplied query params; values are URL-encoded. */
   query?: Record<string, string | number | boolean | undefined>;
+  /**
+   * F18: optional AbortSignal so callers can cancel an in-flight request
+   * on unmount or a fresh query. Forwarded to the underlying ``fetch`` so
+   * the browser actually tears down the connection.
+   */
+  signal?: AbortSignal;
 }
 
+/**
+ * F28: returns ``T | undefined`` so callers that hit a 204 endpoint don't
+ * silently get a fake-typed undefined. The wrapper resolves to ``undefined``
+ * only on 204; every other status either returns the parsed body or throws.
+ */
 export async function apiFetch<T = unknown>(
   ctx: ApiClientContext,
   path: string,
   init: ApiRequestInit = {},
-): Promise<T> {
+): Promise<T | undefined> {
   const token = await resolveAccessToken(ctx);
   const url = new URL(`${getBaseUrl()}${path}`);
   if (init.query) {
@@ -136,6 +147,7 @@ export async function apiFetch<T = unknown>(
     headers,
     body,
     credentials: "omit",
+    signal: init.signal,
   });
   if (!res.ok) {
     let payload: unknown = null;
@@ -146,7 +158,7 @@ export async function apiFetch<T = unknown>(
     }
     throw new ApiError(res.status, payload);
   }
-  if (res.status === 204) return undefined as unknown as T;
+  if (res.status === 204) return undefined;
   const ct = res.headers.get("content-type") ?? "";
   if (ct.includes("application/json")) {
     return (await res.json()) as T;
@@ -154,19 +166,24 @@ export async function apiFetch<T = unknown>(
   return (await res.text()) as unknown as T;
 }
 
-/** Persist (or clear) the dev-local bearer override for non-B2C local dev. */
-export function persistDevToken(value: string): void {
-  if (typeof window === "undefined") return;
-  if (value.trim()) {
-    window.localStorage.setItem(DEV_TOKEN_STORAGE_KEY, value.trim());
-  } else {
-    window.localStorage.removeItem(DEV_TOKEN_STORAGE_KEY);
-  }
-}
+// F36: ``persistDevToken`` / ``readDevToken`` were exported but unused. The
+// dev-token override is set entirely via ``ApiClientContext.devToken``
+// today; if a UI surface ever needs to persist it, re-introduce these
+// exports at that time.
 
-export function readDevToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(DEV_TOKEN_STORAGE_KEY) ?? "";
+/**
+ * F28: typed wrappers below know their endpoints never return 204, so they
+ * narrow the wrapper's ``T | undefined`` back to ``T`` for callers. If a
+ * future wrapper hits a 204 endpoint, declare its return type as
+ * ``Promise<T | undefined>`` and skip the assertion.
+ */
+function _assertPresent<T>(value: T | undefined, endpoint: string): T {
+  if (value === undefined) {
+    throw new Error(
+      `apiFetch(${endpoint}) returned undefined; this endpoint should not 204`,
+    );
+  }
+  return value;
 }
 
 // ── Typed convenience wrappers around the generated paths ────────────────
@@ -191,14 +208,20 @@ type TransitionResponseBody =
 export async function getMatchQueue(
   ctx: ApiClientContext,
 ): Promise<QueueResponseBody> {
-  return apiFetch<QueueResponseBody>(ctx, "/v1/matches/queue");
+  return _assertPresent(
+    await apiFetch<QueueResponseBody>(ctx, "/v1/matches/queue"),
+    "/v1/matches/queue",
+  );
 }
 
 export async function getMatch(
   ctx: ApiClientContext,
   matchId: string,
 ): Promise<MatchResponseBody> {
-  return apiFetch<MatchResponseBody>(ctx, `/v1/matches/${matchId}`);
+  return _assertPresent(
+    await apiFetch<MatchResponseBody>(ctx, `/v1/matches/${matchId}`),
+    `/v1/matches/${matchId}`,
+  );
 }
 
 export async function decideMatch(
@@ -206,10 +229,13 @@ export async function decideMatch(
   matchId: string,
   body: DecideRequestBody,
 ): Promise<DecideResponseBody> {
-  return apiFetch<DecideResponseBody>(ctx, `/v1/matches/${matchId}/decide`, {
-    method: "POST",
-    body,
-  });
+  return _assertPresent(
+    await apiFetch<DecideResponseBody>(ctx, `/v1/matches/${matchId}/decide`, {
+      method: "POST",
+      body,
+    }),
+    `/v1/matches/${matchId}/decide`,
+  );
 }
 
 export async function runMatch(
@@ -217,10 +243,13 @@ export async function runMatch(
   contactId: string,
   body: RunMatchRequestBody = { force: false },
 ): Promise<RunMatchResponseBody> {
-  return apiFetch<RunMatchResponseBody>(ctx, `/v1/matches/run/${contactId}`, {
-    method: "POST",
-    body,
-  });
+  return _assertPresent(
+    await apiFetch<RunMatchResponseBody>(ctx, `/v1/matches/run/${contactId}`, {
+      method: "POST",
+      body,
+    }),
+    `/v1/matches/run/${contactId}`,
+  );
 }
 
 export async function transitionContact(
@@ -228,12 +257,15 @@ export async function transitionContact(
   contactId: string,
   body: TransitionRequestBody,
 ): Promise<TransitionResponseBody> {
-  return apiFetch<TransitionResponseBody>(
-    ctx,
+  return _assertPresent(
+    await apiFetch<TransitionResponseBody>(
+      ctx,
+      `/v1/contacts/${contactId}/transition`,
+      {
+        method: "POST",
+        body,
+      },
+    ),
     `/v1/contacts/${contactId}/transition`,
-    {
-      method: "POST",
-      body,
-    },
   );
 }
