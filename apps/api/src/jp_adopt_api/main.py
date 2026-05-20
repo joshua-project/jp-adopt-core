@@ -10,7 +10,15 @@ from fastapi.responses import JSONResponse
 
 from jp_adopt_api.config import get_settings
 from jp_adopt_api.db import get_engine
-from jp_adopt_api.routers import auth_magic_link, contacts, health, intake
+from jp_adopt_api.routers import (
+    admin,
+    auth_magic_link,
+    contacts,
+    health,
+    intake,
+    matches,
+    workflow,
+)
 
 
 def _cors_params() -> dict[str, object]:
@@ -80,6 +88,9 @@ app.include_router(health.router)
 app.include_router(contacts.router)
 app.include_router(auth_magic_link.router)
 app.include_router(intake.router)
+app.include_router(matches.router)
+app.include_router(workflow.router)
+app.include_router(admin.router)
 
 
 def _custom_openapi() -> dict[str, object]:

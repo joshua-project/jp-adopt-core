@@ -23,6 +23,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/contacts" className="hover:text-slate-900">
                   Contacts
                 </Link>
+                <Link href="/matches" className="hover:text-slate-900">
+                  Matches
+                </Link>
+                <Link href="/facilitator" className="hover:text-slate-900">
+                  Facilitator
+                </Link>
               </nav>
             </div>
           </header>
