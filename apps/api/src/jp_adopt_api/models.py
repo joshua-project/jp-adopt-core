@@ -565,6 +565,87 @@ class SubmissionBlocked(Base):
     )
 
 
+class FacilitatorOrgMembership(Base):
+    """U8: M:N link between a B2C-authenticated user and the facilitator orgs
+    they belong to. The facilitator portal filters Match rows by
+    ``facilitator_org_id IN <memberships of this actor>``.
+    """
+
+    __tablename__ = "facilitator_org_membership"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "user_b2c_subject_id",
+            "facilitator_org_id",
+            name="pk_facilitator_org_membership",
+        ),
+        Index(
+            "ix_facilitator_org_membership_facilitator_org_id",
+            "facilitator_org_id",
+        ),
+    )
+
+    user_b2c_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role_in_org: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'member'"), default="member"
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FacilitatorOutboxSubscription(Base):
+    """U8: per-org HMAC webhook destination for outbox events. Empty in week 1;
+    populated as facilitator orgs come online with their own back-ends.
+    """
+
+    __tablename__ = "facilitator_outbox_subscriptions"
+    __table_args__ = (
+        Index(
+            "ix_facilitator_outbox_subscriptions_org",
+            "facilitator_org_id",
+        ),
+        Index(
+            "ix_facilitator_outbox_subscriptions_active",
+            "active",
+            postgresql_where="active = TRUE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type_glob: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'jp.adopt.v1.match.*'"),
+        default="jp.adopt.v1.match.*",
+    )
+    endpoint_url: Mapped[str] = mapped_column(Text, nullable=False)
+    hmac_key: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class MatchAttempt(Base):
     __tablename__ = "match_attempt"
     __table_args__ = (

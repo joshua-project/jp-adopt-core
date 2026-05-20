@@ -634,6 +634,322 @@
           }
         ]
       }
+    },
+    "/v1/matches/queue": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Get Queue",
+        "operationId": "get_queue_v1_matches_queue_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/{match_id}": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Get Match",
+        "operationId": "get_match_v1_matches__match_id__get",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/{match_id}/decide": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Decide Match",
+        "operationId": "decide_match_v1_matches__match_id__decide_post",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecideResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/run/{contact_id}": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Run Match",
+        "description": "#40: HTTP surface for ``match_or_route()``. Required for the staff UI to\nre-run matching after a send-back or manual contact create. Idempotent in\nspirit \u2014 repeated calls during the same run produce the same outcome\n(capacity check is read-inside-transaction).",
+        "operationId": "run_match_v1_matches_run__contact_id__post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunMatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunMatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{contact_id}/transition": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Post Transition",
+        "operationId": "post_transition_v1_contacts__contact_id__transition_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransitionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -822,6 +1138,83 @@
           "updated_at"
         ],
         "title": "ContactRead"
+      },
+      "DecideRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "send_back",
+              "route_elsewhere"
+            ],
+            "title": "Decision"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Text"
+          },
+          "next_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "DecideRequest"
+      },
+      "DecideResponse": {
+        "properties": {
+          "match": {
+            "$ref": "#/components/schemas/MatchSummary"
+          },
+          "contact_adopter_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Adopter Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "match",
+          "contact_adopter_status"
+        ],
+        "title": "DecideResponse"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1068,6 +1461,334 @@
           "expires_in"
         ],
         "title": "MagicLinkTokenEnvelope"
+      },
+      "MatchCandidate": {
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Attempt Id"
+          },
+          "facilitator_org_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Facilitator Org Id"
+          },
+          "facilitator_name": {
+            "type": "string",
+            "title": "Facilitator Name"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "score_breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoreBreakdown"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attempt_id",
+          "facilitator_org_id",
+          "facilitator_name"
+        ],
+        "title": "MatchCandidate",
+        "description": "A ranked alternative for a single adopter_interest. Includes the\npersisted MatchAttempt score so the UI can show \"why this match\" without a\nsecond round-trip."
+      },
+      "MatchSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "adopter_interest_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Adopter Interest Id"
+          },
+          "contact_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Contact Id"
+          },
+          "contact_display_name": {
+            "type": "string",
+            "title": "Contact Display Name"
+          },
+          "contact_adopter_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Adopter Status"
+          },
+          "rop3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rop3"
+          },
+          "facilitator_org_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Facilitator Org Id"
+          },
+          "facilitator_name": {
+            "type": "string",
+            "title": "Facilitator Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "recommended_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recommended At"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/MatchCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "adopter_interest_id",
+          "contact_id",
+          "contact_display_name",
+          "contact_adopter_status",
+          "rop3",
+          "facilitator_org_id",
+          "facilitator_name",
+          "status",
+          "recommended_at",
+          "decided_at"
+        ],
+        "title": "MatchSummary",
+        "description": "One open Match row in the queue, with embedded alternatives."
+      },
+      "QueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MatchSummary"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "QueueResponse"
+      },
+      "ReasonCode": {
+        "type": "string",
+        "enum": [
+          "capacity_full",
+          "geography_mismatch",
+          "language",
+          "theological_concern",
+          "not_ready",
+          "other"
+        ],
+        "title": "ReasonCode"
+      },
+      "RunMatchRequest": {
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RunMatchRequest"
+      },
+      "RunMatchResponse": {
+        "properties": {
+          "contact_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Contact Id"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "total_recommended": {
+            "type": "integer",
+            "title": "Total Recommended"
+          },
+          "total_triage": {
+            "type": "integer",
+            "title": "Total Triage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contact_id",
+          "run_id",
+          "total_recommended",
+          "total_triage"
+        ],
+        "title": "RunMatchResponse"
+      },
+      "ScoreBreakdown": {
+        "properties": {
+          "capacity_headroom": {
+            "type": "number",
+            "title": "Capacity Headroom"
+          },
+          "geography": {
+            "type": "number",
+            "title": "Geography"
+          },
+          "language": {
+            "type": "number",
+            "title": "Language"
+          },
+          "fpg_affinity": {
+            "type": "number",
+            "title": "Fpg Affinity"
+          },
+          "theological": {
+            "type": "number",
+            "title": "Theological"
+          }
+        },
+        "type": "object",
+        "required": [
+          "capacity_headroom",
+          "geography",
+          "language",
+          "fpg_affinity",
+          "theological"
+        ],
+        "title": "ScoreBreakdown"
+      },
+      "TransitionRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adopter",
+              "facilitator"
+            ],
+            "title": "Kind"
+          },
+          "to_state": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "To State"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "to_state"
+        ],
+        "title": "TransitionRequest"
+      },
+      "TransitionResponse": {
+        "properties": {
+          "contact": {
+            "$ref": "#/components/schemas/ContactRead"
+          },
+          "transitioned_to": {
+            "type": "string",
+            "title": "Transitioned To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contact",
+          "transitioned_to"
+        ],
+        "title": "TransitionResponse"
       },
       "ValidationError": {
         "properties": {

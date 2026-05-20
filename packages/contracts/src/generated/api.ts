@@ -141,6 +141,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/matches/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Queue */
+        get: operations["get_queue_v1_matches_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Match */
+        get: operations["get_match_v1_matches__match_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Match */
+        post: operations["decide_match_v1_matches__match_id__decide_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/run/{contact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Match
+         * @description #40: HTTP surface for ``match_or_route()``. Required for the staff UI to
+         *     re-run matching after a send-back or manual contact create. Idempotent in
+         *     spirit — repeated calls during the same run produce the same outcome
+         *     (capacity check is read-inside-transaction).
+         */
+        post: operations["run_match_v1_matches_run__contact_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Transition */
+        post: operations["post_transition_v1_contacts__contact_id__transition_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -200,6 +291,25 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** DecideRequest */
+        DecideRequest: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "send_back" | "route_elsewhere";
+            reason_code?: components["schemas"]["ReasonCode"] | null;
+            /** Reason Text */
+            reason_text?: string | null;
+            /** Next Attempt Id */
+            next_attempt_id?: string | null;
+        };
+        /** DecideResponse */
+        DecideResponse: {
+            match: components["schemas"]["MatchSummary"];
+            /** Contact Adopter Status */
+            contact_adopter_status: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -309,6 +419,145 @@ export interface components {
             token_type: string;
             /** Expires In */
             expires_in: number;
+        };
+        /**
+         * MatchCandidate
+         * @description A ranked alternative for a single adopter_interest. Includes the
+         *     persisted MatchAttempt score so the UI can show "why this match" without a
+         *     second round-trip.
+         */
+        MatchCandidate: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Facilitator Org Id
+             * Format: uuid
+             */
+            facilitator_org_id: string;
+            /** Facilitator Name */
+            facilitator_name: string;
+            /** Score */
+            score?: number | null;
+            score_breakdown?: components["schemas"]["ScoreBreakdown"] | null;
+            /** Rank */
+            rank?: number | null;
+        };
+        /**
+         * MatchSummary
+         * @description One open Match row in the queue, with embedded alternatives.
+         */
+        MatchSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Adopter Interest Id
+             * Format: uuid
+             */
+            adopter_interest_id: string;
+            /**
+             * Contact Id
+             * Format: uuid
+             */
+            contact_id: string;
+            /** Contact Display Name */
+            contact_display_name: string;
+            /** Contact Adopter Status */
+            contact_adopter_status: string | null;
+            /** Rop3 */
+            rop3: string | null;
+            /**
+             * Facilitator Org Id
+             * Format: uuid
+             */
+            facilitator_org_id: string;
+            /** Facilitator Name */
+            facilitator_name: string;
+            /** Status */
+            status: string;
+            /**
+             * Recommended At
+             * Format: date-time
+             */
+            recommended_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Candidates */
+            candidates?: components["schemas"]["MatchCandidate"][];
+        };
+        /** QueueResponse */
+        QueueResponse: {
+            /** Items */
+            items: components["schemas"]["MatchSummary"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ReasonCode
+         * @enum {string}
+         */
+        ReasonCode: "capacity_full" | "geography_mismatch" | "language" | "theological_concern" | "not_ready" | "other";
+        /** RunMatchRequest */
+        RunMatchRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** RunMatchResponse */
+        RunMatchResponse: {
+            /**
+             * Contact Id
+             * Format: uuid
+             */
+            contact_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Total Recommended */
+            total_recommended: number;
+            /** Total Triage */
+            total_triage: number;
+        };
+        /** ScoreBreakdown */
+        ScoreBreakdown: {
+            /** Capacity Headroom */
+            capacity_headroom: number;
+            /** Geography */
+            geography: number;
+            /** Language */
+            language: number;
+            /** Fpg Affinity */
+            fpg_affinity: number;
+            /** Theological */
+            theological: number;
+        };
+        /** TransitionRequest */
+        TransitionRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "adopter" | "facilitator";
+            /** To State */
+            to_state: string;
+            reason_code?: components["schemas"]["ReasonCode"] | null;
+            /** Reason Text */
+            reason_text?: string | null;
+        };
+        /** TransitionResponse */
+        TransitionResponse: {
+            contact: components["schemas"]["ContactRead"];
+            /** Transitioned To */
+            transitioned_to: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -750,6 +999,181 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+        };
+    };
+    get_queue_v1_matches_queue_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_match_v1_matches__match_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_match_v1_matches__match_id__decide_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecideResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_match_v1_matches_run__contact_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunMatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_transition_v1_contacts__contact_id__transition_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransitionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
