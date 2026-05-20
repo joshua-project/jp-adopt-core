@@ -17,11 +17,6 @@ These paths are local to Joel's laptop and ephemeral — copy artifacts elsewher
 
 These are explicitly deferred by the build plan; not regressions, just not in this PR's scope.
 
-### #40 — `POST /v1/matches/run/{contact_id}` HTTP endpoint
-- **Plan reference:** U7 (staff match queue UI)
-- **What's missing:** `match_or_route()` exists as a Python function. No HTTP surface to trigger it. The runbook documents a Python-script workaround.
-- **Where it goes:** U7 — add the route alongside `GET /v1/matches/queue` + `POST /v1/matches/{id}/decide`.
-
 ### N4 — Magic-link email enqueue: BackgroundTasks → ARQ / Outbox
 - **Source:** second-pass review (adv2-002), reliability sanity (R-B5-related)
 - **What's wrong:** FastAPI `BackgroundTasks` is in-process. Process death between `db.commit()` and the BackgroundTask firing → token persisted, no email sent, user sees 202 with no signal.
@@ -60,15 +55,6 @@ Real testing gaps that warrant their own focused PR.
 
 ## Tier 3 — Design decisions (need Amy / Joel input)
 
-### AC-06 — Unified error envelope across `/v1/`
-- **Source:** first-pass api-contract (AC-06)
-- **What's wrong:** Three different error-envelope shapes coexist in `/v1/`:
-  - Intake: `{apiVersion, ok: false, error: {code, message, fields, requestId}}`
-  - Magic-link: FastAPI `HTTPException` serialized as `{detail: {code, message}}`
-  - Contacts: FastAPI `HTTPException` serialized as `{detail: 'string'}`
-- **Decision needed:** Pick one. Intake's shape is the most complete. Apply consistently across all `/v1/` routes, OR formally document the divergence in a `docs/runbooks/api-error-conventions.md`.
-- **Scope:** ~6 routers, ~30 LOC + tests.
-
 ### AC-09 — camelCase vs snake_case
 - **Source:** first-pass api-contract (AC-09)
 - **What's wrong:** `IntakeSuccessData` emits camelCase (`submissionId`, `contactId`) via `serialization_alias`. `ContactRead` emits snake_case (`party_kind`, `display_name`). Same `/v1/` namespace, same future clients.
@@ -78,11 +64,6 @@ Real testing gaps that warrant their own focused PR.
 - **Source:** api-contract second pass
 - **What's wrong:** Runtime `token_type='Bearer'` is `Literal['Bearer']` in Python, but the Literal does NOT propagate to OpenAPI / TS contracts (still typed as `string`). Similarly the magic-link 410 entry conflates `expired` + `already_claimed` under one undiscriminated response.
 - **Decision needed:** Either add an `openapi-typescript` transform / post-process step that promotes `Literal` types, or document the contract as runtime-only.
-
-### AC-12 — ContactRead expansion non-additive
-- **Source:** api-contract second pass
-- **What's wrong:** F21 expanded `ContactRead` from 7 to 13 required fields. Non-additive schema change.
-- **Decision:** Already accepted as greenfield (no current consumers). Document in API CHANGELOG if/when one is started.
 
 ---
 
