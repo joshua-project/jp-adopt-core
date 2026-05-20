@@ -73,6 +73,74 @@ export interface paths {
         patch: operations["patch_contact_v1_contacts__contact_id__patch"];
         trace?: never;
     };
+    "/v1/auth/magic-link/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Link */
+        post: operations["request_link_v1_auth_magic_link_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/magic-link/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Link */
+        post: operations["claim_link_v1_auth_magic_link_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/intake/adoption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Adoption Intake */
+        post: operations["post_adoption_intake_v1_intake_adoption_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/intake/facilitation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Facilitation Intake */
+        post: operations["post_facilitation_intake_v1_intake_facilitation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -94,10 +162,6 @@ export interface components {
             party_kind?: string | null;
             /** Display Name */
             display_name?: string | null;
-            /** Adopter Status */
-            adopter_status?: string | null;
-            /** Facilitator Status */
-            facilitator_status?: string | null;
         };
         /** ContactRead */
         ContactRead: {
@@ -114,6 +178,18 @@ export interface components {
             adopter_status: string | null;
             /** Facilitator Status */
             facilitator_status: string | null;
+            /** Version */
+            version: number;
+            /** Email Normalized */
+            email_normalized: string | null;
+            /** Country Code */
+            country_code: string | null;
+            /** Language Codes */
+            language_codes: string[] | null;
+            /** Origin */
+            origin: string | null;
+            /** Newsletter Opt In */
+            newsletter_opt_in: boolean;
             /**
              * Created At
              * Format: date-time
@@ -130,6 +206,110 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** IntakeError */
+        IntakeError: {
+            /**
+             * Apiversion
+             * @default 1
+             */
+            apiVersion: string;
+            /**
+             * Ok
+             * @default false
+             * @constant
+             */
+            ok: false;
+            error: components["schemas"]["IntakeErrorBody"];
+        };
+        /** IntakeErrorBody */
+        IntakeErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message?: string | null;
+            /** Fields */
+            fields?: {
+                [key: string]: string[];
+            } | null;
+            /** Requestid */
+            requestId?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** IntakeSuccess */
+        IntakeSuccess: {
+            /**
+             * Apiversion
+             * @default 1
+             */
+            apiVersion: string;
+            /**
+             * Ok
+             * @default true
+             * @constant
+             */
+            ok: true;
+            data: components["schemas"]["IntakeSuccessData"];
+        };
+        /** IntakeSuccessData */
+        IntakeSuccessData: {
+            /**
+             * Submissionid
+             * Format: uuid
+             */
+            submissionId: string;
+            /** Requestid */
+            requestId: string;
+            /**
+             * Contactid
+             * Format: uuid
+             */
+            contactId: string;
+            /** Interestids */
+            interestIds: string[];
+        };
+        /** MagicLinkClaim */
+        MagicLinkClaim: {
+            /** Token */
+            token: string;
+        };
+        /** MagicLinkError */
+        MagicLinkError: {
+            detail: components["schemas"]["MagicLinkErrorDetail"];
+        };
+        /**
+         * MagicLinkErrorDetail
+         * @description Error envelope for the magic-link endpoints. Mirrors the
+         *     ``HTTPException(detail={"code": ..., "message": ...})`` shape so the
+         *     generated TS client gets a typed error body to switch on.
+         */
+        MagicLinkErrorDetail: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** MagicLinkRequest */
+        MagicLinkRequest: {
+            /** Email */
+            email: string;
+        };
+        /** MagicLinkRequestResponse */
+        MagicLinkRequestResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Message */
+            message: string;
+        };
+        /** MagicLinkTokenEnvelope */
+        MagicLinkTokenEnvelope: {
+            /** Access Token */
+            access_token: string;
+            /** Token Type */
+            token_type: string;
+            /** Expires In */
+            expires_in: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -141,7 +321,7 @@ export interface components {
             /** Input */
             input?: unknown;
             /** Context */
-            ctx?: Record<string, never>;
+            ctx?: Record<string, unknown>;
         };
     };
     responses: never;
@@ -296,6 +476,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_link_v1_auth_magic_link_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagicLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkRequestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description rate_limited (>6 requests/hour for this email) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkError"];
+                };
+            };
+        };
+    };
+    claim_link_v1_auth_magic_link_claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagicLinkClaim"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkTokenEnvelope"];
+                };
+            };
+            /** @description invalid_token (no matching token row) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkError"];
+                };
+            };
+            /** @description account_resolution_conflict (B2C-bound email) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkError"];
+                };
+            };
+            /** @description expired or already_claimed */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagicLinkError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_adoption_intake_v1_intake_adoption_post: {
+        parameters: {
+            query?: never;
+            header: {
+                authorization?: string | null;
+                "Idempotency-Key": string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Idempotent replay (cached) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeSuccess"];
+                };
+            };
+            /** @description First successful processing */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeSuccess"];
+                };
+            };
+            /** @description validation / idempotency_required */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description Bearer missing or unknown */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description Idempotency-Key in-flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description payload_too_large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description idempotency_key_conflict */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description intake_disabled (no keys) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+        };
+    };
+    post_facilitation_intake_v1_intake_facilitation_post: {
+        parameters: {
+            query?: never;
+            header: {
+                authorization?: string | null;
+                "Idempotency-Key": string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Idempotent replay (cached) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeSuccess"];
+                };
+            };
+            /** @description First successful processing */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeSuccess"];
+                };
+            };
+            /** @description validation / idempotency_required */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description Bearer missing or unknown */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description Idempotency-Key in-flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description payload_too_large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description idempotency_key_conflict */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
+                };
+            };
+            /** @description intake_disabled (no keys) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeError"];
                 };
             };
         };

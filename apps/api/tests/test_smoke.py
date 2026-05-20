@@ -33,3 +33,51 @@ def test_patch_rejects_null_for_non_nullable_columns(client: TestClient) -> None
         json={"display_name": None},
     )
     assert response.status_code == 422
+
+
+def test_patch_rejects_removed_status_fields(client: TestClient) -> None:
+    """N2: ``adopter_status`` and ``facilitator_status`` were intentionally
+    dropped from ``ContactPatch`` so a generic PATCH cannot bypass the state-
+    machine. Without ``extra='forbid'`` Pydantic silently drops the unknown
+    key and returns 200 — hiding the bypass attempt. Confirm the patch surface
+    rejects the removed keys with 422 and names the offending field."""
+    response = client.patch(
+        f"/v1/contacts/{SEED_CONTACT_ID}",
+        headers={"Authorization": "Bearer dev-local"},
+        json={"adopter_status": "matched"},
+    )
+    assert response.status_code == 422
+    # FastAPI 422 envelope (list of errors with `loc`) names the offending
+    # field somewhere in the response body.
+    assert "adopter_status" in response.text
+
+
+def test_patch_rejects_facilitator_status_field(client: TestClient) -> None:
+    """N2: companion to the above for ``facilitator_status``."""
+    response = client.patch(
+        f"/v1/contacts/{SEED_CONTACT_ID}",
+        headers={"Authorization": "Bearer dev-local"},
+        json={"facilitator_status": "ready"},
+    )
+    assert response.status_code == 422
+    assert "facilitator_status" in response.text
+
+
+def test_422_response_does_not_echo_offending_input_value(client: TestClient) -> None:
+    """A2 / sec-3: FastAPI's default ``RequestValidationError`` handler echoes
+    the offending field's value (and ``ctx``) back in the 422 response body.
+    For a PATCH that uses ``extra='forbid'``, posting an unknown field with a
+    secret-looking value would land that value in proxy / CDN access logs.
+
+    The custom handler in ``main.py`` strips ``input`` and ``ctx`` from each
+    error entry. Assert the sentinel value never appears in the response."""
+    sentinel = "SENTINEL_VALUE_123"
+    response = client.patch(
+        f"/v1/contacts/{SEED_CONTACT_ID}",
+        headers={"Authorization": "Bearer dev-local"},
+        json={"display_name": "ok", "secret_field_name": sentinel},
+    )
+    assert response.status_code == 422
+    # The field NAME may legitimately appear (in ``loc``), but the VALUE must
+    # not — that's the proxy/CDN-log leak vector.
+    assert sentinel not in response.text

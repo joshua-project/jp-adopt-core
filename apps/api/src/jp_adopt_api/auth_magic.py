@@ -1,0 +1,328 @@
+"""Magic-link side-car: issue + verify single-use email links and bridge
+the resulting identity to ``identity_link``.
+
+See ``docs/runbooks/magic-link-side-car.md`` for operational notes (TTL,
+rate-limit window, anti-enumeration response shape, ACS dev fallback).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+
+import jwt
+from sqlalchemy import func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from jp_adopt_api.auth import AuthUser
+from jp_adopt_api.config import Settings
+from jp_adopt_api.email_utils import normalize_email as normalize_email
+from jp_adopt_api.models import (
+    IdentityLink,
+    MagicLinkRateLimit,
+    MagicLinkToken,
+)
+
+# Re-exported for backwards compatibility: callers still
+# ``from jp_adopt_api.auth_magic import normalize_email``. The canonical
+# implementation now lives in ``jp_adopt_api.email_utils``.
+__all__ = ("normalize_email",)
+
+logger = logging.getLogger(__name__)
+
+# Token TTL: deliberately short — magic-links are bearer secrets in email and
+# should not be reusable. The plan locks this at 15 minutes.
+MAGIC_LINK_TTL_SECONDS = 900
+
+# Per-email rolling-hour throttle. Plan locks this at 6/hr/email.
+MAGIC_LINK_RATE_LIMIT_PER_HOUR = 6
+MAGIC_LINK_RATE_LIMIT_WINDOW = timedelta(hours=1)
+
+# JWT lifetime after a successful claim — week one default is 7 days. The
+# refresh story (refresh-token rotation) lives in U10.
+MAGIC_LINK_JWT_TTL_SECONDS = 7 * 24 * 60 * 60
+
+ANTI_ENUMERATION_MESSAGE = "If we have your email, we sent a link."
+
+
+class RateLimitedError(Exception):
+    """6+ requests for the same email in the last hour."""
+
+
+class MagicLinkExpiredError(Exception):
+    """Token row exists but ``expires_at`` has passed."""
+
+
+class MagicLinkAlreadyClaimedError(Exception):
+    """Token row exists but ``claimed_at`` is non-null."""
+
+
+class MagicLinkInvalidError(Exception):
+    """Token does not match any stored hash."""
+
+
+class AccountResolutionConflictError(Exception):
+    """An ``identity_link`` row exists for this email with a ``b2c_subject_id``
+    that does not match the side-car identity we are about to bridge.
+
+    The runbook documents the manual resolution procedure
+    (`docs/runbooks/multi-idp-b2c.md` → ``account_resolution_conflict``).
+    """
+
+
+@dataclass(frozen=True)
+class MagicLinkRequestResult:
+    ok: bool
+    message: str
+
+
+@dataclass(frozen=True)
+class ClaimResult:
+    access_token: str
+    # RFC 6750 §2.1 capitalizes the scheme as "Bearer". OAuth2 clients (and
+    # the WWW-Authenticate header) match the scheme case-insensitively, but
+    # several SDKs that hand the value straight to ``Authorization`` headers
+    # forward it verbatim — so we emit the canonical form.
+    token_type: Literal["Bearer"] = "Bearer"
+    expires_in: int = MAGIC_LINK_JWT_TTL_SECONDS
+
+
+def _hash_token(raw: str, signing_key: str) -> str:
+    """SHA-256(raw_token || signing_key). The signing key adds a peppered
+    domain separator so a leaked DB cannot replay magic-links against a
+    different deployment.
+    """
+    h = hashlib.sha256()
+    h.update(raw.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(signing_key.encode("utf-8"))
+    return h.hexdigest()
+
+
+def generate_token(signing_key: str) -> tuple[str, str]:
+    """Return ``(raw_token, token_hash)``. The raw token is what we email; the
+    hash is what goes in the DB. We never store the raw token at rest.
+    """
+    raw = secrets.token_urlsafe(32)
+    return raw, _hash_token(raw, signing_key)
+
+
+async def _count_recent_requests(session: AsyncSession, email_normalized: str) -> int:
+    cutoff = datetime.now(UTC) - MAGIC_LINK_RATE_LIMIT_WINDOW
+    stmt = (
+        select(func.count())
+        .select_from(MagicLinkRateLimit)
+        .where(
+            MagicLinkRateLimit.email_normalized == email_normalized,
+            MagicLinkRateLimit.requested_at >= cutoff,
+        )
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def request_magic_link(
+    session: AsyncSession,
+    *,
+    email: str,
+    ip: str | None,
+    settings: Settings,
+) -> tuple[MagicLinkRequestResult, str | None, str]:
+    """Generate + persist a magic-link token row.
+
+    Returns ``(result, raw_token, email_normalized)``. The router is
+    responsible for committing the transaction BEFORE handing ``raw_token``
+    off to the worker — if we enqueued from inside this function and the
+    surrounding transaction rolled back, the worker would deliver an email
+    containing a token that does not exist in the DB.
+
+    Anti-enumeration: the public response shape is identical whether the
+    email is known or not. Rate-limit denial raises ``RateLimitedError``
+    (which the router translates to HTTP 429).
+    """
+    email_normalized = normalize_email(email)
+    # F35: previously COUNT-then-INSERT was a TOCTOU window — N concurrent
+    # callers all saw "5 recent" and all inserted a 6th row, blowing past
+    # the limit. ``pg_advisory_xact_lock(hashtext(email))`` serializes the
+    # COUNT for the same email within the surrounding transaction so only
+    # one caller crosses the threshold per request. The lock is released
+    # automatically on COMMIT/ROLLBACK (no leak risk).
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:e))").bindparams(
+            e=email_normalized
+        )
+    )
+    recent = await _count_recent_requests(session, email_normalized)
+    if recent >= MAGIC_LINK_RATE_LIMIT_PER_HOUR:
+        raise RateLimitedError(
+            f"Rate limit: {MAGIC_LINK_RATE_LIMIT_PER_HOUR}/hour reached for "
+            f"{email_normalized}"
+        )
+
+    raw, token_hash = generate_token(settings.magic_link_signing_key)
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(seconds=MAGIC_LINK_TTL_SECONDS)
+
+    session.add(
+        MagicLinkToken(
+            id=uuid.uuid4(),
+            email=email,
+            email_normalized=email_normalized,
+            token_hash=token_hash,
+            expires_at=expires_at,
+            requested_ip=ip,
+            requested_at=now,
+        )
+    )
+    session.add(
+        MagicLinkRateLimit(
+            id=uuid.uuid4(),
+            email_normalized=email_normalized,
+            requested_at=now,
+        )
+    )
+    await session.flush()
+
+    # Structured, PII-aware log: ONLY the token-hash prefix as a correlation
+    # handle. The raw token is a single-use bearer secret and is NEVER
+    # logged. See the magic-link side-car runbook for the dev claim
+    # procedure when ACS is not configured.
+    logger.info(
+        "magic_link.request.issued email=%s token_id_prefix=%s",
+        email_normalized,
+        token_hash[:8],
+    )
+
+    return (
+        MagicLinkRequestResult(ok=True, message=ANTI_ENUMERATION_MESSAGE),
+        raw,
+        email_normalized,
+    )
+
+
+async def claim_magic_link(
+    session: AsyncSession,
+    *,
+    raw_token: str,
+    click_ip: str | None,
+    user_agent: str | None,
+    settings: Settings,
+) -> ClaimResult:
+    """Validate the raw token, mark it claimed, bridge identity_link, mint JWT.
+
+    Token claim is an atomic CAS (``UPDATE ... WHERE claimed_at IS NULL
+    RETURNING *``). Two concurrent clicks therefore cannot both succeed: the
+    loser sees zero rows updated, looks the token up again to disambiguate,
+    and raises either ``MagicLinkAlreadyClaimedError`` or
+    ``MagicLinkExpiredError``.
+    """
+    token_hash = _hash_token(raw_token, settings.magic_link_signing_key)
+    now = datetime.now(UTC)
+
+    # Atomic claim: only the row where claimed_at IS NULL is updated; the
+    # RETURNING clause hands us back the row state from after the update so
+    # one network round-trip covers the whole claim.
+    cas_stmt = (
+        update(MagicLinkToken)
+        .where(
+            MagicLinkToken.token_hash == token_hash,
+            MagicLinkToken.claimed_at.is_(None),
+        )
+        .values(
+            claimed_at=now,
+            claimed_ip=click_ip,
+            claimed_user_agent=user_agent,
+        )
+        .returning(MagicLinkToken)
+    )
+    cas_result = await session.execute(cas_stmt)
+    row = cas_result.scalar_one_or_none()
+    if row is None:
+        # CAS lost — either the token never existed or another caller already
+        # claimed it (or it has expired and the expires_at gate below would
+        # have rejected it). Disambiguate with a follow-up read; either way
+        # we never mint a JWT.
+        existing_token = (
+            await session.execute(
+                select(MagicLinkToken).where(
+                    MagicLinkToken.token_hash == token_hash
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_token is None:
+            raise MagicLinkInvalidError("Unknown magic-link token")
+        if existing_token.expires_at <= now:
+            raise MagicLinkExpiredError("Token expired")
+        raise MagicLinkAlreadyClaimedError("Token already claimed")
+
+    if row.expires_at <= now:
+        # We did claim the row but it had already expired by the time we got
+        # here. Fail closed and rely on the surrounding transaction rolling
+        # back so claimed_at is not persisted.
+        raise MagicLinkExpiredError("Token expired")
+
+    email_normalized = row.email_normalized
+    # ORDER BY linked_at ASC LIMIT 1 so any pre-existing duplicate (predating
+    # the uq_identity_link_magic_email partial unique index) resolves to the
+    # oldest row — the one the rest of the system has already referenced.
+    link_stmt = (
+        select(IdentityLink)
+        .where(IdentityLink.email_normalized == email_normalized)
+        .order_by(IdentityLink.linked_at.asc())
+        .limit(1)
+    )
+    existing = (await session.execute(link_stmt)).scalars().first()
+
+    if existing is None:
+        identity = IdentityLink(
+            id=uuid.uuid4(),
+            email=row.email,
+            email_normalized=email_normalized,
+            idp_name="magic_link",
+        )
+        session.add(identity)
+        await session.flush()
+    else:
+        # Account-resolution-conflict guard: if the existing identity is anchored
+        # to a B2C subject, this magic-link sign-in must NOT silently bridge.
+        # Surface an explicit conflict so an operator can resolve via the runbook.
+        if existing.b2c_subject_id:
+            raise AccountResolutionConflictError(
+                "Email is already linked to a B2C identity; magic-link sign-in "
+                "would create an ambiguous account binding."
+            )
+        identity = existing
+
+    payload = {
+        "iss": settings.magic_link_issuer,
+        "sub": str(identity.id),
+        "email": identity.email,
+        "idp": "magic_link",
+        "iat": int(now.timestamp()),
+        "exp": int(now.timestamp()) + MAGIC_LINK_JWT_TTL_SECONDS,
+    }
+    token = jwt.encode(payload, settings.magic_link_signing_key, algorithm="HS256")
+    return ClaimResult(access_token=token)
+
+
+def decode_magic_link_token(token: str, settings: Settings) -> AuthUser:
+    """Verify a magic-link HS256 JWT and return an ``AuthUser``.
+
+    Differs from the B2C decoder: HS256 (symmetric, no JWKS), validates the
+    constant magic-link issuer, and sets ``tid="magic_link"`` so downstream
+    code can branch on identity provenance.
+    """
+    payload = jwt.decode(
+        token,
+        settings.magic_link_signing_key,
+        algorithms=["HS256"],
+        issuer=settings.magic_link_issuer,
+        options={"verify_iss": True, "require": ["exp", "sub", "iat"]},
+    )
+    sub = str(payload["sub"])
+    email = payload.get("email")
+    return AuthUser(sub=sub, email=email, tid="magic_link")

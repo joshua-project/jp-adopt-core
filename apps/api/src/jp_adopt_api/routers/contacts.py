@@ -7,7 +7,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from jp_adopt_api.deps import CurrentUser, DbSession
-from jp_adopt_api.models import Contact, Outbox
+from jp_adopt_api.models import Contact
+from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import ContactListResponse, ContactPatch, ContactRead
 
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
@@ -69,10 +70,12 @@ async def patch_contact(
         contact.party_kind = updates["party_kind"]
     if "display_name" in updates:
         contact.display_name = updates["display_name"]
-    if "adopter_status" in updates:
-        contact.adopter_status = updates["adopter_status"]
-    if "facilitator_status" in updates:
-        contact.facilitator_status = updates["facilitator_status"]
+    # NOTE: adopter_status / facilitator_status were intentionally removed
+    # from ContactPatch in F5: status mutations must flow through the
+    # state-machine entrypoints (transition_adopter / transition_facilitator)
+    # to enforce role checks, reason-code validation, and the audit row.
+    # A follow-up unit (U7) will add ``POST /v1/contacts/{id}/transition``;
+    # until then, this PATCH endpoint covers display_name / party_kind only.
     contact.updated_at = now
 
     payload = {
@@ -87,12 +90,14 @@ async def patch_contact(
             "facilitator_status": contact.facilitator_status,
         },
     }
-    outbox = Outbox(
-        id=uuid.uuid4(),
+    # Route via emit_outbox so bulk-import paths can suppress this event
+    # under their summary; outside suppression, this writes a normal Outbox
+    # row (preserving the previous behavior).
+    emit_outbox(
+        db,
         event_type=EVENT_CONTACT_UPDATED,
-        payload_json=payload,
+        payload=payload,
     )
-    db.add(outbox)
 
     await db.commit()
     await db.refresh(contact)

@@ -252,6 +252,388 @@
           }
         }
       }
+    },
+    "/v1/auth/magic-link/request": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request Link",
+        "operationId": "request_link_v1_auth_magic_link_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkRequestResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited (>6 requests/hour for this email)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/magic-link/claim": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Claim Link",
+        "operationId": "claim_link_v1_auth_magic_link_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicLinkClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkTokenEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_token (no matching token row)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "account_resolution_conflict (B2C-bound email)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "expired or already_claimed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagicLinkError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/intake/adoption": {
+      "post": {
+        "tags": [
+          "intake"
+        ],
+        "summary": "Post Adoption Intake",
+        "operationId": "post_adoption_intake_v1_intake_adoption_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Idempotent replay (cached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "First successful processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validation / idempotency_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer missing or unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key in-flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "payload_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "idempotency_key_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "intake_disabled (no keys)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IntakeBearerKey": []
+          }
+        ]
+      }
+    },
+    "/v1/intake/facilitation": {
+      "post": {
+        "tags": [
+          "intake"
+        ],
+        "summary": "Post Facilitation Intake",
+        "operationId": "post_facilitation_intake_v1_intake_facilitation_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Idempotent replay (cached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeSuccess"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "First successful processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validation / idempotency_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer missing or unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key in-flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "payload_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "idempotency_key_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "intake_disabled (no keys)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IntakeBearerKey": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -314,32 +696,9 @@
               }
             ],
             "title": "Display Name"
-          },
-          "adopter_status": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 128
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Adopter Status"
-          },
-          "facilitator_status": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 128
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Facilitator Status"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "ContactPatch"
       },
@@ -380,6 +739,61 @@
             ],
             "title": "Facilitator Status"
           },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "email_normalized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Normalized"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "language_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Codes"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "newsletter_opt_in": {
+            "type": "boolean",
+            "title": "Newsletter Opt In"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -398,6 +812,12 @@
           "display_name",
           "adopter_status",
           "facilitator_status",
+          "version",
+          "email_normalized",
+          "country_code",
+          "language_codes",
+          "origin",
+          "newsletter_opt_in",
           "created_at",
           "updated_at"
         ],
@@ -415,6 +835,239 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IntakeError": {
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "title": "Apiversion",
+            "default": "1"
+          },
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok",
+            "default": false
+          },
+          "error": {
+            "$ref": "#/components/schemas/IntakeErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "IntakeError"
+      },
+      "IntakeErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "requestId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requestid"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "IntakeErrorBody"
+      },
+      "IntakeSuccess": {
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "title": "Apiversion",
+            "default": "1"
+          },
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok",
+            "default": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/IntakeSuccessData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "IntakeSuccess"
+      },
+      "IntakeSuccessData": {
+        "properties": {
+          "submissionId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Submissionid"
+          },
+          "requestId": {
+            "type": "string",
+            "title": "Requestid"
+          },
+          "contactId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Contactid"
+          },
+          "interestIds": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Interestids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "submissionId",
+          "requestId",
+          "contactId",
+          "interestIds"
+        ],
+        "title": "IntakeSuccessData"
+      },
+      "MagicLinkClaim": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "MagicLinkClaim"
+      },
+      "MagicLinkError": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/MagicLinkErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "MagicLinkError"
+      },
+      "MagicLinkErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "MagicLinkErrorDetail",
+        "description": "Error envelope for the magic-link endpoints. Mirrors the\n``HTTPException(detail={\"code\": ..., \"message\": ...})`` shape so the\ngenerated TS client gets a typed error body to switch on."
+      },
+      "MagicLinkRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "MagicLinkRequest"
+      },
+      "MagicLinkRequestResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "MagicLinkRequestResponse"
+      },
+      "MagicLinkTokenEnvelope": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "title": "MagicLinkTokenEnvelope"
       },
       "ValidationError": {
         "properties": {
@@ -455,6 +1108,13 @@
           "type"
         ],
         "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "IntakeBearerKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Intake API key, sent as ``Authorization: Bearer <key>``. The key must match one of the comma-separated entries in the server's ``INTAKE_API_KEYS`` setting."
       }
     }
   }
