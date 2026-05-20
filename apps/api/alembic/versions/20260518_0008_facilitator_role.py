@@ -63,6 +63,12 @@ def upgrade() -> None:
             "facilitator_org_id",
             name="pk_facilitator_org_membership",
         ),
+        # F33: enumerate allowed values so a future writer can't insert
+        # an unmodeled role string and silently bypass authz checks.
+        sa.CheckConstraint(
+            "role_in_org IN ('member', 'admin')",
+            name="ck_facilitator_org_membership_role_in_org",
+        ),
     )
     op.create_index(
         "ix_facilitator_org_membership_facilitator_org_id",
@@ -94,6 +100,12 @@ def upgrade() -> None:
             server_default=sa.text("'jp.adopt.v1.match.*'"),
         ),
         sa.Column("endpoint_url", sa.Text(), nullable=False),
+        # F10: ``hmac_key`` is plain Text in week 1. The table is empty
+        # because no admin endpoint inserts rows yet, and
+        # ``Settings.enable_facilitator_outbox_subscriptions`` defaults to
+        # False so the future admin surface refuses to write until v2.
+        # v2 will migrate this column to a Key Vault reference (``kv://``
+        # URI or similar) rather than a literal secret.
         sa.Column("hmac_key", sa.Text(), nullable=False),
         sa.Column(
             "active",

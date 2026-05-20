@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     acs_connection_string: str | None = None
     acs_sender_address: str = "donotreply@joshuaproject.net"
 
+    # F10: facilitator outbox subscriptions are wired in models + migration 0008
+    # but no admin endpoint inserts rows in week 1. The plain-text ``hmac_key``
+    # column is a known gap — v2 will move it to a Key Vault reference. Until
+    # then, gate any future admin endpoint that inserts into this table on
+    # this flag, which defaults to off so no plaintext secret is ever
+    # written. Migration 0008 carries the same note.
+    enable_facilitator_outbox_subscriptions: bool = False
+
     # Intake endpoints (U4): bearer API key auth for server-to-server calls
     # from jp-adopt-forms. Multi-key rotation is a v2 concern; single shared
     # secret is sufficient for week 1. Comma-separated to allow staged rotation

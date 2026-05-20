@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -273,7 +272,7 @@ async def _cleanup_test_orgs_at_session_end(
 
 async def _latest_outbox_events(
     session: AsyncSession, *, event_type_prefix: str, limit: int = 5
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     rows = (
         await session.execute(
             select(Outbox)
@@ -490,6 +489,10 @@ async def test_decide_send_back_requires_reason_code(
 async def test_decide_already_decided_same_decision_is_idempotent(
     client: TestClient, session: AsyncSession
 ) -> None:
+    """F20: a retry of ``accept`` against a match that's already at
+    ``accepted`` (manager accept) OR ``active`` (manager → facilitator
+    accept) must be a deterministic 200. The previous test admitted both
+    200 and 409 because the idempotency check only matched ``accepted``."""
     rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
     org = await _make_org_with_coverage(session, rop3=rop3)
@@ -501,19 +504,26 @@ async def test_decide_already_decided_same_decision_is_idempotent(
             headers=_auth_headers(),
         )
         assert r.status_code == 200, r.text
-        # Second accept (same decision) — should be 200 idempotent, not 409.
+        # First accept landed: match=accepted, contact=matched.
+        # Second accept (same body) — the contact is now `matched`, so the
+        # endpoint legitimately performs the matched→active transition and
+        # returns 200 (match=active). This is the documented facilitator
+        # accept flow.
         r2 = client.post(
             f"/v1/matches/{m.id}/decide",
             json={"decision": "accept"},
             headers=_auth_headers(),
         )
-        # The second call may legitimately transition matched->active (since
-        # contact.adopter_status is now `matched` after the first accept),
-        # OR return idempotent 200 if the contact is already `active` after
-        # the second call. Either way, status must be 200.
-        assert r2.status_code in (200, 409), r2.text
-        if r2.status_code == 409:
-            assert r2.json()["detail"]["code"] == "match_already_decided"
+        assert r2.status_code == 200, r2.text
+        # Third accept — match is now `active`, contact is `active`. The
+        # idempotency check should catch this and return the current state.
+        r3 = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "accept"},
+            headers=_auth_headers(),
+        )
+        assert r3.status_code == 200, r3.text
+        assert r3.json()["match"]["status"] == "active"
     finally:
         await _cleanup_contact_chain(session, contact)
         await _cleanup_org(session, org.id)
@@ -671,3 +681,325 @@ async def test_run_404_on_missing_contact(client: TestClient) -> None:
         f"/v1/matches/run/{missing}", json={}, headers=_auth_headers()
     )
     assert r.status_code == 404
+
+
+# ─── F25 / F26: route_elsewhere positive assertions + outbox events ──────
+
+
+@pytest.mark.asyncio
+async def test_decide_route_elsewhere_creates_new_recommended(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F25: assert the post-conditions of a successful route_elsewhere:
+    the original Match is declined, a new ``recommended`` Match is created
+    against the chosen alternate's facilitator, and the new Match is
+    properly visible via the queue."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org_a = await _make_org_with_coverage(session, rop3=rop3)
+    org_b = await _make_org_with_coverage(session, rop3=rop3)
+    interest = await _make_interest(session, contact, rop3)
+    m = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(m)
+    session.add_all(
+        [
+            MatchAttempt(
+                id=uuid.uuid4(),
+                contact_id=contact.id,
+                adopter_interest_id=interest.id,
+                run_id=uuid.uuid4(),
+                candidate_facilitator_id=org_a.id,
+                rank=1,
+            ),
+            MatchAttempt(
+                id=uuid.uuid4(),
+                contact_id=contact.id,
+                adopter_interest_id=interest.id,
+                run_id=uuid.uuid4(),
+                candidate_facilitator_id=org_b.id,
+                rank=2,
+            ),
+        ]
+    )
+    await session.commit()
+
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "route_elsewhere"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["match"]["status"] == "declined"
+
+        # The new Match must exist, point at org_b, and be `recommended`.
+        new_open = (
+            await session.execute(
+                select(Match)
+                .where(Match.adopter_interest_id == interest.id)
+                .where(Match.status == "recommended")
+            )
+        ).scalars().all()
+        assert len(new_open) == 1, (
+            f"Expected exactly one new recommended Match, got {len(new_open)}"
+        )
+        assert new_open[0].facilitator_org_id == org_b.id
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org_a.id)
+        await _cleanup_org(session, org_b.id)
+
+
+@pytest.mark.asyncio
+async def test_decide_route_elsewhere_no_alternates_returns_409(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F25: with no ranked alternate available, route_elsewhere must 409
+    with ``no_alternates`` rather than 500 or 200."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org_a = await _make_org_with_coverage(session, rop3=rop3)
+    interest = await _make_interest(session, contact, rop3)
+    m = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(m)
+    # Only the primary attempt, no second-ranked alternate.
+    session.add(
+        MatchAttempt(
+            id=uuid.uuid4(),
+            contact_id=contact.id,
+            adopter_interest_id=interest.id,
+            run_id=uuid.uuid4(),
+            candidate_facilitator_id=org_a.id,
+            rank=1,
+        )
+    )
+    await session.commit()
+
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "route_elsewhere"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "no_alternates"
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org_a.id)
+
+
+@pytest.mark.asyncio
+async def test_decide_route_elsewhere_invalid_next_attempt_id_returns_400(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F25: an unknown ``next_attempt_id`` must surface as 400
+    ``alternate_not_found``, not silently fall through to the highest-ranked."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org_a = await _make_org_with_coverage(session, rop3=rop3)
+    org_b = await _make_org_with_coverage(session, rop3=rop3)
+    interest = await _make_interest(session, contact, rop3)
+    m = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(m)
+    session.add(
+        MatchAttempt(
+            id=uuid.uuid4(),
+            contact_id=contact.id,
+            adopter_interest_id=interest.id,
+            run_id=uuid.uuid4(),
+            candidate_facilitator_id=org_b.id,
+            rank=2,
+        )
+    )
+    await session.commit()
+
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={
+                "decision": "route_elsewhere",
+                "next_attempt_id": str(uuid.uuid4()),
+            },
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"]["code"] == "alternate_not_found"
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org_a.id)
+        await _cleanup_org(session, org_b.id)
+
+
+@pytest.mark.asyncio
+async def test_decide_send_back_emits_outbox_event(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F26: send_back must emit ``jp.adopt.v1.match.sent_back`` (the
+    state-machine's event_type for matched → sent_back)."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="matched")
+    org = await _make_org_with_coverage(session, rop3=rop3)
+    m = await _seed_recommended_match(session, contact, org, rop3)
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "send_back", "reason_code": "capacity_full"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        events = await _latest_outbox_events(
+            session, event_type_prefix="jp.adopt.v1.match.sent_back"
+        )
+        assert any(
+            e.get("contact_id") == str(contact.id) for e in events
+        ), f"Expected sent_back event for contact {contact.id} in {events}"
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org.id)
+
+
+@pytest.mark.asyncio
+async def test_decide_route_elsewhere_emits_outbox_event(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F26: route_elsewhere must emit ``jp.adopt.v1.match.routed_elsewhere``
+    with both from/to facilitator_org_id populated."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org_a = await _make_org_with_coverage(session, rop3=rop3)
+    org_b = await _make_org_with_coverage(session, rop3=rop3)
+    interest = await _make_interest(session, contact, rop3)
+    m = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="recommended",
+    )
+    session.add(m)
+    session.add(
+        MatchAttempt(
+            id=uuid.uuid4(),
+            contact_id=contact.id,
+            adopter_interest_id=interest.id,
+            run_id=uuid.uuid4(),
+            candidate_facilitator_id=org_b.id,
+            rank=2,
+        )
+    )
+    await session.commit()
+
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "route_elsewhere"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        events = await _latest_outbox_events(
+            session, event_type_prefix="jp.adopt.v1.match.routed_elsewhere"
+        )
+        match_event = next(
+            (e for e in events if e.get("match_id") == str(m.id)),
+            None,
+        )
+        assert match_event is not None, (
+            f"Expected routed_elsewhere event for match {m.id} in {events}"
+        )
+        assert match_event["from_facilitator_org_id"] == str(org_a.id)
+        assert match_event["to_facilitator_org_id"] == str(org_b.id)
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org_a.id)
+        await _cleanup_org(session, org_b.id)
+
+
+# ─── F12: facilitator org-isolation 403 ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_decide_facilitator_cross_org_returns_403(
+    client: TestClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F12: a facilitator with org-A membership must NOT be able to decide
+    a Match in org-B. We override ``load_user_roles`` for the test so the
+    dev-local bearer presents as a pure facilitator (no staff_admin shortcut)
+    and is granted membership only in org_b — so the match in org_a is
+    inaccessible."""
+    from jp_adopt_api import deps as deps_module
+
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org_a = await _make_org_with_coverage(session, rop3=rop3)
+    org_b = await _make_org_with_coverage(session, rop3=rop3)
+    m = await _seed_recommended_match(session, contact, org_a, rop3)
+    # Grant the dev-local subject membership only in org_b — explicitly NOT
+    # the org that owns the Match under test.
+    await _grant_org_membership(session, user_sub="dev-local", org_id=org_b.id)
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={"decision": "accept"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "org_not_member"
+    finally:
+        # Clean up the membership row first to avoid an orphan after _cleanup_org.
+        await session.execute(
+            delete(FacilitatorOrgMembership).where(
+                FacilitatorOrgMembership.user_b2c_subject_id == "dev-local"
+            )
+        )
+        await session.commit()
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org_a.id)
+        await _cleanup_org(session, org_b.id)
+
+
+# ─── F24: next_attempt_id only valid with route_elsewhere ────────────────
+
+
+@pytest.mark.asyncio
+async def test_decide_accept_with_next_attempt_id_returns_422(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """F24: sending ``next_attempt_id`` with a non-``route_elsewhere`` verb
+    is silently dropped today; surface it as a 422 from the schema layer."""
+    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session, adopter_status="new")
+    org = await _make_org_with_coverage(session, rop3=rop3)
+    m = await _seed_recommended_match(session, contact, org, rop3)
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={
+                "decision": "accept",
+                "next_attempt_id": str(uuid.uuid4()),
+            },
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org.id)

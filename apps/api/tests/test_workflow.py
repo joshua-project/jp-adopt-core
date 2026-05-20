@@ -29,7 +29,11 @@ from sqlalchemy.ext.asyncio import (
 from jp_adopt_api.config import get_settings
 from jp_adopt_api.main import app
 from jp_adopt_api.models import (
+    AdopterInterest,
     Contact,
+    FacilitatingOrg,
+    FacilitatorOrgMembership,
+    Match,
     TransitionAudit,
 )
 
@@ -165,11 +169,13 @@ async def test_transition_reason_required_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_transition_idempotent_on_same_state(
+async def test_transition_same_state_returns_409(
     client: TestClient, session: AsyncSession
 ) -> None:
-    """Asking the API to transition a contact to the state it's already in
-    should be a no-op 200, not an IllegalTransitionError."""
+    """F19: a same-state body must NOT short-circuit to 200 (probing surface).
+    The state machine refuses self-loops as IllegalTransitionError; the
+    workflow router maps that to 409 ``illegal_transition``. No audit row is
+    written because the transition never executed."""
     contact = await _make_contact(session, adopter_status="matched")
     try:
         r = client.post(
@@ -177,10 +183,10 @@ async def test_transition_idempotent_on_same_state(
             json={"kind": "adopter", "to_state": "matched"},
             headers=_auth_headers(),
         )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["contact"]["adopter_status"] == "matched"
-        # No audit row written (the no-op path returns before transition_adopter).
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "illegal_transition"
+        # No audit row written — the state-machine rejected the self-loop
+        # before any DB mutation.
         audits = (
             await session.execute(
                 select(TransitionAudit).where(TransitionAudit.contact_id == contact.id)
@@ -249,6 +255,95 @@ async def test_transition_unauthenticated_returns_401(
         )
         assert r.status_code == 401
     finally:
+        await _cleanup_contact(session, contact)
+
+
+# ─── F2: workflow router org-scope check ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_transition_facilitator_cross_org_returns_403(
+    client: TestClient,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F2: a facilitator with org-A membership must NOT be able to drive a
+    contact whose only open match is in org-B via the generic transition
+    endpoint. The dev-local bearer normally presents as a super-user; we
+    override ``load_user_roles`` to a pure facilitator role and grant
+    membership only in org_b so the open match in org_a is inaccessible."""
+    from jp_adopt_api import deps as deps_module
+
+    contact = await _make_contact(session, adopter_status="matched")
+    org_a = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Org A {uuid.uuid4().hex[:6]}",
+        capacity_total=5,
+        active=True,
+    )
+    org_b = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Org B {uuid.uuid4().hex[:6]}",
+        capacity_total=5,
+        active=True,
+    )
+    session.add_all([org_a, org_b])
+    interest = AdopterInterest(
+        id=uuid.uuid4(), contact_id=contact.id, rop3=None
+    )
+    session.add(interest)
+    m = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org_a.id,
+        status="accepted",
+    )
+    session.add(m)
+    session.add(
+        FacilitatorOrgMembership(
+            user_b2c_subject_id="dev-local",
+            facilitator_org_id=org_b.id,
+        )
+    )
+    await session.commit()
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+
+    try:
+        r = client.post(
+            f"/v1/contacts/{contact.id}/transition",
+            json={
+                "kind": "adopter",
+                "to_state": "sent_back",
+                "reason_code": "capacity_full",
+            },
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "org_not_member"
+    finally:
+        from sqlalchemy import delete as sa_delete
+
+        await session.execute(
+            sa_delete(Match).where(Match.facilitator_org_id.in_([org_a.id, org_b.id]))
+        )
+        await session.execute(
+            sa_delete(AdopterInterest).where(AdopterInterest.id == interest.id)
+        )
+        await session.execute(
+            sa_delete(FacilitatorOrgMembership).where(
+                FacilitatorOrgMembership.user_b2c_subject_id == "dev-local"
+            )
+        )
+        await session.execute(
+            sa_delete(FacilitatingOrg).where(
+                FacilitatingOrg.id.in_([org_a.id, org_b.id])
+            )
+        )
+        await session.commit()
         await _cleanup_contact(session, contact)
 
 

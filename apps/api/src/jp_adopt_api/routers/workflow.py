@@ -20,6 +20,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from jp_adopt_api.deps import (
     CurrentUserWithRoles,
@@ -38,7 +39,14 @@ from jp_adopt_api.domain.state_machine import (
     transition_adopter,
     transition_facilitator,
 )
-from jp_adopt_api.models import Contact
+from jp_adopt_api.domain.state_machine_errors import map_state_machine_exception
+from jp_adopt_api.models import (
+    AdopterInterest,
+    Contact,
+    FacilitatorOrgMembership,
+    Match,
+)
+from jp_adopt_api.routers.matches import OPEN_MATCH_STATUSES
 from jp_adopt_api.schemas import ContactRead
 
 logger = logging.getLogger(__name__)
@@ -61,6 +69,8 @@ class TransitionRequest(BaseModel):
 
 
 class TransitionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     contact: ContactRead
     transitioned_to: str
 
@@ -82,36 +92,63 @@ def _pick_actor_role(roles: frozenset[str]) -> str:
     return next(iter(roles))
 
 
-def _map_state_machine_exception(e: Exception) -> HTTPException:
-    if isinstance(e, ReasonRequiredError):
-        return HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "reason_required", "message": str(e)},
+async def _facilitator_org_ids(
+    db,
+    user_sub: str,
+) -> frozenset[uuid.UUID]:
+    rows = await db.execute(
+        select(FacilitatorOrgMembership.facilitator_org_id).where(
+            FacilitatorOrgMembership.user_b2c_subject_id == user_sub
         )
-    if isinstance(e, InvalidReasonCodeError):
-        return HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "invalid_reason_code", "message": str(e)},
-        )
-    if isinstance(e, RoleNotPermittedError):
-        return HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "role_not_permitted", "message": str(e)},
-        )
-    if isinstance(e, IllegalTransitionError):
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "illegal_transition", "message": str(e)},
-        )
-    if isinstance(e, ConcurrentModificationError):
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "concurrent_modification", "message": str(e)},
-        )
-    return HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail={"code": "internal_error", "message": "Unexpected transition error"},
     )
+    return frozenset(rows.scalars().all())
+
+
+async def _assert_facilitator_org_scope(
+    db,
+    user_sub: str,
+    contact_id: uuid.UUID,
+) -> None:
+    """F2: a facilitator-role actor invoking the generic transition endpoint
+    on a contact whose only open match is in a different org is silently
+    permitted by the state machine (matched → sent_back is gated on role,
+    not org). Mirror the decide_match org-scope check here.
+
+    Behavior:
+      * load the facilitator's org memberships;
+      * load every open Match for any of the contact's interests;
+      * if no open match's ``facilitator_org_id`` is in the membership set,
+        raise 403.
+
+    If the contact has no open matches at all, fall through — there's
+    nothing to scope to and the state-machine's role gate will produce a
+    more precise 403 / 409 downstream.
+    """
+    org_ids = await _facilitator_org_ids(db, user_sub)
+    open_match_orgs = (
+        await db.execute(
+            select(Match.facilitator_org_id)
+            .join(
+                AdopterInterest,
+                AdopterInterest.id == Match.adopter_interest_id,
+            )
+            .where(AdopterInterest.contact_id == contact_id)
+            .where(Match.status.in_(OPEN_MATCH_STATUSES))
+        )
+    ).scalars().all()
+    if not open_match_orgs:
+        return
+    if not (org_ids & set(open_match_orgs)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "org_not_member",
+                "message": (
+                    "Caller is not a member of any org with an open match for "
+                    "this contact"
+                ),
+            },
+        )
 
 
 @router.post("/{contact_id}/transition", response_model=TransitionResponse)
@@ -129,12 +166,26 @@ async def post_transition(
             status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
         )
 
-    # Idempotent retry: a transition request that lands on the same target
-    # state as the contact is currently in is treated as a no-op 200 rather
-    # than an IllegalTransitionError (the state machine refuses self-loops).
+    # F2: org-scope guard for a facilitator-only actor invoking the generic
+    # transition endpoint. Mirrors the decide_match org-scope check so a
+    # facilitator in org-A can't drive the state machine on a contact whose
+    # only open match is in org-B. ``triage_facilitator`` alone also gets
+    # the check: it has no legitimate org-scoped reason to drive transitions
+    # via this endpoint.
+    staff_roles = frozenset({"staff_admin", "adoption_manager"})
+    if not (roles & staff_roles):
+        await _assert_facilitator_org_scope(db, user.sub, contact_id)
+
+    # Validate the target state literal before attempting the transition, so
+    # callers see a precise 400 rather than a 500 from a bad enum lookup.
+    # F19: previously a same-state body was short-circuited to a 200 no-op
+    # *before* the role / org check ran — a probing facilitator could
+    # confirm that a contact had reached a particular state without being a
+    # member of the relevant org. Drop the early return: the state machine
+    # rejects self-loops as IllegalTransitionError and we map that to 409.
     if body.kind == "adopter":
         try:
-            target = AdopterState(body.to_state)
+            AdopterState(body.to_state)
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -143,14 +194,9 @@ async def post_transition(
                     "message": f"Unknown adopter state: {body.to_state!r}",
                 },
             ) from e
-        if contact.adopter_status == target.value:
-            return TransitionResponse(
-                contact=ContactRead.model_validate(contact),
-                transitioned_to=target.value,
-            )
     else:
         try:
-            fac_target = FacilitatorState(body.to_state)
+            FacilitatorState(body.to_state)
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -159,11 +205,6 @@ async def post_transition(
                     "message": f"Unknown facilitator state: {body.to_state!r}",
                 },
             ) from e
-        if contact.facilitator_status == fac_target.value:
-            return TransitionResponse(
-                contact=ContactRead.model_validate(contact),
-                transitioned_to=fac_target.value,
-            )
 
     actor_role = _pick_actor_role(roles)
 
@@ -196,7 +237,7 @@ async def post_transition(
         ConcurrentModificationError,
     ) as e:
         await db.rollback()
-        raise _map_state_machine_exception(e) from e
+        raise map_state_machine_exception(e) from e
 
     await db.commit()
     await db.refresh(contact)

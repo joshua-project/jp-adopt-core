@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.auth import (
+    DEV_BEARER_TOKEN,
     AuthUser,
     DevelopmentAuthForbiddenError,
     authenticate_bearer_async,
@@ -34,8 +35,9 @@ SettingsDep = Annotated[Settings, Depends(settings_dep)]
 # Dev-local bearer carries no roles by default. We treat it as a super-user
 # for local development so the staff UI is usable without seeding user_roles
 # rows. This branch is gated on STRICT_AUTH=false / non-production via
-# `authenticate_bearer`, so production never reaches it.
-_DEV_LOCAL_SUB = "dev-local"
+# `authenticate_bearer`, so production never reaches it. The literal "dev-local"
+# is shared with `jp_adopt_api.auth` — F17 ties the two together so a future
+# rename only has to touch one constant.
 _DEV_LOCAL_ROLES = frozenset(
     {"staff_admin", "adoption_manager", "triage_facilitator", "facilitator"}
 )
@@ -92,7 +94,7 @@ async def load_user_roles(db: AsyncSession, user_sub: str) -> frozenset[str]:
     usable without seed data. Authentication already gates this branch on
     non-production / STRICT_AUTH=false.
     """
-    if user_sub == _DEV_LOCAL_SUB:
+    if user_sub == DEV_BEARER_TOKEN:
         return _DEV_LOCAL_ROLES
     rows = await db.execute(
         select(Role.name)

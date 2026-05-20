@@ -578,6 +578,11 @@ class FacilitatorOrgMembership(Base):
             "facilitator_org_id",
             name="pk_facilitator_org_membership",
         ),
+        # F33: keep the ORM-side CHECK in lockstep with migration 0008.
+        CheckConstraint(
+            "role_in_org IN ('member', 'admin')",
+            name="ck_facilitator_org_membership_role_in_org",
+        ),
         Index(
             "ix_facilitator_org_membership_facilitator_org_id",
             "facilitator_org_id",
