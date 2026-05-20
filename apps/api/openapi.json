@@ -950,6 +950,178 @@
           }
         }
       }
+    },
+    "/v1/facilitating-orgs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Facilitating Orgs",
+        "description": "List active facilitating orgs. Ordering is alphabetical by ``name``\nfor stable display.",
+        "operationId": "list_facilitating_orgs_v1_facilitating_orgs_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitator-memberships": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create Facilitator Membership",
+        "description": "Grant a B2C subject access to one facilitator org. 409 if the grant\nalready exists (the table has a composite primary key).",
+        "operationId": "create_facilitator_membership_v1_admin_facilitator_memberships_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacilitatorMembershipCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatorMembershipRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitator-memberships/{user_b2c_subject_id}/{facilitator_org_id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete Facilitator Membership",
+        "description": "Revoke a facilitator-org membership. Idempotent: returns 204 whether\nor not the row existed (so re-runs of an onboarding script are safe).",
+        "operationId": "delete_facilitator_membership_v1_admin_facilitator_memberships__user_b2c_subject_id___facilitator_org_id__delete",
+        "parameters": [
+          {
+            "name": "user_b2c_subject_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User B2C Subject Id"
+            }
+          },
+          {
+            "name": "facilitator_org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Facilitator Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1215,6 +1387,129 @@
           "contact_adopter_status"
         ],
         "title": "DecideResponse"
+      },
+      "FacilitatingOrgListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FacilitatingOrgRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "FacilitatingOrgListResponse"
+      },
+      "FacilitatingOrgRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "capacity_total": {
+            "type": "integer",
+            "title": "Capacity Total"
+          },
+          "capacity_committed": {
+            "type": "integer",
+            "title": "Capacity Committed"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "is_triage_org": {
+            "type": "boolean",
+            "title": "Is Triage Org"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "capacity_total",
+          "capacity_committed",
+          "active",
+          "is_triage_org"
+        ],
+        "title": "FacilitatingOrgRead"
+      },
+      "FacilitatorMembershipCreateRequest": {
+        "properties": {
+          "user_b2c_subject_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "User B2C Subject Id"
+          },
+          "facilitator_org_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Facilitator Org Id"
+          },
+          "role_in_org": {
+            "type": "string",
+            "pattern": "^(member|admin)$",
+            "title": "Role In Org",
+            "default": "member"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_b2c_subject_id",
+          "facilitator_org_id"
+        ],
+        "title": "FacilitatorMembershipCreateRequest"
+      },
+      "FacilitatorMembershipRead": {
+        "properties": {
+          "user_b2c_subject_id": {
+            "type": "string",
+            "title": "User B2C Subject Id"
+          },
+          "facilitator_org_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Facilitator Org Id"
+          },
+          "role_in_org": {
+            "type": "string",
+            "title": "Role In Org"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_b2c_subject_id",
+          "facilitator_org_id",
+          "role_in_org"
+        ],
+        "title": "FacilitatorMembershipRead"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1696,34 +1991,62 @@
       "ScoreBreakdown": {
         "properties": {
           "capacity_headroom": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Capacity Headroom"
           },
           "geography": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Geography"
           },
           "language": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Language"
           },
           "fpg_affinity": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Fpg Affinity"
           },
           "theological": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Theological"
           }
         },
         "type": "object",
-        "required": [
-          "capacity_headroom",
-          "geography",
-          "language",
-          "fpg_affinity",
-          "theological"
-        ],
         "title": "ScoreBreakdown"
       },
       "TransitionRequest": {
