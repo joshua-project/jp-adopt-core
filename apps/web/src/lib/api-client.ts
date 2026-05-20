@@ -82,18 +82,36 @@ export class ApiError extends Error {
   readonly body: unknown;
 
   constructor(status: number, body: unknown, message?: string) {
-    super(
-      message ??
-        (typeof body === "object" &&
-        body !== null &&
-        "detail" in body &&
-        typeof (body as { detail?: unknown }).detail === "string"
-          ? (body as { detail: string }).detail
-          : `HTTP ${status}`),
-    );
+    super(message ?? extractErrorMessage(body, status));
     this.status = status;
     this.body = body;
   }
+}
+
+/**
+ * Pull a user-facing message off the error body. Handles both shapes the
+ * /v1/ API currently returns:
+ *   - intake-style `{error: {message}}`
+ *   - HTTPException-style `{detail: <string>}` (contacts)
+ *   - HTTPException-style `{detail: {code, message}}` (matches, workflow, magic-link, admin)
+ * Falls back to `HTTP <status>` so the message never collapses to empty.
+ */
+function extractErrorMessage(body: unknown, status: number): string {
+  if (typeof body !== "object" || body === null) return `HTTP ${status}`;
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "object" && detail !== null) {
+    const detailMessage = (detail as { message?: unknown }).message;
+    if (typeof detailMessage === "string" && detailMessage) return detailMessage;
+    const detailCode = (detail as { code?: unknown }).code;
+    if (typeof detailCode === "string" && detailCode) return detailCode;
+  }
+  const error = (body as { error?: unknown }).error;
+  if (typeof error === "object" && error !== null) {
+    const errorMessage = (error as { message?: unknown }).message;
+    if (typeof errorMessage === "string" && errorMessage) return errorMessage;
+  }
+  return `HTTP ${status}`;
 }
 
 export interface ApiRequestInit {
