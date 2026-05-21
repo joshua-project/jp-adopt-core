@@ -11,7 +11,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Healthz */
+        /**
+         * Healthz
+         * @description Liveness probe — does NOT check the database. The container's
+         *     liveness signal should stay green during a transient Postgres
+         *     outage so Azure doesn't restart the pod into a thundering-herd
+         *     reconnect storm. Returns the deploy SHA when one is configured.
+         */
         get: operations["healthz_healthz_get"];
         put?: never;
         post?: never;
@@ -28,7 +34,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Readyz */
+        /**
+         * Readyz
+         * @description Readiness probe — confirms Postgres is reachable. Synthetic
+         *     monitors that page on database loss should target this endpoint
+         *     (not /healthz). Azure Container Apps reads /readyz to decide whether
+         *     to route traffic to the revision.
+         */
         get: operations["readyz_readyz_get"];
         put?: never;
         post?: never;

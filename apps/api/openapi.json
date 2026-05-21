@@ -11,6 +11,7 @@
           "health"
         ],
         "summary": "Healthz",
+        "description": "Liveness probe \u2014 does NOT check the database. The container's\nliveness signal should stay green during a transient Postgres\noutage so Azure doesn't restart the pod into a thundering-herd\nreconnect storm. Returns the deploy SHA when one is configured.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -36,6 +37,7 @@
           "health"
         ],
         "summary": "Readyz",
+        "description": "Readiness probe \u2014 confirms Postgres is reachable. Synthetic\nmonitors that page on database loss should target this endpoint\n(not /healthz). Azure Container Apps reads /readyz to decide whether\nto route traffic to the revision.",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
