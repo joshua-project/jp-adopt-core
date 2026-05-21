@@ -17,6 +17,7 @@ from jp_adopt_api.routers import (
     drips,
     health,
     intake,
+    manual_contacts,
     matches,
     workflow,
 )
@@ -93,6 +94,7 @@ app.include_router(matches.router)
 app.include_router(workflow.router)
 app.include_router(admin.router)
 app.include_router(drips.router)
+app.include_router(manual_contacts.router)
 
 
 def _custom_openapi() -> dict[str, object]:
