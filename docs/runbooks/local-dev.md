@@ -198,6 +198,32 @@ asyncio.run(main())
 
 ## Smoke tests
 
+The fastest way to verify the stack:
+
+```bash
+scripts/smoke-local.sh
+```
+
+Runs 11 checks (healthz, readyz, queue read, drip read, manual create,
+match-run, queue re-read, workflow transition, outbox + Match assertions,
+worker tick log). Prints PASS/FAIL per check; exits 0 only if all pass.
+Idempotent — each run creates a uniquely-suffixed `smoke+<uuid>@example.com`
+contact tagged `origin='smoke_test'` for easy SQL cleanup.
+
+Override the API endpoint to test through Tailscale / LAN:
+
+```bash
+API_URL=http://your-host.your-tailnet.ts.net:8000 scripts/smoke-local.sh
+```
+
+Cleanup smoke contacts when you're done:
+
+```sql
+DELETE FROM contacts WHERE origin='smoke_test';
+```
+
+### Manual smoke (without the script)
+
 After `scripts/seed-local.sh` runs, these should all succeed:
 
 ```bash
