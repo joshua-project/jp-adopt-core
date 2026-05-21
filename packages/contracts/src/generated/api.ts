@@ -421,6 +421,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Manual Contact */
+        post: operations["create_manual_contact_v1_contacts_manual_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -797,6 +814,58 @@ export interface components {
             token_type: string;
             /** Expires In */
             expires_in: number;
+        };
+        /** ManualContactCreate */
+        ManualContactCreate: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+            /**
+             * Party Kind
+             * @default adopter
+             * @enum {string}
+             */
+            party_kind: "adopter" | "facilitator";
+            /**
+             * Origin
+             * @default manual_entry
+             */
+            origin: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** Language Codes */
+            language_codes?: string[] | null;
+            /**
+             * Newsletter Opt In
+             * @default false
+             */
+            newsletter_opt_in: boolean;
+            /** Fpg Rop3S */
+            fpg_rop3s?: string[];
+            /** Facilitator Org Id */
+            facilitator_org_id?: string | null;
+            /** Notes */
+            notes?: string | null;
+        };
+        /** ManualContactResponse */
+        ManualContactResponse: {
+            /**
+             * Contact Id
+             * Format: uuid
+             */
+            contact_id: string;
+            /** Interest Ids */
+            interest_ids: string[];
+            /** Match Id */
+            match_id: string | null;
+            /** Contact Status */
+            contact_status: string | null;
+            /** Created */
+            created: boolean;
         };
         /** ManualEnrollRequest */
         ManualEnrollRequest: {
@@ -1995,6 +2064,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManualEnrollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_manual_contact_v1_contacts_manual_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualContactCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualContactResponse"];
                 };
             };
             /** @description Validation Error */

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from jp_adopt_worker.outbox_delivery import process_outbox_batch
 from jp_adopt_worker.settings import WorkerSettings as EnvSettings
+from jp_adopt_worker.tasks.send_daily_digest import send_daily_digest
 from jp_adopt_worker.tasks.send_drip_step import send_drip_step
 from jp_adopt_worker.tasks.send_magic_link_email import send_magic_link_email
 
@@ -270,9 +271,19 @@ class ArqWorkerSettings:
         # from the outbox webhook drain so concurrent locks are rare.
         cron(drain_drip_enrollments, second={5, 15, 25, 35, 45, 55}),
         cron(send_drip_step, second={5, 15, 25, 35, 45, 55}),
+        # U11: daily digest. Tick every 10 minutes; the task itself
+        # gates on Eastern hour == 9 + minute < 30, AND digest_run
+        # idempotency, so the actual send fires once per day around
+        # 09:00 ET regardless of DST or worker restarts.
+        cron(send_daily_digest, minute={0, 10, 20, 30, 40, 50}),
         # F33: hourly sweep of magic-link rate-limit rows older than 2h.
         # F34: hourly sweep of expired idempotency-cache rows.
         cron(purge_magic_link_rate_limits, minute=7),
         cron(purge_idempotency_keys, minute=23),
     ]
-    functions = [drain_outbox, send_magic_link_email, send_drip_step]
+    functions = [
+        drain_outbox,
+        send_magic_link_email,
+        send_drip_step,
+        send_daily_digest,
+    ]

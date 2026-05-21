@@ -1157,3 +1157,98 @@ class SuppressionList(Base):
     source_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
+
+
+class DigestRun(Base):
+    """U11: one row per daily-digest cron invocation."""
+
+    __tablename__ = "digest_run"
+    __table_args__ = (
+        Index("ix_digest_run_window_start", "window_start"),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed', 'empty')",
+            name="ck_digest_run_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'pending'"),
+        default="pending",
+    )
+    recipient_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    match_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DigestRecipient(Base):
+    """U11: one row per (digest_run, recipient_address)."""
+
+    __tablename__ = "digest_recipient"
+    __table_args__ = (
+        Index("ix_digest_recipient_run", "digest_run_id"),
+        Index(
+            "uq_digest_recipient_run_address",
+            "digest_run_id",
+            "recipient_address",
+            unique=True,
+        ),
+        CheckConstraint(
+            "recipient_kind IN ('all_staff', 'adoption_manager', 'facilitator')",
+            name="ck_digest_recipient_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed', 'skipped')",
+            name="ck_digest_recipient_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    digest_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("digest_run.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    recipient_address: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    facilitator_org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("facilitating_org.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    match_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    match_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'pending'"),
+        default="pending",
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
