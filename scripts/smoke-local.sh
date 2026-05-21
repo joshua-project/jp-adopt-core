@@ -115,7 +115,8 @@ say "─── Smoke test against ${API_URL} as Bearer ${BEARER} ───"
 # won the host-port race. Only runs when WEB_URL is set.
 if [ -n "$WEB_URL" ]; then
     web_body=$(curl -s "${WEB_URL}/" 2>/dev/null || echo "")
-    if printf '%s' "$web_body" | grep -q "JP ADOPT"; then
+    # Case-insensitive: UI brand updated from "JP ADOPT" to "JP Adopt".
+    if printf '%s' "$web_body" | grep -qi "JP Adopt"; then
         ok "0. GET ${WEB_URL}/ — identifies as jp-adopt-core web"
     else
         title=$(printf '%s' "$web_body" | grep -oE '<title>[^<]*</title>' | head -1)
