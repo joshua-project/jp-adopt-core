@@ -11,22 +11,33 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
 ];
 
 /**
- * Top navigation. Active route is highlighted with the JP orange underline so
- * staff always know which workspace they're in. Layout is shared by every
- * page via app/layout.tsx.
+ * Top navigation, modelled on the JpNavbar component used by the public
+ * jp-adopt-forms site:
+ *
+ * - Dark (#303030) bar with full-width white uppercase links
+ * - Orange (`var(--jp-accent)`) 3px underline on the active route
+ * - Subtle gray hover background
+ *
+ * Implementation uses the .jp-nav / .jp-nav-link component classes declared
+ * in globals.css so the look matches across both apps without forking the
+ * tokens.
  */
 export function SiteHeader() {
   const pathname = usePathname() ?? "/";
   return (
-    <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-6 px-4 py-3 sm:px-6 lg:px-8">
+    <header className="jp-nav border-b border-black/30">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-6 px-4 sm:px-6 lg:px-8">
         <Link
           href="/"
-          className="font-heading text-lg font-semibold tracking-tight text-slate-900"
+          className="font-heading text-lg font-semibold tracking-tight text-white"
+          aria-label="JP Adopt — Staff console home"
         >
-          <span className="text-orange-600">JP</span> Adopt
+          <span className="text-[color:var(--jp-accent)]">JP</span> Adopt
+          <span className="ml-2 hidden align-middle text-[10px] font-medium uppercase tracking-[0.18em] text-white/50 md:inline">
+            Staff console
+          </span>
         </Link>
-        <nav className="flex items-center gap-1 text-sm">
+        <nav className="flex items-stretch text-sm" aria-label="Primary">
           {NAV_ITEMS.map((item) => {
             const active =
               item.href === "/"
@@ -38,22 +49,10 @@ export function SiteHeader() {
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={[
-                  "rounded-md px-3 py-2 font-medium transition-colors",
-                  active
-                    ? "text-orange-700"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-                ].join(" ")}
+                data-active={active ? "true" : "false"}
+                className="jp-nav-link"
               >
-                <span
-                  className={
-                    active
-                      ? "border-b-2 border-orange-500 pb-0.5"
-                      : "border-b-2 border-transparent pb-0.5"
-                  }
-                >
-                  {item.label}
-                </span>
+                {item.label}
               </Link>
             );
           })}
