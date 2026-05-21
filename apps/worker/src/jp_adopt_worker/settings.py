@@ -14,3 +14,10 @@ class WorkerSettings(BaseSettings):
 
     outbox_batch_size: int = 10
     post_timeout_seconds: float = 30.0
+
+    # U10: ACS connection string for the drip engine's send loop. Empty
+    # in dev → the send is logged + treated as successful so the
+    # enrollment state machine still advances. Production uses the real
+    # ACS connection string (set via Key Vault reference).
+    acs_connection_string: str | None = None
+    acs_sender_address: str = "no-reply@joshuaproject.net"

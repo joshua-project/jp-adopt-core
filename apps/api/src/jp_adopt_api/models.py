@@ -6,10 +6,12 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Numeric,
@@ -108,6 +110,11 @@ class Outbox(Base):
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # U10: separate drain marks this when the drip engine has consumed
+    # the event (enrolled contacts, exited do_not_engage cohorts, etc.).
+    drip_processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Role(Base):
@@ -900,4 +907,253 @@ class MatchAttempt(Base):
     rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Campaign(Base):
+    """U10: top-level marketing campaign. ``status`` gates the worker
+    drain: only active campaigns trigger enrollment from outbox events.
+    Editing step content/timing bumps ``version`` so in-flight
+    enrollments stay pinned to the version they started under via
+    ``Enrollment.campaign_version``.
+    """
+
+    __tablename__ = "campaign"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'active', 'paused', 'archived')",
+            name="ck_campaign_status",
+        ),
+        CheckConstraint(
+            "trigger_type IN ('event', 'manual')",
+            name="ck_campaign_trigger_type",
+        ),
+        Index(
+            "ix_campaign_status",
+            "status",
+            postgresql_where="status = 'active'",
+        ),
+        Index(
+            "ix_campaign_trigger_event_type",
+            "trigger_event_type",
+            postgresql_where=(
+                "trigger_event_type IS NOT NULL AND status = 'active'"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'draft'"), default="draft"
+    )
+    trigger_type: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'event'"), default="event"
+    )
+    trigger_event_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_enroll_existing: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    precedence: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1"), default=1
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class CampaignStep(Base):
+    """U10: one ordered step in a campaign. ``mjml_template_name`` is a
+    filename in ``apps/api/email-templates/``, not inline content."""
+
+    __tablename__ = "campaign_step"
+    __table_args__ = (
+        Index(
+            "uq_campaign_step_campaign_position",
+            "campaign_id",
+            "position",
+            unique=True,
+        ),
+        CheckConstraint(
+            "position >= 0", name="ck_campaign_step_position_nonneg"
+        ),
+        CheckConstraint(
+            "delay_days >= 0", name="ck_campaign_step_delay_days_nonneg"
+        ),
+        CheckConstraint(
+            "send_at_hour >= 0 AND send_at_hour <= 23",
+            name="ck_campaign_step_send_at_hour_range",
+        ),
+        CheckConstraint(
+            "send_at_minute >= 0 AND send_at_minute <= 59",
+            name="ck_campaign_step_send_at_minute_range",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    delay_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    mjml_template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    send_at_hour: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("9"), default=9
+    )
+    send_at_minute: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Enrollment(Base):
+    """U10: per-(campaign, contact) state row. Partial unique index on
+    (campaign_id, contact_id) WHERE state IN (pending, active, paused)
+    enforces one open enrollment per contact per campaign while still
+    permitting historical completed/exited rows to coexist for audit.
+    """
+
+    __tablename__ = "enrollment"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('pending', 'active', 'paused', 'completed', 'exited')",
+            name="ck_enrollment_state",
+        ),
+        CheckConstraint(
+            "current_step_position >= -1",
+            name="ck_enrollment_step_position_nonneg",
+        ),
+        Index(
+            "uq_enrollment_open_per_campaign_contact",
+            "campaign_id",
+            "contact_id",
+            unique=True,
+            postgresql_where="state IN ('pending', 'active', 'paused')",
+        ),
+        Index("ix_enrollment_contact_id", "contact_id"),
+        Index(
+            "ix_enrollment_state_step",
+            "state",
+            "current_step_position",
+            postgresql_where="state = 'active'",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    campaign_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1"), default=1
+    )
+    current_step_position: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    state: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'pending'"),
+        default="pending",
+    )
+    enrolled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_step_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    exited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    exit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class EnrollmentEvent(Base):
+    """U10: append-only log of enrollment-state events. ``payload``
+    carries the per-event metadata (step_position for step_sent, error
+    text for send_failed, etc.). BIGSERIAL id because the table will
+    grow at multiple-events-per-enrollment cadence and we want gap-free
+    ordering for replay.
+    """
+
+    __tablename__ = "enrollment_event"
+    __table_args__ = (
+        Index(
+            "ix_enrollment_event_enrollment_id",
+            "enrollment_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), primary_key=True
+    )
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("enrollment.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SuppressionList(Base):
+    """U10: emails the engine must never send to. Keyed by SHA-256 hex of
+    the normalized email so no raw PII lives in the table. Hard filter
+    at send time."""
+
+    __tablename__ = "suppression_list"
+    __table_args__ = (
+        PrimaryKeyConstraint("email_hash", name="pk_suppression_list"),
+        Index("ix_suppression_list_suppressed_at", "suppressed_at"),
+    )
+
+    email_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    suppressed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    source_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
     )
