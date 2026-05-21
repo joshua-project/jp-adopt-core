@@ -1,0 +1,435 @@
+# U12 deploy workflow — Azure Container Apps + Static Web Apps + ACS.
+#
+# Triggered on push to main (after the existing CI workflow passes via
+# the merge protection rule) and manually via workflow_dispatch.
+#
+# Components:
+#   - apps/api  → Azure Container App (jp-adopt-api)
+#   - apps/worker → Azure Container App (jp-adopt-worker, no ingress)
+#   - apps/web  → Azure Static Web Apps (Standard plan, BYO ACA backend)
+#
+# Secrets: pulled from 1Password via the v4 action with the workflow-
+# wide OP_ACCOUNT set to ``joshuaproject`` (per the institutional
+# learning from the dt-adoption-platform OIDC regression). Each
+# secret has a fail-fast guard step that exits before any Azure
+# write if the value is empty or missing.
+#
+# OIDC: federated identity on the GitHub repo. The Azure AD app
+# registration must trust this workflow's run_id pattern. See
+# ``docs/runbooks/deploy.md`` for the one-time provisioning steps.
+#
+# RESOURCE NAMES in this file are PLACEHOLDERS — the operator fills
+# them in once the jp-infrastructure Terraform modules have created
+# the resource group + container apps. Search for ``REPLACE_ME``.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which service to deploy"
+        type: choice
+        required: true
+        default: "all"
+        options:
+          - all
+          - api
+          - worker
+          - web
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write  # OIDC federation with Azure AD
+
+env:
+  # Required by 1password/load-secrets-action@v4 to pick the correct
+  # service-account token when multiple accounts are configured on the
+  # runner. Per the dt-adoption-platform learning, set workflow-wide
+  # so every job inherits it.
+  OP_ACCOUNT: joshuaproject
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # Pre-flight: load secrets and validate every required value is
+  # non-empty before any Azure write.
+  # ──────────────────────────────────────────────────────────────────────
+  preflight:
+    name: Preflight (secrets, OIDC, fail-fast)
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy_api: ${{ steps.scope.outputs.should_deploy_api }}
+      should_deploy_worker: ${{ steps.scope.outputs.should_deploy_worker }}
+      should_deploy_web: ${{ steps.scope.outputs.should_deploy_web }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deploy scope
+        id: scope
+        run: |
+          target="${{ github.event.inputs.target || 'all' }}"
+          if [ "$target" = "all" ] || [ "$target" = "api" ]; then
+            echo "should_deploy_api=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy_api=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$target" = "all" ] || [ "$target" = "worker" ]; then
+            echo "should_deploy_worker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy_worker=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$target" = "all" ] || [ "$target" = "web" ]; then
+            echo "should_deploy_web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy_web=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        # The pinned v4 SHA is recommended in the org's release notes;
+        # add `with: sha256` here once 1Password publishes the SHA pin.
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          # Values land in the env block below. Each follows the
+          # documented vault layout: op://JoshuaProject/jp-adopt-core/<key>.
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
+          ACA_API_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_api_app_name
+          ACA_WORKER_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_worker_app_name
+          SWA_APP_NAME: op://JoshuaProject/jp-adopt-core/swa_app_name
+          SWA_API_TOKEN: op://JoshuaProject/jp-adopt-core/swa_api_token
+        with:
+          export-env: true
+
+      - name: Fail-fast guard on required secrets
+        run: |
+          set -euo pipefail
+          required=(
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            AZURE_CLIENT_ID
+            ACR_LOGIN_SERVER
+            ACA_RESOURCE_GROUP
+            ACA_API_APP_NAME
+            ACA_WORKER_APP_NAME
+          )
+          for var in "${required[@]}"; do
+            value="$(eval echo "\${$var:-}")"
+            if [ -z "$value" ]; then
+              echo "::error::Missing required secret $var (vault path: op://JoshuaProject/jp-adopt-core/$(echo "$var" | tr 'A-Z' 'a-z'))"
+              exit 1
+            fi
+          done
+          echo "All required secrets present."
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Build + push the API container image. Tags the image with the
+  # commit SHA so the deploy step can reference it precisely.
+  # ──────────────────────────────────────────────────────────────────────
+  build-api:
+    name: Build & push API image
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy_api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ env.ACR_LOGIN_SERVER }}"
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:${{ github.sha }}
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:latest
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:buildcache,mode=max
+
+  build-worker:
+    name: Build & push worker image
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy_worker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ env.ACR_LOGIN_SERVER }}"
+
+      - name: Build & push worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:${{ github.sha }}
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:latest
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache,mode=max
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Apply Alembic migrations BEFORE rolling the new image. If migrations
+  # fail the deploy aborts and the previous revision keeps serving.
+  # ──────────────────────────────────────────────────────────────────────
+  migrate:
+    name: Apply Alembic migrations
+    needs: [preflight, build-api]
+    if: needs.preflight.outputs.should_deploy_api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --extra dev
+
+      - name: Load DATABASE_URL from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DATABASE_URL: op://JoshuaProject/jp-adopt-core/database_url
+        with:
+          export-env: true
+
+      - name: Verify DATABASE_URL is set
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::DATABASE_URL is empty; aborting migration."
+            exit 1
+          fi
+
+      - name: Run alembic upgrade head
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Roll new revisions on Azure Container Apps. Element-wise
+  # ``--set-env-vars`` keeps the existing app settings intact while
+  # bumping only DEPLOY_SHA + the image tag (matching the institutional
+  # learning about ignore_changes — narrow, not broad).
+  # ──────────────────────────────────────────────────────────────────────
+  deploy-api:
+    name: Deploy API to ACA
+    needs: [preflight, migrate]
+    if: needs.preflight.outputs.should_deploy_api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
+          ACA_API_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_api_app_name
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Update API container app
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --name "${{ env.ACA_API_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:${{ github.sha }}" \
+            --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+
+      - name: Wait for new revision to become ready
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            state=$(az containerapp revision list \
+              --name "${{ env.ACA_API_APP_NAME }}" \
+              --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+              --query "[?properties.active==\`true\`] | [0].properties.healthState" -o tsv 2>/dev/null || echo "")
+            if [ "$state" = "Healthy" ]; then
+              echo "Revision healthy."
+              exit 0
+            fi
+            echo "Revision state=$state — retrying in 10s ($i/10)"
+            sleep 10
+          done
+          echo "::error::API revision did not reach Healthy within 100s"
+          exit 1
+
+      - name: Smoke check /healthz exposes new SHA
+        run: |
+          set -euo pipefail
+          # The hostname is on the container app's ingress.fqdn — derive it.
+          fqdn=$(az containerapp show \
+            --name "${{ env.ACA_API_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          if [ -z "$fqdn" ]; then
+            echo "::error::Could not resolve container app FQDN"
+            exit 1
+          fi
+          response=$(curl -fsS "https://${fqdn}/healthz")
+          echo "Response: $response"
+          # Confirm the response carries the new SHA prefix.
+          if ! echo "$response" | grep -q "\"sha\":\"$(echo "${{ github.sha }}" | cut -c1-10)\""; then
+            echo "::error::/healthz response does not carry the expected sha"
+            exit 1
+          fi
+
+  deploy-worker:
+    name: Deploy worker to ACA
+    needs: [preflight, build-worker, migrate]
+    if: needs.preflight.outputs.should_deploy_worker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
+          ACA_WORKER_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_worker_app_name
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Update worker container app
+        run: |
+          az containerapp update \
+            --name "${{ env.ACA_WORKER_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:${{ github.sha }}" \
+            --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+
+  deploy-web:
+    name: Deploy web to SWA
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.0.0"
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        run: pnpm --filter web build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID }}
+          NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME }}
+          NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID }}
+          NEXT_PUBLIC_AZURE_AD_B2C_POLICY: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_POLICY }}
+          NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES }}
+
+      - name: Load SWA API token from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          SWA_API_TOKEN: op://JoshuaProject/jp-adopt-core/swa_api_token
+        with:
+          export-env: true
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.SWA_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: "apps/web"
+          api_location: ""
+          output_location: ".next"
+          skip_app_build: true
