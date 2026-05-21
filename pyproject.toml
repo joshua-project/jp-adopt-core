@@ -7,6 +7,6 @@ readme = "README.md"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker"]
+members = ["apps/api", "apps/worker", "apps/etl"]
 
 [tool.uv.sources]

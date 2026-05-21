@@ -50,6 +50,18 @@ class Contact(Base):
             postgresql_where="email_normalized IS NOT NULL",
         ),
         Index("ix_contacts_source_system_source_id", "source_system", "source_id"),
+        # Partial unique index — added in migration 0009 to give the DT ETL
+        # an ON CONFLICT target for its idempotent upsert. Local rows (no
+        # source) are excluded so we don't constrain them.
+        Index(
+            "uq_contacts_source_system_source_id",
+            "source_system",
+            "source_id",
+            unique=True,
+            postgresql_where=(
+                "source_system IS NOT NULL AND source_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -561,6 +573,206 @@ class SubmissionBlocked(Base):
         JSONB, nullable=True
     )
     blocked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class StaffIdentityLink(Base):
+    """U9: maps a DT wp_users row to a B2C subject ID (when one exists) and
+    captures email + display name. The activity_log table's ``author_id``
+    column resolves through this — DT comments authored by a wp_users row
+    that was later deleted are routed to a synthetic
+    ``system:dt_legacy_unknown`` author and never reach this table.
+    """
+
+    __tablename__ = "staff_identity_link"
+    __table_args__ = (
+        Index(
+            "uq_staff_identity_link_dt_user_id",
+            "dt_user_id",
+            unique=True,
+        ),
+        Index(
+            "uq_staff_identity_link_b2c_subject_id",
+            "b2c_subject_id",
+            unique=True,
+            postgresql_where="b2c_subject_id IS NOT NULL",
+        ),
+        Index(
+            "ix_staff_identity_link_email_normalized",
+            "email_normalized",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'inactive', 'unknown')",
+            name="ck_staff_identity_link_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    dt_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    b2c_subject_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'active'"), default="active"
+    )
+    source_system: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'dt'"), default="dt"
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ActivityLog(Base):
+    """U9: DT wp_comments + wp_dt_activity_log rows mapped per contact.
+    Preserves authorship via ``author_id`` (string — either a
+    ``staff_identity_link.id`` UUID for resolved authors, or the synthetic
+    ``system:dt_legacy_unknown`` sentinel for deleted authors). Threading
+    is preserved via ``parent_id`` self-FK.
+    """
+
+    __tablename__ = "activity_log"
+    __table_args__ = (
+        Index("ix_activity_log_contact_id", "contact_id"),
+        Index(
+            "ix_activity_log_parent_id",
+            "parent_id",
+            postgresql_where="parent_id IS NOT NULL",
+        ),
+        Index(
+            "uq_activity_log_source_system_source_id",
+            "source_system",
+            "source_id",
+            unique=True,
+            postgresql_where="source_id IS NOT NULL",
+        ),
+        Index("ix_activity_log_occurred_at", "occurred_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_id: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("activity_log.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_system: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'local'"), default="local"
+    )
+    source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EtlRun(Base):
+    """U9: one row per ETL invocation. ``source_max_modified_at`` is the
+    watermark the next incremental run uses as its ``> ?`` floor.
+    """
+
+    __tablename__ = "etl_run"
+    __table_args__ = (
+        Index("ix_etl_run_table_started", "table_name", "started_at"),
+        CheckConstraint(
+            "mode IN ('dry_run', 'production')",
+            name="ck_etl_run_mode",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    table_name: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'production'"),
+        default="production",
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_max_modified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    watermark_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rows_in: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    rows_out_inserted: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    rows_out_updated: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    rows_out_skipped: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    rows_in_conflict: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    errors: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EtlDeletedInSource(Base):
+    """U9: an ETL run that watches for vanished rows in source MySQL records
+    them here. ETL never hard-deletes the corresponding Postgres row — Amy
+    reviews this table and decides per case.
+    """
+
+    __tablename__ = "etl_deleted_in_source"
+    __table_args__ = (
+        Index("ix_etl_deleted_in_source_run", "etl_run_id"),
+        Index(
+            "ix_etl_deleted_in_source_source",
+            "source_system",
+            "source_id",
+            "table_name",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    etl_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("etl_run.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    table_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_system: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[str] = mapped_column(Text, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    detected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
