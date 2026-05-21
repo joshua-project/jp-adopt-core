@@ -109,7 +109,11 @@ docker compose --profile full build web
 docker compose --profile full up -d
 ```
 
-Then open `http://<that-host>:3000` from any peer device.
+Then open `http://<that-host>:3030` from any peer device — the docker
+stack's web service publishes on host port **3030** by default to avoid
+colliding with `pnpm run dev:stack` and other local Next dev servers
+(jp-adopt-forms, etc.) that grab `:3000`. Override via
+`WEB_HOST_PORT=...` env if 3030 is also taken on your machine.
 
 The API's dev-mode CORS regex already accepts:
 - `localhost` / `127.0.0.1`
@@ -198,6 +202,32 @@ asyncio.run(main())
 
 ## Smoke tests
 
+The fastest way to verify the stack:
+
+```bash
+scripts/smoke-local.sh
+```
+
+Runs 11 checks (healthz, readyz, queue read, drip read, manual create,
+match-run, queue re-read, workflow transition, outbox + Match assertions,
+worker tick log). Prints PASS/FAIL per check; exits 0 only if all pass.
+Idempotent — each run creates a uniquely-suffixed `smoke+<uuid>@example.com`
+contact tagged `origin='smoke_test'` for easy SQL cleanup.
+
+Override the API endpoint to test through Tailscale / LAN:
+
+```bash
+API_URL=http://your-host.your-tailnet.ts.net:8000 scripts/smoke-local.sh
+```
+
+Cleanup smoke contacts when you're done:
+
+```sql
+DELETE FROM contacts WHERE origin='smoke_test';
+```
+
+### Manual smoke (without the script)
+
 After `scripts/seed-local.sh` runs, these should all succeed:
 
 ```bash
@@ -214,14 +244,14 @@ curl -s -H "Authorization: Bearer dev-local" \
   http://127.0.0.1:8000/v1/drips/campaigns | jq '.items[].status'
 # Expect: at least one "active"
 
-# Web responding
-curl -s http://localhost:3000 | grep -i "JP ADOPT"
+# Web responding (substitute 3000 for native pnpm dev:stack)
+curl -s http://localhost:3030 | grep -i "JP ADOPT"
 ```
 
-In a browser:
-- http://localhost:3000/matches — should list the three adopters' recommendations
-- http://localhost:3000/facilitator — empty unless you sign in as a real facilitator (the dev-local bearer is staff-shaped)
-- http://localhost:3000/contacts/new — manual contact form
+In a browser (native `pnpm dev:stack` → port 3000, docker compose → port 3030):
+- http://localhost:3030/matches — should list the three adopters' recommendations
+- http://localhost:3030/facilitator — empty unless you sign in as a real facilitator (the dev-local bearer is staff-shaped)
+- http://localhost:3030/contacts/new — manual contact form
 
 ---
 
