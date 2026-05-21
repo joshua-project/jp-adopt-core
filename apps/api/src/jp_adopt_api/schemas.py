@@ -36,6 +36,21 @@ class ContactListResponse(BaseModel):
     offset: int
 
 
+# Pipeline status-count surface used by the staff /adopters and /facilitators
+# pages to render filter-chip badges. Returns one of two shapes depending on
+# the requested ``party_kind``:
+#
+#   {"party_kind": "adopter",     "counts": {"new": 5, "matched": 3, ...}}
+#   {"party_kind": "facilitator", "counts": {"new": 2, "ready": 1, ...}}
+#
+# NULL statuses are aggregated under the synthetic key ``__unset__`` so the
+# client can decide whether to show them as a separate chip or hide them.
+class ContactStatusCounts(BaseModel):
+    party_kind: Literal["adopter", "facilitator"]
+    counts: dict[str, int]
+    total: int
+
+
 class ContactPatch(BaseModel):
     # F5 of the U1-U6 review: ``adopter_status`` and ``facilitator_status``
     # were intentionally REMOVED from the patch surface so a generic PATCH

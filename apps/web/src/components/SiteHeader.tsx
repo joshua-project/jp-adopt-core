@@ -5,9 +5,10 @@ import { usePathname } from "next/navigation";
 
 const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/matches", label: "Matches" },
-  { href: "/contacts", label: "Contacts" },
+  { href: "/adopters", label: "Adopters" },
+  { href: "/facilitators", label: "Facilitators" },
   { href: "/contacts/new", label: "Add contact" },
-  { href: "/facilitator", label: "Facilitator" },
+  { href: "/facilitator", label: "My contacts" },
 ];
 
 /**
