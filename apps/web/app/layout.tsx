@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import "./globals.css";
 
 import { MsalClientProvider } from "../src/components/MsalClientProvider";
+import { SiteHeader } from "../src/components/SiteHeader";
 
 export const metadata: Metadata = {
-  title: "JP ADOPT (spike)",
-  description: "Phase 0 vertical spike — staff web shell + API + worker",
+  title: "JP Adopt — Staff console",
+  description: "Adoption program — staff console",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -14,28 +14,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <MsalClientProvider>
-          <header className="border-b border-slate-200 bg-white">
-            <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3">
-              <Link href="/" className="font-semibold text-slate-800">
-                JP ADOPT
-              </Link>
-              <nav className="flex gap-4 text-sm text-slate-600">
-                <Link href="/contacts" className="hover:text-slate-900">
-                  Contacts
-                </Link>
-                <Link href="/contacts/new" className="hover:text-slate-900">
-                  Add contact
-                </Link>
-                <Link href="/matches" className="hover:text-slate-900">
-                  Matches
-                </Link>
-                <Link href="/facilitator" className="hover:text-slate-900">
-                  Facilitator
-                </Link>
-              </nav>
-            </div>
-          </header>
-          <main className="mx-auto max-w-3xl px-4 py-8">{children}</main>
+          <SiteHeader />
+          <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+            {children}
+          </main>
         </MsalClientProvider>
       </body>
     </html>

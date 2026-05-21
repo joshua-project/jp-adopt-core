@@ -174,16 +174,23 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
       </Link>
 
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">
+        <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
           {contact?.display_name ?? "Loading…"}
         </h1>
         {contact ? (
-          <p className="text-sm text-slate-600">
-            adopter_status:{" "}
-            <span className="font-mono">{contact.adopter_status ?? "—"}</span>{" "}
-            · facilitator_status:{" "}
-            <span className="font-mono">
-              {contact.facilitator_status ?? "—"}
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
+            <span>
+              <span className="text-slate-500">Adopter:</span>{" "}
+              <span className="font-medium text-slate-800">
+                {(contact.adopter_status ?? "—").replace(/_/g, " ")}
+              </span>
+            </span>
+            <span className="text-slate-300">·</span>
+            <span>
+              <span className="text-slate-500">Facilitator:</span>{" "}
+              <span className="font-medium text-slate-800">
+                {(contact.facilitator_status ?? "—").replace(/_/g, " ")}
+              </span>
             </span>
           </p>
         ) : null}
