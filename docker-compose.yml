@@ -1,3 +1,30 @@
+# Local dev stack.
+#
+# Two profiles in one file:
+#
+#   1. Infra only (default — `docker compose up`): postgres + redis.
+#      Use this when iterating on apps locally via `pnpm run dev:stack`.
+#
+#   2. Full container stack (`docker compose --profile full up`): also
+#      brings up the api, worker, and web containers built from the
+#      respective Dockerfiles. Use this to verify container-shape
+#      behavior or onboard a new contributor without local Python /
+#      Node toolchains.
+#
+# Migrations: the api container does NOT run `alembic upgrade head`
+# on entry — the migrate step is a separate concern (CI deploy job
+# in production; `pnpm run setup:local` for dev). The first `docker
+# compose --profile full up` against a fresh DB needs:
+#
+#   docker compose --profile migrate run --rm migrate
+#
+# which runs the one-shot migrate service below.
+#
+# Networking: services reach each other by service name. Internal
+# URLs use `postgres:5432` and `redis:6379`; host-facing port mappings
+# remain on 5434 / 6379 / 8000 / 3000 so existing dev workflows still
+# work side-by-side.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,6 +35,8 @@ services:
     ports:
       # Host 5434 avoids colliding with local Postgres on 5432/5433 (common on dev machines).
       - "5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U jp_adopt -d jp_adopt"]
       interval: 5s
@@ -23,3 +52,113 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  # ─── One-shot Alembic migrate (profile: migrate) ──────────────────────
+  # Runs `alembic upgrade head` against the postgres service. Invoke
+  # explicitly: `docker compose --profile migrate run --rm migrate`.
+  # The api/worker services do NOT run migrations on startup.
+  migrate:
+    profiles: ["migrate", "full"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jp_adopt:jp_adopt@postgres:5432/jp_adopt
+    # The `full` profile depends on this service running once before the
+    # api/worker come up. `restart: no` keeps it as a one-shot.
+    restart: "no"
+    # Bypass the API image's entrypoint + use the venv-resolved
+    # alembic binary directly. tini isn't needed for a one-shot
+    # process that exits immediately.
+    entrypoint: ["/app/.venv/bin/alembic"]
+    command: ["upgrade", "head"]
+
+  # ─── API (profile: full) ─────────────────────────────────────────────
+  api:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jp_adopt:jp_adopt@postgres:5432/jp_adopt
+      APP_ENV: development
+      STRICT_AUTH: "false"
+      # Intake bearer keys — dev value, not a real credential.
+      INTAKE_API_KEYS: "dev-intake-key"
+      INTAKE_DEFAULT_ORIGIN: "website"
+      # Magic-link side-car: dev signing key — replaced with Key Vault
+      # ref in production.
+      MAGIC_LINK_SIGNING_KEY: "dev-magic-link-signing-key-please-change-32b"
+      MAGIC_LINK_CLICK_BASE_URL: "http://localhost:3000"
+      MAGIC_LINK_ISSUER: "https://api.joshuaproject.net/magic-link/v1"
+      # B2C left empty; STRICT_AUTH=false makes dev-local the active path.
+      AZURE_AD_B2C_TENANT_NAME: ""
+      AZURE_AD_B2C_TENANT_ID: ""
+      AZURE_AD_B2C_CLIENT_ID: ""
+      AZURE_AD_B2C_AUDIENCE: ""
+      # CORS — production reads this; dev's wildcard regex handles
+      # localhost ports.
+      CORS_ALLOW_ORIGINS: ""
+      # ACS unset → drip / digest send paths log + advance state.
+      ACS_CONNECTION_STRING: ""
+
+  # ─── Worker (profile: full) ──────────────────────────────────────────
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jp_adopt:jp_adopt@postgres:5432/jp_adopt
+      REDIS_URL: redis://redis:6379/0
+      # Webhook delivery disabled in dev — set these to point the
+      # outbox drain at a real endpoint.
+      INTEGRATION_WEBHOOK_URL: ""
+      WEBHOOK_HMAC_SECRET: ""
+      OUTBOX_BATCH_SIZE: "10"
+      POST_TIMEOUT_SECONDS: "30"
+      # ACS unset → drip / digest send paths log + advance state.
+      ACS_CONNECTION_STRING: ""
+      ACS_SENDER_ADDRESS: "no-reply@localhost"
+      # Worker's daily-digest cron gates on Eastern hour internally;
+      # the container's TZ matches what the task expects.
+      TZ: "America/New_York"
+
+  # ─── Web (profile: full) ─────────────────────────────────────────────
+  web:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # NEXT_PUBLIC_API_URL is baked in at build time. The browser
+        # talks to the API via host port 8000, NOT the docker service
+        # name — service-name DNS only works inside the compose network.
+        NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+
+volumes:
+  postgres-data:
