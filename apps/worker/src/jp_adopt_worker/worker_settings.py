@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
-from sqlalchemy import text
+from jp_adopt_api.domain.drips import (
+    enroll_on_event,
+    exit_enrollments_for_contact,
+)
+from jp_adopt_api.models import Outbox
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from jp_adopt_worker.outbox_delivery import process_outbox_batch
 from jp_adopt_worker.settings import WorkerSettings as EnvSettings
+from jp_adopt_worker.tasks.send_drip_step import send_drip_step
 from jp_adopt_worker.tasks.send_magic_link_email import send_magic_link_email
 
 # B4: batch size for purge DELETEs. Bounded so a single statement can't lock
@@ -52,6 +60,82 @@ async def drain_outbox(ctx: dict[str, Any]) -> None:
             break
     if total:
         logger.info("Processed %s outbox row(s) this tick", total)
+
+
+_DRIP_DRAIN_BATCH_SIZE = 50
+_DO_NOT_ENGAGE_EVENT_TYPE = "jp.adopt.v1.contact.do_not_engage"
+
+
+async def drain_drip_enrollments(ctx: dict[str, Any]) -> None:
+    """U10: read recent Outbox events with a contact_id in the payload
+    and enroll the contact into any active campaign whose
+    ``trigger_event_type`` matches. Special-cases the
+    ``contact.do_not_engage`` event to exit all open enrollments for
+    that contact instead of enrolling.
+
+    Marks each row's ``drip_processed_at`` so subsequent ticks skip it.
+    The partial index ``ix_outbox_drip_unprocessed`` keeps the scan cheap
+    no matter how large the Outbox grows.
+
+    Idempotent on enrollment via the
+    ``uq_enrollment_open_per_campaign_contact`` partial unique index —
+    concurrent drains converge to one enrollment per contact + campaign.
+    """
+    factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    processed = 0
+    try:
+        async with factory() as session:
+            async with session.begin():
+                rows = (
+                    await session.execute(
+                        select(Outbox)
+                        .where(Outbox.drip_processed_at.is_(None))
+                        .order_by(Outbox.created_at.asc())
+                        .limit(_DRIP_DRAIN_BATCH_SIZE)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).scalars().all()
+                for row in rows:
+                    payload = row.payload_json or {}
+                    contact_id_raw = payload.get("contact_id")
+                    if contact_id_raw:
+                        try:
+                            contact_id = uuid.UUID(str(contact_id_raw))
+                        except ValueError:
+                            logger.warning(
+                                "drip.drain.invalid_contact_id outbox=%s "
+                                "raw=%r",
+                                row.id,
+                                contact_id_raw,
+                            )
+                            row.drip_processed_at = datetime.now(UTC)
+                            continue
+                        if row.event_type == _DO_NOT_ENGAGE_EVENT_TYPE:
+                            exited = await exit_enrollments_for_contact(
+                                session,
+                                contact_id=contact_id,
+                                reason="do_not_engage",
+                            )
+                            if exited:
+                                logger.info(
+                                    "drip.drain.do_not_engage contact=%s "
+                                    "exited=%d",
+                                    contact_id,
+                                    exited,
+                                )
+                        else:
+                            await enroll_on_event(
+                                session,
+                                event_type=row.event_type,
+                                contact_id=contact_id,
+                            )
+                    row.drip_processed_at = datetime.now(UTC)
+                    processed += 1
+    except SQLAlchemyError as e:
+        logger.warning("drip.drain.failed error=%s", e)
+        return
+    if processed:
+        logger.info("drip.drain processed=%d", processed)
 
 
 async def purge_magic_link_rate_limits(ctx: dict[str, Any]) -> None:
@@ -179,9 +263,16 @@ class ArqWorkerSettings:
     on_shutdown = shutdown
     cron_jobs = [
         cron(drain_outbox, second={0, 10, 20, 30, 40, 50}),
+        # U10: drip engine. Enrollment drain reads recent Outbox events
+        # and creates Enrollment rows when a campaign's
+        # trigger_event_type matches. Send drain claims due steps with
+        # SKIP LOCKED and ships them via ACS. Both run every 10s offset
+        # from the outbox webhook drain so concurrent locks are rare.
+        cron(drain_drip_enrollments, second={5, 15, 25, 35, 45, 55}),
+        cron(send_drip_step, second={5, 15, 25, 35, 45, 55}),
         # F33: hourly sweep of magic-link rate-limit rows older than 2h.
         # F34: hourly sweep of expired idempotency-cache rows.
         cron(purge_magic_link_rate_limits, minute=7),
         cron(purge_idempotency_keys, minute=23),
     ]
-    functions = [drain_outbox, send_magic_link_email]
+    functions = [drain_outbox, send_magic_link_email, send_drip_step]
