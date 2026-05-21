@@ -148,12 +148,22 @@ ON CONFLICT DO NOTHING;
 
     # Use the admin endpoint for the membership — exercises the
     # public surface end-to-end.
-    curl -fsS -X POST "${API_URL}/v1/admin/facilitator-memberships" \
+    #
+    # Drop -f so a 409 (membership already exists) doesn't trip
+    # `set -euo pipefail`. The HTTP status is reported either way;
+    # we only care about 201 (created) or 409 (already there).
+    local code
+    code=$(curl -sS -X POST "${API_URL}/v1/admin/facilitator-memberships" \
         -H "Authorization: Bearer ${BEARER}" \
         -H "Content-Type: application/json" \
         -d "{\"user_b2c_subject_id\": \"${sub}\", \"facilitator_org_id\": \"${org_id}\", \"role_in_org\": \"member\"}" \
         -o /dev/null \
-        -w "  ${name} → ${email} (org ${org_id:0:8}): HTTP %{http_code}\n"
+        -w "%{http_code}" 2>/dev/null || echo "000")
+    case "$code" in
+        201) echo "  ${name} → ${email} (org ${org_id:0:8}): created";;
+        409) echo "  ${name} → ${email} (org ${org_id:0:8}): already exists (ok)";;
+        *)   warn "  ${name} → ${email} (org ${org_id:0:8}): HTTP $code (unexpected)";;
+    esac
 }
 
 # Pydantic's email-validator rejects RFC 2606 reserved TLDs (.test,
