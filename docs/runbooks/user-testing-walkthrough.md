@@ -5,9 +5,9 @@ shared with Amy and 1-2 test facilitators while production infra is
 still being provisioned.
 
 Replace `<DEV_URL>` below with whatever URL Joel sends you (will look
-like `http://jbc-dev-mac.atlas-temperature.ts.net:3000` if you're on
-the tailnet, or `http://localhost:3000` if you're testing on the dev
-machine directly).
+like `http://<host>.<tailnet>.ts.net:3030` if you're on the tailnet,
+or `http://localhost:3030` if you're testing on the dev machine
+directly. Joel will send the actual URL).
 
 ---
 

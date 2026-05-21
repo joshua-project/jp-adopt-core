@@ -30,6 +30,10 @@
 set -uo pipefail
 
 API_URL="${API_URL:-http://127.0.0.1:8000}"
+# Optional: set WEB_URL to also run an identity preflight against the
+# Next.js web container. Useful when another local Next dev server
+# might be racing for the host port (e.g. jp-adopt-forms on :3000).
+WEB_URL="${WEB_URL:-}"
 BEARER="${BEARER:-dev-local}"
 QUIET="${QUIET:-0}"
 PG_CONTAINER="${PG_CONTAINER:-jp-adopt-core-postgres-1}"
@@ -105,10 +109,33 @@ curl_post() {
 
 # ─── Step 1: /healthz ──────────────────────────────────────────────────
 say "─── Smoke test against ${API_URL} as Bearer ${BEARER} ───"
+
+# Optional web identity preflight — catches the "wrong app on the
+# host port" failure mode where another local Next dev server has
+# won the host-port race. Only runs when WEB_URL is set.
+if [ -n "$WEB_URL" ]; then
+    web_body=$(curl -s "${WEB_URL}/" 2>/dev/null || echo "")
+    if printf '%s' "$web_body" | grep -q "JP ADOPT"; then
+        ok "0. GET ${WEB_URL}/ — identifies as jp-adopt-core web"
+    else
+        title=$(printf '%s' "$web_body" | grep -oE '<title>[^<]*</title>' | head -1)
+        fail "0. GET ${WEB_URL}/" "doesn't look like jp-adopt-core (title: ${title:-none}). Port conflict?"
+    fi
+fi
+
 result=$(curl_get /healthz)
 status="${result%%::*}"
+body="${result#*::}"
 if [ "$status" = "200" ]; then
-    ok "1. GET /healthz → 200"
+    # Identity check: the body must look like our /healthz payload,
+    # not some other Next/FastAPI app's homepage that happens to
+    # return 200. Caught a real "wrong app on the host port" bug
+    # where another local Next dev server had won the :3000 race.
+    if printf '%s' "$body" | grep -q '"status"\s*:\s*"ok"'; then
+        ok "1. GET /healthz → 200"
+    else
+        fail "1. GET /healthz" "got 200 but response doesn't look like jp-adopt-core (got: ${body:0:120}). Check for port conflict — another app may be on this host port."
+    fi
 else
     fail "1. GET /healthz" "expected 200, got ${status}"
 fi

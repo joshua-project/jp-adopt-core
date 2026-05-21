@@ -165,7 +165,11 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      # Host port 3030 (container still 3000) to avoid colliding with
+      # other Next.js dev servers running locally (jp-adopt-forms,
+      # for example). Override via WEB_HOST_PORT env var when 3030 is
+      # also taken.
+      - "${WEB_HOST_PORT:-3030}:3000"
     environment:
       NODE_ENV: production
 
