@@ -61,13 +61,13 @@ export function HomeDashboard() {
   }, [load]);
 
   return (
-    <div className="space-y-8">
-      <header className="space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-600">
+    <div className="space-y-10">
+      <header className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-jp-accent">
           Adoption program
         </p>
-        <h1 className="font-heading text-4xl font-semibold tracking-tight text-slate-900">
-          Staff console
+        <h1 className="font-heading text-5xl font-semibold leading-tight tracking-tight text-slate-900 sm:text-[56px]">
+          Staff console.
         </h1>
         <p className="max-w-2xl text-base text-slate-600">
           Review pending matches, add walk-in contacts, and check on
@@ -104,28 +104,26 @@ export function HomeDashboard() {
         />
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="font-heading text-lg font-semibold text-slate-900">
-          Other places to go
-        </h2>
-        <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-          <li>
-            <Link
-              className="text-orange-600 hover:underline"
-              href="/contacts"
-            >
-              Browse the contacts list →
-            </Link>
-          </li>
-          <li>
-            <Link
-              className="text-orange-600 hover:underline"
-              href="/matches"
-            >
-              Open the match queue →
-            </Link>
-          </li>
-        </ul>
+      <section className="rounded-lg border border-slate-200 bg-gradient-to-br from-jp-cream via-white to-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-xl">
+            <h2 className="font-heading text-lg font-semibold text-slate-900">
+              Need to look something up?
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              The contacts list shows every adopter and facilitator the
+              program has touched. Use it to find someone by name when you
+              don&apos;t have an open match in front of you.
+            </p>
+          </div>
+          <Link
+            href="/contacts"
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:border-jp-accent hover:text-jp-accent"
+          >
+            Browse contacts
+            <span aria-hidden>→</span>
+          </Link>
+        </div>
         {err ? (
           <p className="mt-3 text-xs text-slate-500">
             Some metrics couldn&apos;t load right now.

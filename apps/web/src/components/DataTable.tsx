@@ -62,27 +62,30 @@ export function DataRow({
   subtle,
   action,
 }: DataRowProps) {
+  const hasFooter = Boolean(subtle || action);
   const body = (
-    <div className="flex flex-col gap-1 px-4 py-3 transition-colors hover:bg-slate-50">
+    <div className="group flex flex-col gap-1 px-4 py-3.5 transition-colors hover:bg-orange-50/40">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 font-medium text-slate-900">
+        <div className="min-w-0 flex-1 font-heading text-[15px] font-semibold text-slate-900">
           {title}
         </div>
-        {badge ? <div className="shrink-0">{badge}</div> : null}
+        <div className="flex shrink-0 items-center gap-3">
+          {badge}
+          {action ? (
+            <span className="text-xs font-medium text-jp-accent opacity-80 transition-opacity group-hover:opacity-100">
+              {action}
+            </span>
+          ) : null}
+        </div>
       </div>
       {meta ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
           {meta}
         </div>
       ) : null}
-      <div className="flex items-end justify-between gap-3">
-        {subtle ? (
-          <div className="text-[11px] text-slate-400">{subtle}</div>
-        ) : (
-          <div />
-        )}
-        {action ? <div className="shrink-0 text-xs">{action}</div> : null}
-      </div>
+      {hasFooter && subtle ? (
+        <div className="text-[11px] text-slate-400">{subtle}</div>
+      ) : null}
     </div>
   );
   // A linked row sets the whole row as the navigation target; a non-linked

@@ -114,17 +114,17 @@ export function ContactsDevOnly() {
         </details>
       </section>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:opacity-50"
           onClick={() => void load()}
           disabled={loading || !token.trim()}
         >
           {loading ? "Loading…" : data ? "Refresh" : "Load contacts"}
         </button>
         {data ? (
-          <p className="text-xs uppercase tracking-wide text-slate-500">
+          <p className="text-xs uppercase tracking-[0.12em] text-slate-500">
             {data.total} total · showing {data.items.length}
           </p>
         ) : null}
@@ -140,7 +140,17 @@ export function ContactsDevOnly() {
 
       {loading && !data ? (
         <DataTable rows={null} empty={<LoadingRows />} />
-      ) : data ? (
+      ) : !data ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+          <p className="font-heading text-lg font-semibold text-slate-800">
+            Ready when you are.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Press <span className="font-semibold text-slate-700">Load contacts</span>{" "}
+            to fetch the list.
+          </p>
+        </div>
+      ) : (
         <DataTable
           rows={
             data.items.length > 0
@@ -173,7 +183,7 @@ export function ContactsDevOnly() {
             />
           }
         />
-      ) : null}
+      )}
     </div>
   );
 }

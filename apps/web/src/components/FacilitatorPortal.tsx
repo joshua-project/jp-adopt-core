@@ -121,9 +121,7 @@ export function FacilitatorPortal() {
                         ) : null}
                       </>
                     }
-                    action={
-                      <span className="text-orange-600">Review →</span>
-                    }
+                    action={<>Review →</>}
                   />
                 ))
               : null

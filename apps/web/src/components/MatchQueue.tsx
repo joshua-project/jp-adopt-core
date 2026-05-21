@@ -58,9 +58,7 @@ function MatchRow({ item }: { item: MatchSummary }) {
         </>
       }
       subtle={<>Recommended {formatTimestamp(item.recommended_at)}</>}
-      action={
-        <span className="text-orange-600 group-hover:underline">Review →</span>
-      }
+      action={<>Review →</>}
     />
   );
 }

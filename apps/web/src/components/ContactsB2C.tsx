@@ -223,6 +223,16 @@ export function ContactsB2C() {
 
       {loading && !data ? (
         <DataTable rows={null} empty={<LoadingRows />} />
+      ) : !data && signedIn ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+          <p className="font-heading text-lg font-semibold text-slate-800">
+            Ready when you are.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Press <span className="font-semibold text-slate-700">Load contacts</span>{" "}
+            to fetch the list.
+          </p>
+        </div>
       ) : data ? (
         <DataTable
           rows={

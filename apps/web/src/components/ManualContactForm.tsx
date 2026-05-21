@@ -270,10 +270,15 @@ export function ManualContactForm() {
           <button
             type="submit"
             disabled={isSubmitting || !displayName || !email}
-            className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-700 disabled:opacity-50"
+            className="inline-flex items-center justify-center rounded-md bg-jp-accent px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-jp-accent-hover disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white disabled:shadow-none"
           >
             {isSubmitting ? "Saving…" : "Create contact"}
           </button>
+          {!displayName || !email ? (
+            <p className="text-xs text-slate-500">
+              Enter a display name and email to save.
+            </p>
+          ) : null}
 
           {err ? (
             <div
