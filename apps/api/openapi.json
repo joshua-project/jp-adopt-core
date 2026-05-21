@@ -71,7 +71,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 100,
+              "maximum": 500,
               "minimum": 1,
               "default": 50,
               "title": "Limit"
@@ -87,6 +87,70 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "party_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "adopter",
+                    "facilitator"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Restrict to one party kind.",
+              "title": "Party Kind"
+            },
+            "description": "Restrict to one party kind."
+          },
+          {
+            "name": "adopter_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter adopters by status. Repeatable: ?adopter_status=new&adopter_status=matched. Ignored when party_kind=facilitator.",
+              "title": "Adopter Status"
+            },
+            "description": "Filter adopters by status. Repeatable: ?adopter_status=new&adopter_status=matched. Ignored when party_kind=facilitator."
+          },
+          {
+            "name": "facilitator_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter facilitators by status. Repeatable. Ignored when party_kind=adopter.",
+              "title": "Facilitator Status"
+            },
+            "description": "Filter facilitators by status. Repeatable. Ignored when party_kind=adopter."
           },
           {
             "name": "authorization",
@@ -112,6 +176,71 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ContactListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/status_counts": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Contact Status Counts",
+        "description": "Aggregate status counts for the pipeline filter chips.\n\nReturns ``{counts: {status: n, ...}, total: N}`` for the requested\nparty kind. NULL statuses are aggregated under ``__unset__`` so the\nUI can render a \"no status\" bucket without losing rows.\n\nWhy a separate endpoint instead of computing client-side from\n``/v1/contacts``: that endpoint paginates (default limit=50), so a\nclient can't sum statuses by walking the list. Sums need a server-\nside aggregate, full stop.",
+        "operationId": "contact_status_counts_v1_contacts_status_counts_get",
+        "parameters": [
+          {
+            "name": "party_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "adopter",
+                "facilitator"
+              ],
+              "type": "string",
+              "description": "Which party kind to count by status. Required \u2014 the two kinds have different status enums and the response shape depends on it.",
+              "title": "Party Kind"
+            },
+            "description": "Which party kind to count by status. Required \u2014 the two kinds have different status enums and the response shape depends on it."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactStatusCounts"
                 }
               }
             }
@@ -2309,6 +2438,36 @@
           "updated_at"
         ],
         "title": "ContactRead"
+      },
+      "ContactStatusCounts": {
+        "properties": {
+          "party_kind": {
+            "type": "string",
+            "enum": [
+              "adopter",
+              "facilitator"
+            ],
+            "title": "Party Kind"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "party_kind",
+          "counts",
+          "total"
+        ],
+        "title": "ContactStatusCounts"
       },
       "DecideRequest": {
         "properties": {

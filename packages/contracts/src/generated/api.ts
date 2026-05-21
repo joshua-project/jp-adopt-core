@@ -67,6 +67,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/status_counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Contact Status Counts
+         * @description Aggregate status counts for the pipeline filter chips.
+         *
+         *     Returns ``{counts: {status: n, ...}, total: N}`` for the requested
+         *     party kind. NULL statuses are aggregated under ``__unset__`` so the
+         *     UI can render a "no status" bucket without losing rows.
+         *
+         *     Why a separate endpoint instead of computing client-side from
+         *     ``/v1/contacts``: that endpoint paginates (default limit=50), so a
+         *     client can't sum statuses by walking the list. Sums need a server-
+         *     side aggregate, full stop.
+         */
+        get: operations["contact_status_counts_v1_contacts_status_counts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/contacts/{contact_id}": {
         parameters: {
             query?: never;
@@ -645,6 +674,20 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ContactStatusCounts */
+        ContactStatusCounts: {
+            /**
+             * Party Kind
+             * @enum {string}
+             */
+            party_kind: "adopter" | "facilitator";
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Total */
+            total: number;
+        };
         /** DecideRequest */
         DecideRequest: {
             /**
@@ -1104,6 +1147,12 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                /** @description Restrict to one party kind. */
+                party_kind?: ("adopter" | "facilitator") | null;
+                /** @description Filter adopters by status. Repeatable: ?adopter_status=new&adopter_status=matched. Ignored when party_kind=facilitator. */
+                adopter_status?: string[] | null;
+                /** @description Filter facilitators by status. Repeatable. Ignored when party_kind=adopter. */
+                facilitator_status?: string[] | null;
             };
             header?: {
                 authorization?: string | null;
@@ -1120,6 +1169,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContactListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    contact_status_counts_v1_contacts_status_counts_get: {
+        parameters: {
+            query: {
+                /** @description Which party kind to count by status. Required — the two kinds have different status enums and the response shape depends on it. */
+                party_kind: "adopter" | "facilitator";
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactStatusCounts"];
                 };
             };
             /** @description Validation Error */

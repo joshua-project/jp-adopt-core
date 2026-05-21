@@ -85,17 +85,17 @@ export function HomeDashboard() {
           accent="orange"
         />
         <QuickActionCard
-          href="/contacts/new"
-          label="Add a contact"
-          description="Walk-ins, phone calls, partner events, referrals."
+          href="/adopters"
+          label="Adopter pipeline"
+          description="Filter by stage: new, contacted, matched, active, sent back."
           metric={null}
           metricSuffix=""
           accent="teal"
         />
         <QuickActionCard
-          href="/facilitator"
-          label="Facilitator portal"
-          description="Adopters matched to a partner organization."
+          href="/facilitators"
+          label="Facilitator pipeline"
+          description="Partner-org contacts by readiness. Plus active drip campaigns."
           metric={counts.activeCampaigns}
           metricSuffix={
             counts.activeCampaigns === 1 ? "active campaign" : "active campaigns"
@@ -111,16 +111,16 @@ export function HomeDashboard() {
               Need to look something up?
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              The contacts list shows every adopter and facilitator the
-              program has touched. Use it to find someone by name when you
-              don&apos;t have an open match in front of you.
+              The adopter and facilitator pipelines show every contact the
+              program has touched, grouped by stage. Filter by status to
+              find someone or to see where the bottleneck is.
             </p>
           </div>
           <Link
-            href="/contacts"
+            href="/adopters"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:border-jp-accent hover:text-jp-accent"
           >
-            Browse contacts
+            Open adopters
             <span aria-hidden>→</span>
           </Link>
         </div>
