@@ -28,9 +28,22 @@ def _cors_params() -> dict[str, object]:
     if settings.is_production:
         origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
         return {"allow_origins": origins}
-    # Next.js dev may bind 3001+ if 3000 is taken; match any localhost port.
+    # Dev: accept localhost (any port — Next sometimes binds 3001+), plus
+    # private RFC 1918 IPs and the Tailscale CGNAT range so a peer browser
+    # on the tailnet can hit the API. Production CORS uses the explicit
+    # allow-list above; this widened regex never runs in prod.
     return {
-        "allow_origin_regex": r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        "allow_origin_regex": (
+            r"https?://("
+            r"localhost|127\.0\.0\.1|0\.0\.0\.0|"
+            r"100\.\d{1,3}\.\d{1,3}\.\d{1,3}|"  # Tailscale CGNAT
+            r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"  # private 10.x
+            r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"  # private 172.16-31.x
+            r"192\.168\.\d{1,3}\.\d{1,3}|"  # private 192.168.x
+            r"[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net|"  # Tailscale MagicDNS
+            r"\[::1\]"
+            r")(:\d+)?"
+        ),
     }
 
 

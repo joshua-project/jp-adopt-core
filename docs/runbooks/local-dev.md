@@ -91,6 +91,38 @@ docker compose --profile full down -v
 
 ---
 
+## Accessing the stack from another device (Tailscale / LAN)
+
+By default the web container's API URL is baked in as `http://127.0.0.1:8000`, which only works from the host machine's browser. To open the stack from your phone, tablet, or another laptop on the same Tailscale tailnet (or LAN), rebuild the web image with a hostname remote peers can reach:
+
+```bash
+# Tailscale (recommended — MagicDNS survives IP changes)
+export NEXT_PUBLIC_API_URL="http://$(hostname -s).<your-tailnet-name>.ts.net:8000"
+
+# Or by Tailscale IP
+export NEXT_PUBLIC_API_URL="http://$(tailscale ip -4):8000"
+
+# Or by LAN IP (less reliable across reboots; fine for short sessions)
+export NEXT_PUBLIC_API_URL="http://$(ipconfig getifaddr en0):8000"
+
+docker compose --profile full build web
+docker compose --profile full up -d
+```
+
+Then open `http://<that-host>:3000` from any peer device.
+
+The API's dev-mode CORS regex already accepts:
+- `localhost` / `127.0.0.1`
+- `100.x.x.x` (entire Tailscale CGNAT range)
+- `10.x.x.x` / `172.16-31.x.x` / `192.168.x.x` (RFC 1918 private networks)
+- `*.ts.net` (any Tailscale MagicDNS hostname)
+
+…so no API rebuild is needed. Production CORS still uses the explicit `CORS_ALLOW_ORIGINS` allow-list; the widened regex never runs in production.
+
+**Trust model note:** the dev CORS regex trusts the entire Tailscale CGNAT range and RFC 1918. Network reachability is the security boundary here, not CORS — the dev API runs with `STRICT_AUTH=false` and accepts `Bearer dev-local`, so anyone with network access to port 8000 can use it. Treat your tailnet + LAN as the trust boundary.
+
+---
+
 ## Seeding test data
 
 After either path is up, populate the local DB with enough data for end-to-end clicks:
