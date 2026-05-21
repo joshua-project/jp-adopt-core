@@ -151,7 +151,16 @@ services:
         # NEXT_PUBLIC_API_URL is baked in at build time. The browser
         # talks to the API via host port 8000, NOT the docker service
         # name — service-name DNS only works inside the compose network.
-        NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000"
+        #
+        # For Tailscale / LAN access, set NEXT_PUBLIC_API_URL in your
+        # shell env to the host's reachable address before rebuilding
+        # the web image:
+        #
+        #   NEXT_PUBLIC_API_URL="http://your-host.your-tailnet.ts.net:8000" \
+        #     docker compose --profile full build web
+        #
+        # Falls back to 127.0.0.1:8000 when unset (laptop-only access).
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}"
     depends_on:
       api:
         condition: service_healthy
