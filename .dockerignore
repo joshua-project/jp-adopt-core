@@ -1,0 +1,64 @@
+# Keep the build context small. Node_modules and venvs are heavy and
+# get installed inside the image anyway. Everything Docker-build needs
+# is listed via positive include patterns below.
+
+# ─── Always exclude ──────────────────────────────────────────────────────
+**/.git
+**/.gitignore
+**/.gitattributes
+**/.github
+**/.dmux
+**/.dmux-hooks
+**/.claude
+**/.idea
+**/.vscode
+**/*.iml
+**/.DS_Store
+**/Thumbs.db
+
+# Build outputs
+**/node_modules
+**/.next
+**/.turbo
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/dist
+**/build
+
+# Local env files — secrets, not for the image. Each stage's compose
+# entry / build arg passes in what it needs.
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Test artifacts + coverage
+**/coverage
+**/htmlcov
+**/.coverage
+
+# Editor / scratch
+**/*.log
+**/*.swp
+**/.scratch
+/tmp
+
+# Docs are not needed inside the container
+docs/
+README.md
+LICENSE
+*.md
+!apps/api/README.md
+!apps/worker/README.md
+!apps/web/README.md
+!apps/etl/README.md
+!apps/etl/runbook.md
+
+# CI / dev tooling
+.github/
+.pre-commit-config.yaml
+.eslintrc*
+.prettierrc*
