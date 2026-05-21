@@ -1,29 +1,7 @@
-import Link from "next/link";
+import { HomeDashboard } from "../src/components/HomeDashboard";
+
+export const dynamic = "force-dynamic";
 
 export default function HomePage() {
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold text-slate-900">Phase 0 spike</h1>
-      <p className="text-slate-600">
-        This app exercises the monorepo stack:{" "}
-        <span className="font-medium">Next.js</span>, the FastAPI service at{" "}
-        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-sm">/v1</code>, the transactional outbox, and
-        the ARQ worker that signs webhooks with{" "}
-        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-sm">X-JP-Signature</code>.
-      </p>
-      <Link
-        href="/contacts"
-        className="inline-flex rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-      >
-        Open contacts
-      </Link>
-      <p className="text-sm text-slate-500">
-        On <code className="rounded bg-slate-100 px-1">/contacts</code>, use <strong>Sign in</strong> (Azure AD
-        B2C via MSAL) when the public B2C env is set, or the dev token field when available. The API also accepts{" "}
-        <code className="rounded bg-slate-100 px-1">Bearer dev-local</code> with{" "}
-        <code className="rounded bg-slate-100 px-1">STRICT_AUTH=false</code> (see runbook and{" "}
-        <code className="rounded bg-slate-100 px-1">apps/web/README.md</code>).
-      </p>
-    </div>
-  );
+  return <HomeDashboard />;
 }

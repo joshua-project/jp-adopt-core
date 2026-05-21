@@ -2,10 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * JP Adopt brand tokens.
+ *
+ * Mirrors the tokens used by the WordPress JP D.T. theme and the
+ * jp-adopt-forms public site, translated to CSS variables consumed by
+ * Tailwind utilities (font-heading / font-body) and by ad-hoc selectors
+ * below. Keep this list in sync with
+ * dt-theme-joshua-project/assets/css/brand.css so the staff console and the
+ * public surfaces feel like the same product.
+ */
 :root {
   color-scheme: light;
+
+  --jp-bg: #ffffff;
+  --jp-surface: #f3f4f6;
+  --jp-border: #e5e7eb;
+  --jp-fg: #1f2937;
+  --jp-muted: #6b7280;
+  --jp-subtle: #9ca3af;
+  --jp-accent: #eb5f1e;
+  --jp-accent-hover: #d4521a;
+  --jp-accent-teal: #2c474b;
+  --jp-accent-gold: #f4b435;
+  --jp-accent-green: #10b981;
+  --jp-cream: #fff7ed;
+  --jp-error: #ef4444;
+  --jp-nav-bg: #303030;
+  --jp-nav-bg-hover: #636363;
 }
 
 body {
   @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+  font-family: var(--font-body), "Open Sans", "Segoe UI", Arial, sans-serif;
+}
+
+/* Headings default to Inter Tight; explicit `font-heading` utility carries
+ * the variable into the className stack so this rule and Tailwind agree. */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading), "Inter Tight", "Segoe UI", Arial, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+@layer components {
+  .form-input {
+    @apply block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30 disabled:bg-slate-100 disabled:text-slate-500;
+  }
+
+  /* Mirror of the JpNavbar look from jp-adopt-forms: dark bar, white
+   * uppercase links, JP orange underline on the active tab. The header
+   * inside SiteHeader composes Tailwind utilities to recreate this. */
+  .jp-nav {
+    background-color: var(--jp-nav-bg);
+  }
+  .jp-nav-link {
+    @apply inline-flex items-center text-sm font-semibold uppercase tracking-wide text-white/85 transition-colors;
+    padding: 22px 18px;
+    letter-spacing: 0.04em;
+  }
+  .jp-nav-link:hover {
+    background-color: var(--jp-nav-bg-hover);
+    color: white;
+  }
+  .jp-nav-link[data-active="true"] {
+    color: white;
+    border-bottom: 3px solid var(--jp-accent);
+    padding-bottom: 19px;
+  }
 }

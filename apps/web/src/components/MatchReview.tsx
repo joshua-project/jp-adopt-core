@@ -159,14 +159,21 @@ export function MatchReview({ matchId }: { matchId: string }) {
         >
           ← back to queue
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">
+        <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight text-slate-900">
           {data.contact_display_name}
         </h1>
-        <p className="text-sm text-slate-600">
-          adopter_status:{" "}
-          <span className="font-mono">{data.contact_adopter_status ?? "—"}</span>{" "}
-          · rop3:{" "}
-          <span className="font-mono">{data.rop3 ?? "—"}</span>
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
+          <span>
+            <span className="text-slate-500">Status:</span>{" "}
+            <span className="font-medium text-slate-800">
+              {(data.contact_adopter_status ?? "—").replace(/_/g, " ")}
+            </span>
+          </span>
+          <span className="text-slate-300">·</span>
+          <span>
+            <span className="text-slate-500">FPG:</span>{" "}
+            <span className="font-mono text-slate-800">{data.rop3 ?? "—"}</span>
+          </span>
         </p>
       </div>
 

@@ -5,13 +5,19 @@ import { useCallback, useEffect, useState } from "react";
 import type { paths } from "@jp-adopt/contracts";
 
 import { isDevTokenUiEnabled } from "../lib/b2c/msalConfig";
+import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
+import { StatusBadge } from "./StatusBadge";
+import { humanizePartyKind } from "../lib/vocab";
 
 type ListResponse = paths["/v1/contacts"]["get"]["responses"]["200"]["content"]["application/json"];
 
 const STORAGE_KEY = "jp_adopt_bearer";
 
 /**
- * Local-dev contacts UI when B2C MSAL is not configured (no public client id, etc.).
+ * Local-dev contacts UI when B2C MSAL is not configured (no public client id,
+ * etc.). The "dev bearer token" field is hidden behind a disclosure so the
+ * page reads like the production contacts view; staff in this build still
+ * see a Contacts table, not a setup checklist.
  */
 export function ContactsDevOnly() {
   const [token, setToken] = useState("");
@@ -60,13 +66,18 @@ export function ContactsDevOnly() {
   if (!showTokenUi) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-semibold">Contacts</h1>
-        <p className="text-sm text-slate-600">
-          Configure <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_AZURE_AD_B2C_*</code> in{" "}
-          <code className="rounded bg-slate-100 px-1">.env.local</code> to enable B2C sign-in, or set{" "}
-          <code className="rounded bg-slate-100 px-1">NODE_ENV=development</code> and{" "}
-          <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_DEV_TOKEN_UI</code> for the manual token path.
-        </p>
+        <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
+          Contacts
+        </h1>
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-700">
+            Sign-in is not yet configured for this environment.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Ask an administrator to complete the Azure AD B2C setup before
+            using the staff console.
+          </p>
+        </div>
       </div>
     );
   }
@@ -74,57 +85,105 @@ export function ContactsDevOnly() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Contacts</h1>
+        <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
+          Contacts
+        </h1>
         <p className="mt-1 text-sm text-slate-600">
-          B2C is not configured for this app build. Set{" "}
-          <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID</code> and related env
-          (see <code className="rounded bg-slate-100 px-1">apps/web/README.md</code>) for interactive sign-in, or
-          use <code className="rounded bg-slate-100 px-1">dev-local</code> with{" "}
-          <code className="rounded bg-slate-100 px-1">STRICT_AUTH=false</code> on the API.
+          Every adopter and facilitator the program has touched.
         </p>
       </div>
-      <div className="space-y-2">
-        <label className="block text-sm font-medium text-slate-700" htmlFor="bearer">
-          Bearer access token
-        </label>
-        <input
-          id="bearer"
-          className="w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-            onClick={() => void load()}
-            disabled={loading || !token.trim()}
-          >
-            {loading ? "Loading…" : "Load contacts"}
-          </button>
-        </div>
-        {err ? <p className="text-sm text-red-600">{err}</p> : null}
-      </div>
-      {data ? (
-        <div className="space-y-2">
-          <p className="text-sm text-slate-500">
-            Total: {data.total} (showing {data.items.length})
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-slate-800">
+            Developer access token (local only)
+          </summary>
+          <div className="mt-3 space-y-2">
+            <label className="block text-xs text-slate-600" htmlFor="bearer">
+              Bearer token
+            </label>
+            <input
+              id="bearer"
+              className="w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </details>
+      </section>
+
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:opacity-50"
+          onClick={() => void load()}
+          disabled={loading || !token.trim()}
+        >
+          {loading ? "Loading…" : data ? "Refresh" : "Load contacts"}
+        </button>
+        {data ? (
+          <p className="text-xs uppercase tracking-[0.12em] text-slate-500">
+            {data.total} total · showing {data.items.length}
           </p>
-          <ul className="divide-y divide-slate-200 overflow-hidden rounded border border-slate-200 bg-white">
-            {data.items.map((c) => (
-              <li key={c.id} className="px-4 py-3">
-                <div className="font-medium text-slate-900">{c.display_name}</div>
-                <div className="text-xs text-slate-500">
-                  {c.party_kind}
-                  {c.adopter_status ? ` · ${c.adopter_status}` : ""}
-                </div>
-              </li>
-            ))}
-          </ul>
+        ) : null}
+      </div>
+      {err ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900"
+        >
+          {err}
         </div>
       ) : null}
+
+      {loading && !data ? (
+        <DataTable rows={null} empty={<LoadingRows />} />
+      ) : !data ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+          <p className="font-heading text-lg font-semibold text-slate-800">
+            Ready when you are.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Press <span className="font-semibold text-slate-700">Load contacts</span>{" "}
+            to fetch the list.
+          </p>
+        </div>
+      ) : (
+        <DataTable
+          rows={
+            data.items.length > 0
+              ? data.items.map((c) => (
+                  <DataRow
+                    key={c.id}
+                    id={c.id}
+                    title={c.display_name}
+                    badge={
+                      c.adopter_status ? (
+                        <StatusBadge status={c.adopter_status} />
+                      ) : undefined
+                    }
+                    meta={
+                      <span>
+                        <span className="text-slate-500">Kind:</span>{" "}
+                        <span className="text-slate-800">
+                          {humanizePartyKind(c.party_kind)}
+                        </span>
+                      </span>
+                    }
+                  />
+                ))
+              : null
+          }
+          empty={
+            <EmptyState
+              title="No contacts yet."
+              description="Add a contact manually, or wait for the public form to receive its first submission."
+            />
+          }
+        />
+      )}
     </div>
   );
 }

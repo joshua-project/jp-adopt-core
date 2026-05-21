@@ -7,6 +7,9 @@ import { useMsal } from "@azure/msal-react";
 import type { paths } from "@jp-adopt/contracts";
 
 import { getApiScopeList, isDevTokenUiEnabled } from "../lib/b2c/msalConfig";
+import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
+import { StatusBadge } from "./StatusBadge";
+import { humanizePartyKind } from "../lib/vocab";
 
 type ListResponse = paths["/v1/contacts"]["get"]["responses"]["200"]["content"]["application/json"];
 
@@ -43,7 +46,9 @@ export function ContactsB2C() {
     const account = instance.getActiveAccount() ?? accounts[0] ?? null;
     if (account) {
       if (scopes.length === 0) {
-        throw new Error("NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES is not set (API scope for access token).");
+        throw new Error(
+          "API scope is not configured. Ask an administrator to set the Azure AD B2C API scope.",
+        );
       }
       try {
         const result = await instance.acquireTokenSilent({
@@ -63,7 +68,7 @@ export function ContactsB2C() {
     if (showDev && devToken.trim()) {
       return devToken.trim();
     }
-    throw new Error("Sign in with Azure AD B2C, or use the dev bearer token (local only).");
+    throw new Error("Sign in to view contacts.");
   }, [accounts, devToken, instance, scopes, showDev]);
 
   const load = useCallback(async () => {
@@ -95,7 +100,9 @@ export function ContactsB2C() {
 
   const signIn = useCallback(() => {
     if (scopes.length === 0) {
-      setErr("Set NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES to your API scope (must match API audience/registration).");
+      setErr(
+        "API scope is not configured. Ask an administrator to set the Azure AD B2C API scope.",
+      );
       return;
     }
     void instance
@@ -119,91 +126,154 @@ export function ContactsB2C() {
   }, [instance, accounts]);
 
   const active = instance.getActiveAccount() ?? accounts[0];
+  const signedIn = Boolean(active) || (showDev && devToken.trim().length > 0);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Contacts</h1>
+        <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
+          Contacts
+        </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Sign in with Azure AD B2C to obtain an access token for the FastAPI API scope. For local work without
-          B2C, use <code className="rounded bg-slate-100 px-1">dev-local</code> in the dev-only token field
-          with <code className="rounded bg-slate-100 px-1">STRICT_AUTH=false</code> on the API.
+          Every adopter and facilitator the program has touched.
         </p>
       </div>
 
-      <div className="space-y-2 rounded border border-slate-200 bg-slate-50/80 px-3 py-3">
-        <p className="text-sm font-medium text-slate-800">Azure AD B2C</p>
-        {active ? (
-          <p className="text-sm text-slate-600">
-            Signed in as <span className="font-mono text-slate-800">{active.username}</span>
-          </p>
-        ) : (
-          <p className="text-sm text-slate-600">Not signed in</p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-            onClick={() => void signIn()}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
-            onClick={() => void signOut()}
-            disabled={!active}
-          >
-            Sign out
-          </button>
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-slate-800">Sign-in</p>
+            {active ? (
+              <p className="mt-0.5 text-sm text-slate-600">
+                Signed in as{" "}
+                <span className="font-medium text-slate-900">
+                  {active.username}
+                </span>
+              </p>
+            ) : (
+              <p className="mt-0.5 text-sm text-slate-600">Not signed in.</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {active ? (
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+                onClick={() => void signOut()}
+              >
+                Sign out
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="rounded-md bg-orange-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-700"
+                onClick={() => void signIn()}
+              >
+                Sign in
+              </button>
+            )}
+          </div>
         </div>
-      </div>
 
-      {showDev ? (
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-slate-700">Dev-only bearer (local)</p>
-          <label className="block text-sm text-slate-600" htmlFor="bearer">
-            Pasted or <code>dev-local</code> when not using B2C; use after signing out to prefer this token.
-          </label>
-          <input
-            id="bearer"
-            className="w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm"
-            value={devToken}
-            onChange={(e) => setDevToken(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
+        {showDev ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700">
+              Developer access token (local only)
+            </summary>
+            <div className="mt-2 space-y-1">
+              <label className="block text-xs text-slate-600" htmlFor="bearer">
+                Bearer token
+              </label>
+              <input
+                id="bearer"
+                className="w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm"
+                value={devToken}
+                onChange={(e) => setDevToken(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </details>
+        ) : null}
+      </section>
+
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+          onClick={() => void load()}
+          disabled={loading || !signedIn}
+        >
+          {loading ? "Loading…" : data ? "Refresh" : "Load contacts"}
+        </button>
+        {data ? (
+          <p className="text-xs uppercase tracking-wide text-slate-500">
+            {data.total} total · showing {data.items.length}
+          </p>
+        ) : null}
+      </div>
+      {err ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900"
+        >
+          {err}
         </div>
       ) : null}
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-          onClick={() => void load()}
-          disabled={loading}
-        >
-          {loading ? "Loading…" : "Load contacts"}
-        </button>
-      </div>
-      {err ? <p className="text-sm text-red-600">{err}</p> : null}
-
-      {data ? (
-        <div className="space-y-2">
-          <p className="text-sm text-slate-500">
-            Total: {data.total} (showing {data.items.length})
+      {loading && !data ? (
+        <DataTable rows={null} empty={<LoadingRows />} />
+      ) : !data && signedIn ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+          <p className="font-heading text-lg font-semibold text-slate-800">
+            Ready when you are.
           </p>
-          <ul className="divide-y divide-slate-200 overflow-hidden rounded border border-slate-200 bg-white">
-            {data.items.map((c) => (
-              <li key={c.id} className="px-4 py-3">
-                <div className="font-medium text-slate-900">{c.display_name}</div>
-                <div className="text-xs text-slate-500">
-                  {c.party_kind}
-                  {c.adopter_status ? ` · ${c.adopter_status}` : ""}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <p className="mt-1 text-sm text-slate-500">
+            Press <span className="font-semibold text-slate-700">Load contacts</span>{" "}
+            to fetch the list.
+          </p>
+        </div>
+      ) : data ? (
+        <DataTable
+          rows={
+            data.items.length > 0
+              ? data.items.map((c) => (
+                  <DataRow
+                    key={c.id}
+                    id={c.id}
+                    title={c.display_name}
+                    badge={
+                      c.adopter_status ? (
+                        <StatusBadge status={c.adopter_status} />
+                      ) : undefined
+                    }
+                    meta={
+                      <span>
+                        <span className="text-slate-500">Kind:</span>{" "}
+                        <span className="text-slate-800">
+                          {humanizePartyKind(c.party_kind)}
+                        </span>
+                      </span>
+                    }
+                  />
+                ))
+              : null
+          }
+          empty={
+            <EmptyState
+              title="No contacts yet."
+              description="Add a contact manually, or wait for the public form to receive its first submission."
+            />
+          }
+        />
+      ) : !signedIn ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-700">
+            Sign in to view contacts.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Contacts are scoped to your organization.
+          </p>
         </div>
       ) : null}
     </div>
