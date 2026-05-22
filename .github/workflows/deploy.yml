@@ -100,16 +100,19 @@ jobs:
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           # Values land in the env block below. Each follows the
-          # documented vault layout: op://JoshuaProject/jp-adopt-core/<key>.
-          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
-          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
-          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
-          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
-          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
-          ACA_API_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_api_app_name
-          ACA_WORKER_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_worker_app_name
-          SWA_APP_NAME: op://JoshuaProject/jp-adopt-core/swa_app_name
-          SWA_API_TOKEN: op://JoshuaProject/jp-adopt-core/swa_api_token
+          # documented vault layout:
+          #   op://JP Adopt Platform/Adopt Core - Production/<kebab-case-key>
+          # (matches the actual 1Password item created by the
+          #  jp-infrastructure operator bringup runbook §3, Category A).
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_API_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-api-app-name
+          ACA_WORKER_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-worker-app-name
+          SWA_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/swa-app-name
+          SWA_API_TOKEN: op://JP Adopt Platform/Adopt Core - Production/swa-api-token
         with:
           export-env: true
 
@@ -128,7 +131,10 @@ jobs:
           for var in "${required[@]}"; do
             value="$(eval echo "\${$var:-}")"
             if [ -z "$value" ]; then
-              echo "::error::Missing required secret $var (vault path: op://JoshuaProject/jp-adopt-core/$(echo "$var" | tr 'A-Z' 'a-z'))"
+              # Field names in 1P are kebab-case; reverse the
+              # ENV_VAR_NAME convention back to the vault layout.
+              field=$(echo "$var" | tr 'A-Z_' 'a-z-')
+              echo "::error::Missing required secret $var (vault path: op://JP Adopt Platform/Adopt Core - Production/${field})"
               exit 1
             fi
           done
@@ -150,10 +156,10 @@ jobs:
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
-          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
-          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
-          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
         with:
           export-env: true
 
@@ -194,10 +200,10 @@ jobs:
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
-          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
-          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
-          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
         with:
           export-env: true
 
@@ -226,6 +232,19 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   # Apply Alembic migrations BEFORE rolling the new image. If migrations
   # fail the deploy aborts and the previous revision keeps serving.
+  #
+  # Path A (per jp-infrastructure PR #157 U11 §6): the migrator
+  # connection string lives in Key Vault as ``db-url-migrator`` on
+  # ``jp-adopt-core-kv-prod``. We fetch it via ``az keyvault secret
+  # show`` inside this job — NOT from 1Password — because Terraform
+  # owns the Postgres credentials and rotates them there. The deploy
+  # SP gains ``Key Vault Secrets User`` on the vault via the role
+  # assignment in PR #157 U3.
+  #
+  # The migrator role (``jp_adopt_migrator``) owns DDL. Runtime
+  # traffic uses ``db-url-runtime`` (the ``jp_adopt`` role with DML
+  # only), injected into the API container via an ACA secret-ref the
+  # Terraform sets up — NOT consumed in this workflow.
   # ──────────────────────────────────────────────────────────────────────
   migrate:
     name: Apply Alembic migrations
@@ -247,20 +266,40 @@ jobs:
         working-directory: apps/api
         run: uv sync --extra dev
 
-      - name: Load DATABASE_URL from 1Password
+      - name: Load Azure identity from 1Password
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          DATABASE_URL: op://JoshuaProject/jp-adopt-core/database_url
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
         with:
           export-env: true
 
-      - name: Verify DATABASE_URL is set
+      - name: Azure login via OIDC
+        # Each GHA job runs on a fresh runner; the login from
+        # ``build-api`` does not carry. Re-login here so the
+        # ``az keyvault`` call below can authenticate.
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Resolve DATABASE_URL from Key Vault (migrator role)
         run: |
-          if [ -z "${DATABASE_URL:-}" ]; then
-            echo "::error::DATABASE_URL is empty; aborting migration."
+          set -euo pipefail
+          db_url=$(az keyvault secret show \
+            --vault-name jp-adopt-core-kv-prod \
+            --name db-url-migrator \
+            --query value -o tsv)
+          if [ -z "$db_url" ]; then
+            echo "::error::db-url-migrator is empty in jp-adopt-core-kv-prod. Has jp-infrastructure stack U4 applied successfully? See jp-infrastructure runbook §6."
             exit 1
           fi
+          # Mask the value in logs before exporting.
+          echo "::add-mask::$db_url"
+          echo "DATABASE_URL=$db_url" >> "$GITHUB_ENV"
 
       - name: Run alembic upgrade head
         working-directory: apps/api
@@ -286,12 +325,12 @@ jobs:
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
-          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
-          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
-          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
-          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
-          ACA_API_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_api_app_name
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_API_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-api-app-name
         with:
           export-env: true
 
@@ -330,22 +369,21 @@ jobs:
           exit 1
 
       - name: Smoke check /healthz exposes new SHA
+        # Curl the PUBLIC SWA hostname, NOT the ACA FQDN. The infra
+        # provisioning (jp-infrastructure PR #157 U5) sets the API's
+        # ingress to external_enabled=false — the ACA FQDN is reachable
+        # only from inside the ACA managed environment. SWA Standard +
+        # linkedBackend (U8) forwards /api/* through to the API, so
+        # ``adopt.joshuaproject.net/api/healthz`` is the working public
+        # entry point. See PR #157 U9 for the apex DNS setup.
         run: |
           set -euo pipefail
-          # The hostname is on the container app's ingress.fqdn — derive it.
-          fqdn=$(az containerapp show \
-            --name "${{ env.ACA_API_APP_NAME }}" \
-            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
-          if [ -z "$fqdn" ]; then
-            echo "::error::Could not resolve container app FQDN"
-            exit 1
-          fi
-          response=$(curl -fsS "https://${fqdn}/healthz")
+          url="https://adopt.joshuaproject.net/api/healthz"
+          response=$(curl -fsS "$url")
           echo "Response: $response"
-          # Confirm the response carries the new SHA prefix.
-          if ! echo "$response" | grep -q "\"sha\":\"$(echo "${{ github.sha }}" | cut -c1-10)\""; then
-            echo "::error::/healthz response does not carry the expected sha"
+          expected_sha="$(echo "${{ github.sha }}" | cut -c1-10)"
+          if ! echo "$response" | grep -q "\"sha\":\"${expected_sha}\""; then
+            echo "::error::${url} response does not carry expected sha ${expected_sha}"
             exit 1
           fi
 
@@ -361,12 +399,12 @@ jobs:
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
-          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
-          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
-          ACR_LOGIN_SERVER: op://JoshuaProject/jp-adopt-core/acr_login_server
-          ACA_RESOURCE_GROUP: op://JoshuaProject/jp-adopt-core/aca_resource_group
-          ACA_WORKER_APP_NAME: op://JoshuaProject/jp-adopt-core/aca_worker_app_name
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_WORKER_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-worker-app-name
         with:
           export-env: true
 
@@ -419,7 +457,7 @@ jobs:
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          SWA_API_TOKEN: op://JoshuaProject/jp-adopt-core/swa_api_token
+          SWA_API_TOKEN: op://JP Adopt Platform/Adopt Core - Production/swa-api-token
         with:
           export-env: true
 
