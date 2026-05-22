@@ -226,6 +226,18 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   # Apply Alembic migrations BEFORE rolling the new image. If migrations
   # fail the deploy aborts and the previous revision keeps serving.
+  #
+  # Path A (per jp-infrastructure PR #157 U11 §6): the migrator
+  # connection string lives in Key Vault as ``db-url-migrator``. We
+  # pull it via Azure CLI inside this job — NOT from 1Password —
+  # because Terraform owns the Postgres credentials and rotates them
+  # there. The deploy SP gains ``Key Vault Secrets User`` on
+  # ``jpadoptcorekvprod`` via the role assignment in PR #157 U3.
+  #
+  # The migrator role (``jp_adopt_migrator``) owns DDL. Runtime traffic
+  # uses ``db-url-runtime`` (the ``jp_adopt`` role with DML only), which
+  # is injected into the API container via the ACA secret-ref the
+  # Terraform sets up — NOT consumed in this workflow.
   # ──────────────────────────────────────────────────────────────────────
   migrate:
     name: Apply Alembic migrations
@@ -247,20 +259,42 @@ jobs:
         working-directory: apps/api
         run: uv sync --extra dev
 
-      - name: Load DATABASE_URL from 1Password
+      - name: Load Azure identity from 1Password
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          DATABASE_URL: op://JoshuaProject/jp-adopt-core/database_url
+          AZURE_TENANT_ID: op://JoshuaProject/jp-adopt-core/azure_tenant_id
+          AZURE_SUBSCRIPTION_ID: op://JoshuaProject/jp-adopt-core/azure_subscription_id
+          AZURE_CLIENT_ID: op://JoshuaProject/jp-adopt-core/azure_client_id
+          KEY_VAULT_NAME: op://JoshuaProject/jp-adopt-core/key_vault_name
         with:
           export-env: true
 
-      - name: Verify DATABASE_URL is set
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Load DATABASE_URL from Key Vault (migrator role)
         run: |
-          if [ -z "${DATABASE_URL:-}" ]; then
-            echo "::error::DATABASE_URL is empty; aborting migration."
+          set -euo pipefail
+          if [ -z "${KEY_VAULT_NAME:-}" ]; then
+            echo "::error::KEY_VAULT_NAME is empty. The 1Password vault item must include 'key_vault_name' (e.g. 'jpadoptcorekvprod'). See jp-infrastructure runbook §3."
             exit 1
           fi
+          db_url=$(az keyvault secret show \
+            --vault-name "${KEY_VAULT_NAME}" \
+            --name db-url-migrator \
+            --query value -o tsv)
+          if [ -z "$db_url" ]; then
+            echo "::error::db-url-migrator is empty in Key Vault ${KEY_VAULT_NAME}. Has jp-infrastructure stack U4 applied successfully?"
+            exit 1
+          fi
+          # Mask the value in logs.
+          echo "::add-mask::$db_url"
+          echo "DATABASE_URL=$db_url" >> "$GITHUB_ENV"
 
       - name: Run alembic upgrade head
         working-directory: apps/api

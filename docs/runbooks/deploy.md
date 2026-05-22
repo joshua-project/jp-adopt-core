@@ -50,15 +50,32 @@ the Terraform; this runbook references the resources it creates.
    container-app + static-web-app data-plane roles.
 
 3. **1Password vault setup.** A `JoshuaProject` vault with a
-   `jp-adopt-core` item containing the keys the workflow expects:
+   `jp-adopt-core` item containing the keys the workflow expects.
+   Per jp-infrastructure PR #157, these are split into two
+   categories:
+
+   **Category A — Azure infra identifiers** (operator-seeded; consumed
+   by `deploy.yml`):
    - `azure_tenant_id`, `azure_subscription_id`, `azure_client_id`
    - `acr_login_server` (e.g. `jpadopt.azurecr.io`)
    - `aca_resource_group` (e.g. `rg-jp-adopt-prod`)
    - `aca_api_app_name`, `aca_worker_app_name`
    - `swa_app_name`, `swa_api_token`
-   - `database_url` (the production Postgres connection string used by
-     the migrate step; uses the per-app migrator role per the
-     institutional learning from dt-adoption-platform)
+   - `key_vault_name` (e.g. `jpadoptcorekvprod`) — added so the
+     migrate step can fetch the migrator URL from KV
+
+   **Category B — Terraform-managed secrets** (consumed by
+   jp-infrastructure's `terraform.yml`; NOT used directly here):
+   - 10 `TF_VAR_jp_adopt_core_*` values seeded by the operator,
+     read by Terraform during apply. See the jp-infrastructure
+     bringup runbook §2 for the full list.
+
+   The production Postgres connection string is **not** in 1Password
+   anymore — Terraform constructs `db-url-migrator` and `db-url-runtime`
+   from the managed Postgres credentials and stores them in Key Vault.
+   The migrate step in `deploy.yml` pulls `db-url-migrator` via
+   `az keyvault secret show` at run time, with the deploy SP scoped
+   to `Key Vault Secrets User` on that vault.
 
 4. **OIDC service-account token on the repo.** Add the GitHub repo
    secret `OP_SERVICE_ACCOUNT_TOKEN` with the service-account token
@@ -186,5 +203,8 @@ rolled".
   Terraform; the deploy.yml does `--set-env-vars` only for `DEPLOY_SHA`
   + the image tag, never the whole map.
 - Fail-fast guard before any Azure write (preflight job).
-- Per-app DB user discipline — `database_url` in the migrate job uses
-  the migrator role, not the runtime role.
+- Per-app DB user discipline — the migrate job pulls `db-url-migrator`
+  from Key Vault (DDL-owning role), not the runtime role. The runtime
+  `db-url-runtime` is injected into the API container via an ACA
+  secret-ref set up by jp-infrastructure Terraform; this workflow
+  never reads it.
