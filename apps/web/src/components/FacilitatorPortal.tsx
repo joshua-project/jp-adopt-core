@@ -97,7 +97,7 @@ export function FacilitatorPortal() {
                     id={item.id}
                     href={`/facilitator/contacts/${item.contact_id}?match=${item.id}`}
                     title={item.contact_display_name}
-                    badge={<StatusBadge status={item.status} />}
+                    badge={<StatusBadge status={item.status} kind="match" />}
                     meta={
                       <>
                         {item.rop3 ? (

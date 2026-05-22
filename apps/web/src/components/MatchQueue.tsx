@@ -28,7 +28,7 @@ function MatchRow({ item }: { item: MatchSummary }) {
       id={item.id}
       href={`/matches/${item.id}`}
       title={item.contact_display_name}
-      badge={<StatusBadge status={item.status} />}
+      badge={<StatusBadge status={item.status} kind="match" />}
       meta={
         <>
           {item.rop3 ? (

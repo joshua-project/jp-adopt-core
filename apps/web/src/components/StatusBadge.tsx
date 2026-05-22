@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { humanizeStatus, type StatusKind } from "../lib/vocab";
+
 /**
  * Semantic status palette.
  * - green  = recommended / accepted / active / ready / matched
@@ -46,18 +48,21 @@ const TONE_CLASS: Record<Tone, string> = {
 export function StatusBadge({
   status,
   tone,
+  kind = "adopter",
   children,
 }: {
   status?: string;
   tone?: Tone;
+  /** Which status enum the value belongs to. Drives the label lookup. */
+  kind?: StatusKind;
   children?: ReactNode;
 }) {
   const resolvedTone: Tone =
     tone ?? (status ? STATUS_TONE[status] ?? "slate" : "slate");
-  const label = children ?? humanizeStatus(status ?? "");
+  const label = children ?? humanizeStatus(status, kind);
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${TONE_CLASS[resolvedTone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium tracking-wide ${TONE_CLASS[resolvedTone]}`}
     >
       {label}
     </span>
@@ -73,9 +78,3 @@ export function CodeChip({ children }: { children: ReactNode }) {
   );
 }
 
-function humanizeStatus(s: string): string {
-  if (!s) return "";
-  return s
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}

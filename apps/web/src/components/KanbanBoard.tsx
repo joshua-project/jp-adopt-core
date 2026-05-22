@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-import { humanizeStatus } from "../lib/vocab";
+import { humanizeStatus, type StatusKind } from "../lib/vocab";
 
 /**
  * Horizontal-scroll kanban: one column per status, cards inside each
@@ -26,6 +26,8 @@ export interface KanbanBoardProps<T> {
   renderCard: (item: T) => ReactNode;
   /** Optional tone hint per status — defaults to slate. */
   toneFor?: (status: string) => "green" | "amber" | "slate" | "rose" | "teal";
+  /** Which enum the statuses belong to. Drives column label lookup. */
+  kind?: StatusKind;
 }
 
 const TONE_BORDER: Record<string, string> = {
@@ -43,6 +45,7 @@ export function KanbanBoard<T>({
   counts,
   renderCard,
   toneFor,
+  kind = "adopter",
 }: KanbanBoardProps<T>) {
   // Bucket items by status. Nulls go to `__unset__`.
   const buckets: Record<string, T[]> = {};
@@ -63,7 +66,7 @@ export function KanbanBoard<T>({
           const bucket = buckets[status] ?? [];
           const tone = toneFor?.(status) ?? "slate";
           const label =
-            status === "__unset__" ? "Unset" : humanizeStatus(status);
+            status === "__unset__" ? "Unset" : humanizeStatus(status, kind);
           const count = counts?.[status] ?? bucket.length;
           return (
             <div

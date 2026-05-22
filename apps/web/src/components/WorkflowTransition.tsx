@@ -14,6 +14,7 @@ import {
 } from "../lib/api-client";
 import { REASON_CODES, type ReasonCode } from "../lib/reason-codes";
 import { useApiContext } from "../lib/useApiContext";
+import { humanizeReasonCode, humanizeStatus } from "../lib/vocab";
 
 type Contact =
   paths["/v1/contacts/{contact_id}"]["get"]["responses"]["200"]["content"]["application/json"];
@@ -239,8 +240,8 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
                 setKind(e.target.value as "adopter" | "facilitator")
               }
             >
-              <option value="adopter">adopter</option>
-              <option value="facilitator">facilitator</option>
+              <option value="adopter">Adopter</option>
+              <option value="facilitator">Facilitator</option>
             </select>
           </label>
           <label className="text-xs text-slate-600">
@@ -255,7 +256,7 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
               </option>
               {states.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {humanizeStatus(s, kind)}
                 </option>
               ))}
             </select>
@@ -269,7 +270,7 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
             >
               {REASON_OPTIONS.map((r) => (
                 <option key={r || "_"} value={r}>
-                  {r || "—"}
+                  {r ? humanizeReasonCode(r) : "—"}
                 </option>
               ))}
             </select>

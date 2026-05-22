@@ -170,6 +170,7 @@ export function PipelineView({
         selected={selected}
         onChange={setSelected}
         total={countsTotal}
+        kind={partyKind}
       />
 
       {err ? (
@@ -199,6 +200,7 @@ export function PipelineView({
               key={c.id}
               contact={c}
               statusField={statusField}
+              kind={partyKind}
             />
           ))}
         />
@@ -209,7 +211,10 @@ export function PipelineView({
           getStatus={(c) => c[statusField] as string | null | undefined}
           counts={counts}
           toneFor={toneFor}
-          renderCard={(c) => <ContactCard contact={c} statusField={statusField} />}
+          kind={partyKind}
+          renderCard={(c) => (
+            <ContactCard contact={c} statusField={statusField} kind={partyKind} />
+          )}
         />
       )}
 
@@ -223,9 +228,11 @@ export function PipelineView({
 function ContactRowView({
   contact,
   statusField,
+  kind,
 }: {
   contact: ContactRow;
   statusField: "adopter_status" | "facilitator_status";
+  kind: PartyKind;
 }) {
   const status = contact[statusField] as string | null | undefined;
   return (
@@ -233,7 +240,7 @@ function ContactRowView({
       id={contact.id}
       href={`/workflow/${contact.id}`}
       title={contact.display_name}
-      badge={<StatusBadge status={status ?? undefined} />}
+      badge={<StatusBadge status={status ?? undefined} kind={kind} />}
       meta={
         <>
           {contact.email_normalized ? (
@@ -271,9 +278,11 @@ function ContactRowView({
 function ContactCard({
   contact,
   statusField,
+  kind,
 }: {
   contact: ContactRow;
   statusField: "adopter_status" | "facilitator_status";
+  kind: PartyKind;
 }) {
   const status = contact[statusField] as string | null | undefined;
   return (
@@ -285,8 +294,8 @@ function ContactCard({
         <h4 className="font-heading text-sm font-semibold text-slate-900">
           {contact.display_name}
         </h4>
-        <StatusBadge status={status ?? undefined}>
-          {status ? humanizeStatus(status) : "Unset"}
+        <StatusBadge status={status ?? undefined} kind={kind}>
+          {status ? humanizeStatus(status, kind) : "Unset"}
         </StatusBadge>
       </div>
       <div className="mt-2 space-y-0.5 text-[11px] text-slate-600">
