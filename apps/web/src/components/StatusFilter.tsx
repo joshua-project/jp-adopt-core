@@ -2,7 +2,7 @@
 
 import type { Dispatch, SetStateAction } from "react";
 
-import { humanizeStatus } from "../lib/vocab";
+import { humanizeStatus, type StatusKind } from "../lib/vocab";
 
 /**
  * Multi-select chip row used on /adopters and /facilitators to filter
@@ -26,6 +26,8 @@ export interface StatusFilterProps {
   onChange: Dispatch<SetStateAction<Set<string>>>;
   /** Total across all statuses, shown when no filter is active. */
   total?: number;
+  /** Which enum these statuses belong to. Drives the label table. */
+  kind?: StatusKind;
 }
 
 export function StatusFilter({
@@ -34,6 +36,7 @@ export function StatusFilter({
   selected,
   onChange,
   total,
+  kind = "adopter",
 }: StatusFilterProps) {
   const hasSelection = selected.size > 0;
   const toggleStatus = (s: string) => {
@@ -50,7 +53,7 @@ export function StatusFilter({
       <button
         type="button"
         onClick={() => onChange(new Set())}
-        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wide transition ${
+        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition ${
           hasSelection
             ? "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
             : "border-slate-900 bg-slate-900 text-white"
@@ -74,13 +77,13 @@ export function StatusFilter({
         const isSelected = selected.has(status);
         const count = counts[status] ?? 0;
         const label =
-          status === "__unset__" ? "Unset" : humanizeStatus(status);
+          status === "__unset__" ? "Unset" : humanizeStatus(status, kind);
         return (
           <button
             key={status}
             type="button"
             onClick={() => toggleStatus(status)}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wide transition ${
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium tracking-wide transition ${
               isSelected
                 ? "border-jp-accent bg-jp-accent text-white shadow-sm"
                 : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"

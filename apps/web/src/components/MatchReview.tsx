@@ -9,6 +9,7 @@ import type { paths } from "@jp-adopt/contracts";
 import { ApiError, decideMatch, getMatch } from "../lib/api-client";
 import { REASON_CODES, isReasonCode, type ReasonCode } from "../lib/reason-codes";
 import { useApiContext } from "../lib/useApiContext";
+import { humanizeReasonCode } from "../lib/vocab";
 
 type Match =
   paths["/v1/matches/{match_id}"]["get"]["responses"]["200"]["content"]["application/json"];
@@ -227,7 +228,7 @@ export function MatchReview({ matchId }: { matchId: string }) {
               <option value="">—</option>
               {REASON_CODES.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {humanizeReasonCode(r)}
                 </option>
               ))}
             </select>

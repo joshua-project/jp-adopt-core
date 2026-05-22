@@ -45,15 +45,83 @@ export const PARTY_KIND_OPTIONS: ReadonlyArray<{ value: "adopter" | "facilitator
   { value: "facilitator", label: PARTY_KIND_LABELS.facilitator },
 ];
 
-export function humanizeStatus(value: string | null | undefined): string {
+/**
+ * Status labels are kind-aware: an "adopter" with status `new` and a
+ * "facilitator" with status `new` mean different things in context.
+ * The default `humanizeStatus(value)` keeps a single source of truth
+ * across surfaces (filter chips, row badges, kanban headers) and reads
+ * as sentence case ("Reached out", not "Reached Out") to match modern
+ * CRM convention. The all-caps treatment in some badges comes from
+ * Tailwind `uppercase` on the wrapper, not from the label itself.
+ */
+
+const ADOPTER_STATUS_LABELS: Record<string, string> = {
+  new: "New",
+  potential_adopter: "Needs FPG selection",
+  contacted: "Reached out",
+  engaged: "In conversation",
+  matched: "Matched",
+  sent_back: "Returned to queue",
+  active: "Active adoption",
+  inactive: "Inactive",
+  do_not_engage: "Opted out",
+  draft: "Draft",
+};
+
+const FACILITATOR_STATUS_LABELS: Record<string, string> = {
+  new: "New",
+  not_ready: "Onboarding pending",
+  ready: "Ready for matches",
+  do_not_engage: "Paused",
+  draft: "Draft",
+};
+
+const MATCH_STATUS_LABELS: Record<string, string> = {
+  recommended: "Awaiting review",
+  accepted: "Accepted",
+  active: "In progress",
+  triage: "Needs triage",
+  declined: "Declined",
+  sent_back: "Returned",
+  matched: "Matched",
+};
+
+const REASON_CODE_LABELS: Record<string, string> = {
+  capacity_full: "Facilitator at capacity",
+  geography_mismatch: "Geography mismatch",
+  language: "Language mismatch",
+  theological_concern: "Theological concern",
+  not_ready: "Adopter not ready",
+  other: "Other (see notes)",
+};
+
+export type StatusKind = "adopter" | "facilitator" | "match";
+
+/** Look up a status label by kind. Falls back to `humanize` for unknowns. */
+export function humanizeStatus(
+  value: string | null | undefined,
+  kind: StatusKind = "adopter",
+): string {
   if (!value) return "—";
-  return humanize(value);
+  const table =
+    kind === "facilitator"
+      ? FACILITATOR_STATUS_LABELS
+      : kind === "match"
+        ? MATCH_STATUS_LABELS
+        : ADOPTER_STATUS_LABELS;
+  return table[value] ?? humanize(value);
+}
+
+/** Look up a send-back reason code label. */
+export function humanizeReasonCode(value: string | null | undefined): string {
+  if (!value) return "—";
+  return REASON_CODE_LABELS[value] ?? humanize(value);
 }
 
 export function humanize(s: string): string {
   return s
     .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/^\w/, (c) => c.toUpperCase());
 }
 
 /** Format an ISO timestamp as a compact local string. */

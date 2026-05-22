@@ -160,8 +160,13 @@ export function ContactsDevOnly() {
                     id={c.id}
                     title={c.display_name}
                     badge={
-                      c.adopter_status ? (
-                        <StatusBadge status={c.adopter_status} />
+                      c.party_kind === "facilitator" && c.facilitator_status ? (
+                        <StatusBadge
+                          status={c.facilitator_status}
+                          kind="facilitator"
+                        />
+                      ) : c.adopter_status ? (
+                        <StatusBadge status={c.adopter_status} kind="adopter" />
                       ) : undefined
                     }
                     meta={
