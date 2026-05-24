@@ -49,16 +49,31 @@ the Terraform; this runbook references the resources it creates.
    `rg-jp-adopt-prod`, `AcrPush` on the ACR, and the relevant
    container-app + static-web-app data-plane roles.
 
-3. **1Password vault setup.** A `JoshuaProject` vault with a
-   `jp-adopt-core` item containing the keys the workflow expects:
-   - `azure_tenant_id`, `azure_subscription_id`, `azure_client_id`
-   - `acr_login_server` (e.g. `jpadopt.azurecr.io`)
-   - `aca_resource_group` (e.g. `rg-jp-adopt-prod`)
-   - `aca_api_app_name`, `aca_worker_app_name`
-   - `swa_app_name`, `swa_api_token`
-   - `database_url` (the production Postgres connection string used by
-     the migrate step; uses the per-app migrator role per the
-     institutional learning from dt-adoption-platform)
+3. **1Password vault setup.** A `JP Adopt Platform` vault with an
+   `Adopt Core - Production` item containing the keys the workflow
+   expects (created 2026-05-21 in the `joshuaproject` account). Per
+   jp-infrastructure PR #157, the secrets split into two categories:
+
+   **Category A — Azure infra identifiers** (operator-seeded; consumed
+   by this `deploy.yml`). Field names are **kebab-case**:
+   - `azure-tenant-id`, `azure-subscription-id`, `azure-client-id`
+   - `acr-login-server` (e.g. `jpadopt.azurecr.io`)
+   - `aca-resource-group` (e.g. `rg-jp-adopt-prod`)
+   - `aca-api-app-name`, `aca-worker-app-name`
+   - `swa-app-name`, `swa-api-token`
+
+   **Category B — Terraform-managed secrets** (consumed by
+   jp-infrastructure's `terraform.yml`; NOT used directly here): 10
+   `TF_VAR_jp_adopt_core_*` values. See the jp-infrastructure
+   bringup runbook §2 for the full list.
+
+   The production Postgres connection string is **not** in 1Password
+   anymore. Terraform constructs `db-url-migrator` (DDL role, for
+   alembic) and `db-url-runtime` (DML role, for the runtime API
+   container) and stores them in the `jp-adopt-core-kv-prod` Key
+   Vault. The migrate step in `deploy.yml` pulls `db-url-migrator`
+   via `az keyvault secret show` at run time, with the deploy SP
+   scoped to `Key Vault Secrets User` on that vault.
 
 4. **OIDC service-account token on the repo.** Add the GitHub repo
    secret `OP_SERVICE_ACCOUNT_TOKEN` with the service-account token
@@ -96,23 +111,28 @@ gh workflow run deploy.yml -f target=api -R joshua-project/jp-adopt-core
 ## Verification after deploy
 
 The workflow's `Smoke check /healthz exposes new SHA` step does this
-automatically, but the operator should re-run it after a manual deploy:
+automatically (hitting the public SWA URL), but the operator should
+re-run after a manual deploy:
 
 ```bash
-fqdn=$(az containerapp show \
-  --name jp-adopt-api \
-  --resource-group rg-jp-adopt-prod \
-  --query "properties.configuration.ingress.fqdn" -o tsv)
-curl -fsS "https://${fqdn}/healthz"
+curl -fsS "https://adopt.joshuaproject.net/api/healthz"
 # Expected: {"status":"ok","sha":"<10-char commit prefix>"}
 
-curl -fsS "https://${fqdn}/readyz"
+curl -fsS "https://adopt.joshuaproject.net/api/readyz"
 # Expected: {"status":"ready","sha":"<10-char commit prefix>"}
 ```
 
-If `/readyz` returns 503, Postgres is unreachable from the container.
-Check the container's `DATABASE_URL` env var + the Postgres firewall
-allow-list.
+These URLs go through Static Web Apps' linked-backend forwarding
+(`/api/*` → API ACA), so they exercise the public entry path that
+real users hit. **Don't curl the ACA FQDN directly** — the
+infrastructure provisioning (jp-infrastructure PR #157 U5) marks the
+API ingress as `external_enabled=false`, so the ACA FQDN is only
+reachable from inside the managed environment.
+
+If `/api/readyz` returns 503, Postgres is unreachable from the
+container. Check the container's `DATABASE_URL` injection (via ACA
+secret-ref to `db-url-runtime` in `jp-adopt-core-kv-prod`) + the
+Postgres firewall allow-list.
 
 ## Rollback
 
@@ -131,11 +151,7 @@ az containerapp ingress traffic set \
   --revision-weight <previous-revision-name>=100
 
 # 3. Confirm /healthz returns the old SHA
-fqdn=$(az containerapp show \
-  --name jp-adopt-api \
-  --resource-group rg-jp-adopt-prod \
-  --query "properties.configuration.ingress.fqdn" -o tsv)
-curl -fsS "https://${fqdn}/healthz"
+curl -fsS "https://adopt.joshuaproject.net/api/healthz"
 ```
 
 Migrations are NOT rolled back automatically. If the bad deploy
@@ -153,8 +169,8 @@ the per-PR migration body for the safest downgrade target.
 
 Set up a synthetic monitor (Azure Monitor / Datadog / Uptime Robot —
 pick one) hitting:
-- `GET /healthz` every 60s — pages on 2 consecutive failures
-- `GET /readyz` every 5 min — pages on 1 failure (Postgres outage)
+- `GET https://adopt.joshuaproject.net/api/healthz` every 60s — pages on 2 consecutive failures
+- `GET https://adopt.joshuaproject.net/api/readyz` every 5 min — pages on 1 failure (Postgres outage)
 
 Both endpoints return the deploy SHA in the response body so the
 monitor's history can correlate "started failing" with "new revision
@@ -186,5 +202,8 @@ rolled".
   Terraform; the deploy.yml does `--set-env-vars` only for `DEPLOY_SHA`
   + the image tag, never the whole map.
 - Fail-fast guard before any Azure write (preflight job).
-- Per-app DB user discipline — `database_url` in the migrate job uses
-  the migrator role, not the runtime role.
+- Per-app DB user discipline — the migrate job pulls
+  `db-url-migrator` from Key Vault (DDL-owning role) at run time, not
+  from 1Password. The runtime `db-url-runtime` is injected into the
+  API container via an ACA secret-ref Terraform sets up; this
+  workflow never reads it.
