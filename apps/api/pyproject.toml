@@ -10,6 +10,14 @@ dependencies = [
     "email-validator>=2.2.0",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
+    # psycopg3 (sync) for Alembic migrations. The runtime app uses
+    # asyncpg via SQLAlchemy 2's async engine; Alembic needs a sync
+    # driver and connects via the `db-url-migrator` KV secret whose
+    # scheme is `postgresql+psycopg://` (the SQLAlchemy v2 psycopg3
+    # dialect). Required by .github/workflows/deploy.yml's `migrate`
+    # job; without this, `uv run alembic upgrade head` errors with
+    # `ModuleNotFoundError: No module named 'psycopg'`.
+    "psycopg[binary]>=3.2.0",
     "pydantic-settings>=2.7.0",
     "pyjwt[crypto]>=2.10.0",
     "sqlalchemy[asyncio]>=2.0.36",
