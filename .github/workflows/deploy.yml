@@ -477,6 +477,24 @@ jobs:
           export-env: true
 
       - name: Deploy to Azure Static Web Apps
+        # output_location points at the standalone build subtree (not bare
+        # `.next`). Why: bare `.next` includes .next/cache (98 MB) and
+        # both server + standalone outputs, totaling ~154 MB / 2142 files.
+        # SWA's per-file upload overhead pushed total upload past the
+        # action's 10-min polling timeout (first 2 deploys on 2026-05-24
+        # both timed out at ~590s with "Upload Timed Out. Unsure if
+        # deployment was successful or not."). The standalone subtree
+        # is 54 MB / 2040 files — comfortably within the SWA hybrid
+        # Next.js 250 MB cap (per learn.microsoft.com/azure/static-web-
+        # apps/deploy-nextjs-hybrid) and fast enough to upload in
+        # under a minute.
+        #
+        # For pnpm monorepo standalone output, the server.js entry
+        # point lives at apps/web/.next/standalone/apps/web/server.js
+        # (Next.js preserves the workspace subdir structure). The build
+        # script in apps/web/package.json was updated to copy `.next/
+        # static` (and `public` if present) into that subdir so the
+        # uploaded bundle is self-contained.
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ env.SWA_API_TOKEN }}
@@ -484,5 +502,5 @@ jobs:
           action: upload
           app_location: "apps/web"
           api_location: ""
-          output_location: ".next"
+          output_location: ".next/standalone/apps/web"
           skip_app_build: true
