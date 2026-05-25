@@ -354,21 +354,28 @@ jobs:
             --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
 
       - name: Wait for new revision to become ready
+        # 30 retries × 10s = 300s ceiling. Bumped from 100s on
+        # 2026-05-24 because first-deploy revisions take ~150-200s
+        # (cold ACR pull + container start + asyncpg pool warmup +
+        # startup probe loop with failure_count_threshold=40 ×
+        # period_seconds=3). Steady-state deploys land in 30-60s once
+        # the image is cached on the node; the higher ceiling only
+        # affects first-time deploys + image-tag rolls that miss cache.
         run: |
           set -euo pipefail
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          for i in $(seq 1 30); do
             state=$(az containerapp revision list \
               --name "${{ env.ACA_API_APP_NAME }}" \
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
               --query "[?properties.active==\`true\`] | [0].properties.healthState" -o tsv 2>/dev/null || echo "")
             if [ "$state" = "Healthy" ]; then
-              echo "Revision healthy."
+              echo "Revision healthy after ${i} polls."
               exit 0
             fi
-            echo "Revision state=$state — retrying in 10s ($i/10)"
+            echo "Revision state=$state — retrying in 10s ($i/30)"
             sleep 10
           done
-          echo "::error::API revision did not reach Healthy within 100s"
+          echo "::error::API revision did not reach Healthy within 300s"
           exit 1
 
       - name: Smoke check /healthz exposes new SHA
@@ -376,12 +383,17 @@ jobs:
         # provisioning (jp-infrastructure PR #157 U5) sets the API's
         # ingress to external_enabled=false — the ACA FQDN is reachable
         # only from inside the ACA managed environment. SWA Standard +
-        # linkedBackend (U8) forwards /api/* through to the API, so
-        # ``adopt.joshuaproject.net/api/healthz`` is the working public
-        # entry point. See PR #157 U9 for the apex DNS setup.
+        # linkedBackend (U8) forwards /api/* through to the API.
+        #
+        # NOTE 2026-05-24: hostname is `adoption.joshuaproject.net`
+        # (with -ion suffix), NOT `adopt.joshuaproject.net`. The
+        # latter belongs to the DT Platform (the WordPress site we're
+        # replacing); using it here returned 200 with DT's SHA, not
+        # ours, and the SHA-grep failed. See jp-infrastructure plan
+        # KD5 for the rationale.
         run: |
           set -euo pipefail
-          url="https://adopt.joshuaproject.net/api/healthz"
+          url="https://adoption.joshuaproject.net/api/healthz"
           response=$(curl -fsS "$url")
           echo "Response: $response"
           expected_sha="$(echo "${{ github.sha }}" | cut -c1-10)"
