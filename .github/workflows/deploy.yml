@@ -111,6 +111,9 @@ jobs:
           ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
           ACA_API_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-api-app-name
           ACA_WORKER_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-worker-app-name
+          ACA_WEB_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-web-app-name
+          # SWA_* retained as a rollback escape hatch until the web Container
+          # App soaks (plan Part D retires the SWA). Not in the required list.
           SWA_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/swa-app-name
           SWA_API_TOKEN: op://JP Adopt Platform/Adopt Core - Production/swa-api-token
         with:
@@ -127,6 +130,7 @@ jobs:
             ACA_RESOURCE_GROUP
             ACA_API_APP_NAME
             ACA_WORKER_APP_NAME
+            ACA_WEB_APP_NAME
           )
           for var in "${required[@]}"; do
             value="$(eval echo "\${$var:-}")"
@@ -231,6 +235,65 @@ jobs:
             ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:latest
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache,mode=max
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Build + push the web image. The Next.js app builds `output: standalone`
+  # and runs as its own Container App (NOT Static Web Apps — SWA cannot run
+  # a standalone Node server). NEXT_PUBLIC_* are baked at build time;
+  # NEXT_PUBLIC_API_URL=/api makes the browser call same-origin /api/*,
+  # which the Next server rewrites to the internal API (see
+  # apps/web/next.config.ts).
+  # ──────────────────────────────────────────────────────────────────────
+  build-web:
+    name: Build & push web image
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ env.ACR_LOGIN_SERVER }}"
+
+      - name: Build & push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=/api
+            NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID }}
+            NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME }}
+            NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID }}
+            NEXT_PUBLIC_AZURE_AD_B2C_POLICY=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_POLICY }}
+            NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES }}
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:${{ github.sha }}
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:latest
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:buildcache,mode=max
 
   # ──────────────────────────────────────────────────────────────────────
   # Apply Alembic migrations BEFORE rolling the new image. If migrations
@@ -377,30 +440,10 @@ jobs:
           done
           echo "::error::API revision did not reach Healthy within 300s"
           exit 1
-
-      - name: Smoke check /healthz exposes new SHA
-        # Curl the PUBLIC SWA hostname, NOT the ACA FQDN. The infra
-        # provisioning (jp-infrastructure PR #157 U5) sets the API's
-        # ingress to external_enabled=false — the ACA FQDN is reachable
-        # only from inside the ACA managed environment. SWA Standard +
-        # linkedBackend (U8) forwards /api/* through to the API.
-        #
-        # NOTE 2026-05-24: hostname is `adoption.joshuaproject.net`
-        # (with -ion suffix), NOT `adopt.joshuaproject.net`. The
-        # latter belongs to the DT Platform (the WordPress site we're
-        # replacing); using it here returned 200 with DT's SHA, not
-        # ours, and the SHA-grep failed. See jp-infrastructure plan
-        # KD5 for the rationale.
-        run: |
-          set -euo pipefail
-          url="https://adoption.joshuaproject.net/api/healthz"
-          response=$(curl -fsS "$url")
-          echo "Response: $response"
-          expected_sha="$(echo "${{ github.sha }}" | cut -c1-10)"
-          if ! echo "$response" | grep -q "\"sha\":\"${expected_sha}\""; then
-            echo "::error::${url} response does not carry expected sha ${expected_sha}"
-            exit 1
-          fi
+        # NOTE: the end-to-end /api/healthz smoke moved to the `smoke` job
+        # below. The API ingress is internal-only, so it can only be
+        # reached publicly through the web app's /api proxy — which means
+        # the smoke must run after deploy-web, not here.
 
   deploy-worker:
     name: Deploy worker to ACA
@@ -439,68 +482,120 @@ jobs:
             --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
 
   deploy-web:
-    name: Deploy web to SWA
-    needs: preflight
+    name: Deploy web to ACA
+    needs: [preflight, build-web]
     if: needs.preflight.outputs.should_deploy_web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node + pnpm
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: "9.0.0"
-
-      - name: Install deps
-        run: pnpm install --frozen-lockfile
-
-      - name: Build web
-        run: pnpm --filter web build
-        env:
-          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
-          NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID }}
-          NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME }}
-          NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID }}
-          NEXT_PUBLIC_AZURE_AD_B2C_POLICY: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_POLICY }}
-          NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES: ${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES }}
-
-      - name: Load SWA API token from 1Password
+      - name: Load deploy secrets from 1Password
         uses: 1password/load-secrets-action@v4
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          SWA_API_TOKEN: op://JP Adopt Platform/Adopt Core - Production/swa-api-token
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_WEB_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-web-app-name
         with:
           export-env: true
 
-      - name: Deploy to Azure Static Web Apps
-        # output_location points at the standalone build subtree (not bare
-        # `.next`). Why: bare `.next` includes .next/cache (98 MB) and
-        # both server + standalone outputs, totaling ~154 MB / 2142 files.
-        # SWA's per-file upload overhead pushed total upload past the
-        # action's 10-min polling timeout (first 2 deploys on 2026-05-24
-        # both timed out at ~590s with "Upload Timed Out. Unsure if
-        # deployment was successful or not."). The standalone subtree
-        # is 54 MB / 2040 files — comfortably within the SWA hybrid
-        # Next.js 250 MB cap (per learn.microsoft.com/azure/static-web-
-        # apps/deploy-nextjs-hybrid) and fast enough to upload in
-        # under a minute.
-        #
-        # For pnpm monorepo standalone output, the server.js entry
-        # point lives at apps/web/.next/standalone/apps/web/server.js
-        # (Next.js preserves the workspace subdir structure). The build
-        # script in apps/web/package.json was updated to copy `.next/
-        # static` (and `public` if present) into that subdir so the
-        # uploaded bundle is self-contained.
-        uses: Azure/static-web-apps-deploy@v1
+      - name: Azure login via OIDC
+        uses: azure/login@v2
         with:
-          azure_static_web_apps_api_token: ${{ env.SWA_API_TOKEN }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: upload
-          app_location: "apps/web"
-          api_location: ""
-          output_location: ".next/standalone/apps/web"
-          skip_app_build: true
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Update web container app
+        # Narrow --set-env-vars: bump only DEPLOY_SHA + the image tag, so the
+        # API_PROXY_TARGET env var Terraform sets on the app is preserved
+        # (matches the api/worker deploy shape).
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --name "${{ env.ACA_WEB_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:${{ github.sha }}" \
+            --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+
+      - name: Wait for new web revision to become ready
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            state=$(az containerapp revision list \
+              --name "${{ env.ACA_WEB_APP_NAME }}" \
+              --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+              --query "[?properties.active==\`true\`] | [0].properties.healthState" -o tsv 2>/dev/null || echo "")
+            if [ "$state" = "Healthy" ]; then
+              echo "Web revision healthy after ${i} polls."
+              exit 0
+            fi
+            echo "Web revision state=$state — retrying in 10s ($i/30)"
+            sleep 10
+          done
+          echo "::error::Web revision did not reach Healthy within 300s"
+          exit 1
+
+  # ──────────────────────────────────────────────────────────────────────
+  # End-to-end smoke: runs after BOTH api and web deploy. The API ingress
+  # is internal-only, so the only public path to it is through the web
+  # app's /api proxy (apps/web/next.config.ts rewrites /api/* → internal
+  # API FQDN). Pre-cutover this targets the ACA-generated web FQDN; the
+  # custom domain works too once Part C cuts it over.
+  # ──────────────────────────────────────────────────────────────────────
+  smoke:
+    name: End-to-end smoke (web + API proxy)
+    needs: [preflight, deploy-api, deploy-web]
+    if: needs.preflight.outputs.should_deploy_api == 'true' && needs.preflight.outputs.should_deploy_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_WEB_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-web-app-name
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Resolve web FQDN
+        id: web
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show \
+            --name "${{ env.ACA_WEB_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "fqdn=$fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke — web root serves the app
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "https://${{ steps.web.outputs.fqdn }}/")
+          echo "GET / → $code"
+          [ "$code" = "200" ] || { echo "::error::web root not 200 (got $code)"; exit 1; }
+
+      - name: Smoke — /api/healthz proxies to the API and carries the SHA
+        run: |
+          set -euo pipefail
+          url="https://${{ steps.web.outputs.fqdn }}/api/healthz"
+          response=$(curl -fsS "$url")
+          echo "Response: $response"
+          expected_sha="$(echo "${{ github.sha }}" | cut -c1-10)"
+          if ! echo "$response" | grep -q "\"sha\":\"${expected_sha}\""; then
+            echo "::error::${url} did not carry expected sha ${expected_sha}"
+            exit 1
+          fi
