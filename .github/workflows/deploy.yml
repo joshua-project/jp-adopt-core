@@ -260,6 +260,8 @@ jobs:
           AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
           AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
           ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_API_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-api-app-name
         with:
           export-env: true
 
@@ -269,6 +271,25 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Resolve API internal FQDN for the build-time proxy target
+        id: apifqdn
+        # Next bakes rewrites() at build time, so the proxy destination must
+        # be known here. The API has internal-only ingress; resolve its
+        # internal FQDN and bake https://<fqdn> as API_PROXY_TARGET. The API
+        # container app already exists (provisioned by jp-infrastructure);
+        # its internal FQDN is stable across image rolls.
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show \
+            --name "${{ env.ACA_API_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          if [ -z "$fqdn" ]; then
+            echo "::error::Could not resolve API internal FQDN — does ${{ env.ACA_API_APP_NAME }} exist with ingress enabled?"
+            exit 1
+          fi
+          echo "api_proxy_target=https://${fqdn}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -283,6 +304,7 @@ jobs:
           file: apps/web/Dockerfile
           push: true
           build-args: |
+            API_PROXY_TARGET=${{ steps.apifqdn.outputs.api_proxy_target }}
             NEXT_PUBLIC_API_URL=/api
             NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID }}
             NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME }}
@@ -408,37 +430,48 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
 
       - name: Update API container app
+        id: rollapi
         run: |
           set -euo pipefail
-          az containerapp update \
+          new_rev=$(az containerapp update \
             --name "${{ env.ACA_API_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:${{ github.sha }}" \
-            --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+            --set-env-vars "DEPLOY_SHA=${{ github.sha }}" \
+            --query properties.latestRevisionName -o tsv)
+          if [ -z "$new_rev" ]; then echo "::error::could not determine new API revision name"; exit 1; fi
+          echo "Rolled API → $new_rev"
+          echo "revision=$new_rev" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for new revision to become ready
-        # 30 retries × 10s = 300s ceiling. Bumped from 100s on
-        # 2026-05-24 because first-deploy revisions take ~150-200s
-        # (cold ACR pull + container start + asyncpg pool warmup +
-        # startup probe loop with failure_count_threshold=40 ×
-        # period_seconds=3). Steady-state deploys land in 30-60s once
-        # the image is cached on the node; the higher ceiling only
-        # affects first-time deploys + image-tag rolls that miss cache.
+      - name: Wait for new API revision to become ready
+        # Poll the SPECIFIC new revision by name. The old
+        # [?active==true]|[0] query matched the already-Healthy OLD revision
+        # during a single-revision roll and exited on poll 1 before the new
+        # image was serving. Readiness = provisioningState Provisioned AND
+        # runningState Running — probe-independent (healthState is "None"
+        # for apps without a configured health probe). 30×10s=300s ceiling:
+        # first-deploy revisions take ~150-200s (cold ACR pull + container
+        # start + asyncpg pool warmup); steady-state lands in 30-60s.
+        env:
+          REVISION: ${{ steps.rollapi.outputs.revision }}
         run: |
           set -euo pipefail
           for i in $(seq 1 30); do
-            state=$(az containerapp revision list \
+            line=$(az containerapp revision show \
               --name "${{ env.ACA_API_APP_NAME }}" \
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
-              --query "[?properties.active==\`true\`] | [0].properties.healthState" -o tsv 2>/dev/null || echo "")
-            if [ "$state" = "Healthy" ]; then
-              echo "Revision healthy after ${i} polls."
+              --revision "$REVISION" \
+              --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
+            prov=$(printf '%s' "$line" | cut -f1)
+            running=$(printf '%s' "$line" | cut -f2)
+            if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
+              echo "API revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
             fi
-            echo "Revision state=$state — retrying in 10s ($i/30)"
+            echo "API revision $REVISION prov=$prov running=$running — retrying in 10s ($i/30)"
             sleep 10
           done
-          echo "::error::API revision did not reach Healthy within 300s"
+          echo "::error::API revision $REVISION did not reach Provisioned+Running within 300s"
           exit 1
         # NOTE: the end-to-end /api/healthz smoke moved to the `smoke` job
         # below. The API ingress is internal-only, so it can only be
@@ -510,46 +543,67 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
 
       - name: Update web container app
-        # Narrow --set-env-vars: bump only DEPLOY_SHA + the image tag, so the
-        # API_PROXY_TARGET env var Terraform sets on the app is preserved
-        # (matches the api/worker deploy shape).
+        id: rollweb
+        # Narrow --set-env-vars: bump only DEPLOY_SHA + the image tag. The
+        # /api proxy target is baked into the image at build time (not a
+        # runtime env), so nothing else needs setting here.
         run: |
           set -euo pipefail
-          az containerapp update \
+          new_rev=$(az containerapp update \
             --name "${{ env.ACA_WEB_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:${{ github.sha }}" \
-            --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+            --set-env-vars "DEPLOY_SHA=${{ github.sha }}" \
+            --query properties.latestRevisionName -o tsv)
+          if [ -z "$new_rev" ]; then echo "::error::could not determine new web revision name"; exit 1; fi
+          echo "Rolled web → $new_rev"
+          echo "revision=$new_rev" >> "$GITHUB_OUTPUT"
 
       - name: Wait for new web revision to become ready
+        # Poll the specific new revision (see the API job for why
+        # [?active==true]|[0] is unsafe). Readiness = Provisioned + Running.
+        env:
+          REVISION: ${{ steps.rollweb.outputs.revision }}
         run: |
           set -euo pipefail
           for i in $(seq 1 30); do
-            state=$(az containerapp revision list \
+            line=$(az containerapp revision show \
               --name "${{ env.ACA_WEB_APP_NAME }}" \
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
-              --query "[?properties.active==\`true\`] | [0].properties.healthState" -o tsv 2>/dev/null || echo "")
-            if [ "$state" = "Healthy" ]; then
-              echo "Web revision healthy after ${i} polls."
+              --revision "$REVISION" \
+              --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
+            prov=$(printf '%s' "$line" | cut -f1)
+            running=$(printf '%s' "$line" | cut -f2)
+            if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
+              echo "Web revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
             fi
-            echo "Web revision state=$state — retrying in 10s ($i/30)"
+            echo "Web revision $REVISION prov=$prov running=$running — retrying in 10s ($i/30)"
             sleep 10
           done
-          echo "::error::Web revision did not reach Healthy within 300s"
+          echo "::error::Web revision $REVISION did not reach Provisioned+Running within 300s"
           exit 1
 
   # ──────────────────────────────────────────────────────────────────────
-  # End-to-end smoke: runs after BOTH api and web deploy. The API ingress
-  # is internal-only, so the only public path to it is through the web
-  # app's /api proxy (apps/web/next.config.ts rewrites /api/* → internal
-  # API FQDN). Pre-cutover this targets the ACA-generated web FQDN; the
-  # custom domain works too once Part C cuts it over.
+  # End-to-end smoke. Runs whenever api AND/OR web deployed (so a
+  # target=api-only deploy is still verified — it was previously left with
+  # no post-deploy check). The API ingress is internal-only, so the only
+  # public path to it is through the web app's /api proxy
+  # (apps/web/next.config.ts rewrites /api/* → internal API FQDN, baked at
+  # build). Pre-cutover this targets the ACA-generated web FQDN; the custom
+  # domain works too once Part C cuts it over. The /api/healthz check
+  # therefore relies on a web app already being deployed — true in steady
+  # state; the first bring-up deploys both together (target=all).
   # ──────────────────────────────────────────────────────────────────────
   smoke:
     name: End-to-end smoke (web + API proxy)
     needs: [preflight, deploy-api, deploy-web]
-    if: needs.preflight.outputs.should_deploy_api == 'true' && needs.preflight.outputs.should_deploy_web == 'true'
+    if: >-
+      ${{ !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.deploy-api.result != 'failure' && needs.deploy-api.result != 'cancelled'
+      && needs.deploy-web.result != 'failure' && needs.deploy-web.result != 'cancelled'
+      && (needs.preflight.outputs.should_deploy_api == 'true' || needs.preflight.outputs.should_deploy_web == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - name: Load deploy secrets from 1Password
@@ -579,23 +633,48 @@ jobs:
             --name "${{ env.ACA_WEB_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --query properties.configuration.ingress.fqdn -o tsv)
+          if [ -z "$fqdn" ]; then
+            echo "::error::web app has no ingress FQDN — is ${{ env.ACA_WEB_APP_NAME }} provisioned with external ingress?"
+            exit 1
+          fi
           echo "fqdn=$fqdn" >> "$GITHUB_OUTPUT"
 
       - name: Smoke — web root serves the app
+        # Only when web was (re)deployed this run. Retry: a freshly-rolled
+        # revision may 5xx briefly while ACA shifts traffic.
+        if: needs.preflight.outputs.should_deploy_web == 'true'
+        env:
+          FQDN: ${{ steps.web.outputs.fqdn }}
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /dev/null -w "%{http_code}" "https://${{ steps.web.outputs.fqdn }}/")
-          echo "GET / → $code"
-          [ "$code" = "200" ] || { echo "::error::web root not 200 (got $code)"; exit 1; }
+          for i in $(seq 1 18); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" "https://${FQDN}/" || echo "000")
+            if [ "$code" = "200" ]; then echo "web root 200 after ${i} tries"; exit 0; fi
+            echo "web root → ${code} (try ${i}/18) — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::web root did not return 200 within ~180s"
+          exit 1
 
       - name: Smoke — /api/healthz proxies to the API and carries the SHA
+        # Only when the API was (re)deployed this run. Goes through the web
+        # /api proxy (the API is internal-only). Retry while the new
+        # revision warms.
+        if: needs.preflight.outputs.should_deploy_api == 'true'
+        env:
+          FQDN: ${{ steps.web.outputs.fqdn }}
         run: |
           set -euo pipefail
-          url="https://${{ steps.web.outputs.fqdn }}/api/healthz"
-          response=$(curl -fsS "$url")
-          echo "Response: $response"
+          url="https://${FQDN}/api/healthz"
           expected_sha="$(echo "${{ github.sha }}" | cut -c1-10)"
-          if ! echo "$response" | grep -q "\"sha\":\"${expected_sha}\""; then
-            echo "::error::${url} did not carry expected sha ${expected_sha}"
-            exit 1
-          fi
+          for i in $(seq 1 18); do
+            response=$(curl -fsS "$url" 2>/dev/null || echo "")
+            if echo "$response" | grep -q "\"sha\":\"${expected_sha}\""; then
+              echo "api /healthz carries ${expected_sha} after ${i} tries: ${response}"
+              exit 0
+            fi
+            echo "api /healthz not ready (try ${i}/18): ${response:-<no response>} — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::${url} did not carry expected sha ${expected_sha} within ~180s"
+          exit 1

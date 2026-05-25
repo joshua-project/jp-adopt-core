@@ -26,7 +26,9 @@
 | Browser (client fetch) | `https://adoption.joshuaproject.net/api/v1/contacts` | web ACA → Next rewrite → API internal `/v1/contacts` |
 | Browser (client fetch) | `https://adoption.joshuaproject.net/api/healthz` | web ACA → Next rewrite → API internal `/healthz` |
 | Next rewrite source | `/api/:path*` | `${API_PROXY_TARGET}/:path*` (strips the `/api` prefix) |
-| `API_PROXY_TARGET` (runtime env on web container) | `https://jp-adopt-core-api-production.internal.mangodesert-2647616f.centralus.azurecontainerapps.io` | API internal ingress (port 8000) |
+| `API_PROXY_TARGET` (**BUILD ARG** — baked, not a runtime env) | `https://jp-adopt-core-api-production.internal.<aca-env-default-domain>` | API internal ingress (port 8000) |
+
+> **Correction (post code-review, 2026-05-24):** Next evaluates `rewrites()` at **build time** and freezes the result into the standalone server — a *runtime* container env var is never read (proven against the built artifact). So `API_PROXY_TARGET` must be present during `next build`. The `build-web` job resolves the API's internal FQDN via `az containerapp show` and passes it as a Docker **build arg**; the Dockerfile sets it as `ENV` in the build stage. The web Container App therefore needs **no** `API_PROXY_TARGET` runtime env (Task A1 updated accordingly).
 | `NEXT_PUBLIC_API_URL` (build arg, baked into client bundle) | `/api` | relative same-origin base; `getBaseUrl()` makes it absolute against `window.location.origin` |
 
 The FastAPI app is **unchanged**: it keeps serving `/healthz`, `/readyz`, `/v1/*` with no `/api` prefix. The `/api` prefix lives only between browser↔web; the rewrite strips it before hitting the API.
@@ -36,7 +38,7 @@ The FastAPI app is **unchanged**: it keeps serving `/healthz`, `/readyz`, `/v1/*
 ## File Structure
 
 **jp-infrastructure (Part A):**
-- Modify: the jp-adopt-core stack that declares the api/worker `azurerm_container_app` resources — add a `web` container app following the existing api pattern (external ingress, port 3000, `API_PROXY_TARGET` env var). Custom-domain + cert binding for `adoption.joshuaproject.net` (Part C).
+- Modify: the jp-adopt-core stack that declares the api/worker `azurerm_container_app` resources — add a `web` container app following the existing api pattern (external ingress, port 3000). No `API_PROXY_TARGET` runtime env is needed (the proxy target is baked into the image at build — see Correction above). Custom-domain + cert binding for `adoption.joshuaproject.net` (Part C).
 
 **jp-adopt-core (Parts B, C-app):**
 - Modify: `apps/web/next.config.ts` — add `rewrites()` reading `process.env.API_PROXY_TARGET`.
@@ -59,8 +61,8 @@ The FastAPI app is **unchanged**: it keeps serving `/healthz`, `/readyz`, `/v1/*
   - `ingress { external_enabled = true; target_port = 3000; transport = "auto" }`
   - Image: the ACR placeholder `jpcontainerregistry.azurecr.io/jp-adopt-web:placeholder` (push in Step 2).
   - `env` block (runtime, NOT secrets):
-    - `API_PROXY_TARGET = "https://jp-adopt-core-api-production.internal.${<aca_env_default_domain>}"` — use the container-app-environment `default_domain` output, not a hardcoded string.
     - `DEPLOY_SHA = "placeholder"` (overwritten by deploy.yml).
+    - Do **NOT** add `API_PROXY_TARGET` here — it is baked into the image at build time by `build-web` (see Correction in the routing-contract section). A runtime env var is not read by the frozen standalone rewrites.
   - Same user-assigned identity (`id-jp-adopt-core-production`) + ACR pull role the API uses.
   - `ignore_changes = [template[0].container[0].image, template[0].container[0].env]` on the relevant lifecycle block, matching the API's narrow ignore pattern (the deploy workflow owns the image tag + DEPLOY_SHA).
 
@@ -513,6 +515,8 @@ scripts/smoke-local.sh   # if it accepts a base URL; else run the runbook §8 ch
 - [ ] Remove the SWA (`jp-adopt-core-production`) + its linked backend from jp-infrastructure.
 - [ ] Remove `swa-app-name` / `swa-api-token` from the 1P item and any remaining workflow references.
 - [ ] Move the out-of-band `AcrPush` grant on deploy SP `6db2efd3-…` into Terraform (tracked separately).
+- [ ] **Security (P2, from code review):** the `/api/*` proxy makes FastAPI's `/docs`, `/redoc`, `/openapi.json` publicly reachable (unauthenticated; `/v1/*` stays auth-gated). Disable interactive docs in production (`FastAPI(docs_url=None, redoc_url=None, openapi_url=None)` when `APP_ENV=production`) in `apps/api/src/jp_adopt_api/main.py`, or deny those paths at the proxy. Not a blocker for this migration.
+- [ ] Verify the SWA rollback escape hatch actually serves (its linked backend points at the now-internal API) before relying on it as the Part C rollback.
 
 ---
 
