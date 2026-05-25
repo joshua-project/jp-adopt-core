@@ -6,6 +6,7 @@ import { useMsal } from "@azure/msal-react";
 
 import type { paths } from "@jp-adopt/contracts";
 
+import { getBaseUrl } from "../lib/api-client";
 import { getApiScopeList, isDevTokenUiEnabled } from "../lib/b2c/msalConfig";
 import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
 import { StatusBadge } from "./StatusBadge";
@@ -39,7 +40,7 @@ export function ContactsB2C() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const base = getBaseUrl();
   const scopes = getApiScopeList();
 
   const resolveAccessToken = useCallback(async () => {

@@ -462,8 +462,7 @@ jobs:
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
               --revision "$REVISION" \
               --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
-            prov=$(printf '%s' "$line" | cut -f1)
-            running=$(printf '%s' "$line" | cut -f2)
+            IFS=$'\t' read -r prov running <<< "$line"
             if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
               echo "API revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
@@ -572,8 +571,7 @@ jobs:
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
               --revision "$REVISION" \
               --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
-            prov=$(printf '%s' "$line" | cut -f1)
-            running=$(printf '%s' "$line" | cut -f2)
+            IFS=$'\t' read -r prov running <<< "$line"
             if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
               echo "Web revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
@@ -654,6 +652,29 @@ jobs:
             sleep 10
           done
           echo "::error::web root did not return 200 within ~180s"
+          exit 1
+
+      - name: Smoke — /api proxy reaches the API (web deploy)
+        # Verifies the NEW web image's /api/* rewrite actually forwards to the
+        # internal API. web-root 200 alone proves nothing about the proxy
+        # (and can even be served by the previous revision). No SHA assertion
+        # here — on a web-only deploy the API SHA is unchanged.
+        if: needs.preflight.outputs.should_deploy_web == 'true'
+        env:
+          FQDN: ${{ steps.web.outputs.fqdn }}
+        run: |
+          set -euo pipefail
+          url="https://${FQDN}/api/healthz"
+          for i in $(seq 1 18); do
+            response=$(curl -fsS "$url" 2>/dev/null || echo "")
+            if echo "$response" | grep -q "\"status\":\"ok\""; then
+              echo "/api proxy → API reachable after ${i} tries: ${response}"
+              exit 0
+            fi
+            echo "/api proxy not ready (try ${i}/18): ${response:-<no response>} — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::${url} did not return status:ok through the proxy within ~180s"
           exit 1
 
       - name: Smoke — /api/healthz proxies to the API and carries the SHA

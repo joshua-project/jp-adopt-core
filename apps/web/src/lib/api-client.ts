@@ -28,24 +28,20 @@ export interface ApiClientContext {
 
 export function getBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL;
-  if (configured && configured.startsWith("/")) {
-    // A relative value ("/api") means "same origin, proxied by Next" — the
-    // web Container App rewrites /api/* to the internal API. new URL(...) in
-    // request() needs an absolute base. In the browser, resolve against the
-    // current origin. All API calls run client-side today, so the branch
-    // below is defensive: a server-side caller can't resolve a relative base
-    // against an origin, so fall back to the internal API target (the same
-    // host the /api proxy forwards to) and finally to the dev API.
-    if (typeof window !== "undefined") {
-      return `${window.location.origin}${configured}`;
-    }
-    return process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8000";
+  // A relative value ("/api") means "same origin, proxied by Next" — the web
+  // Container App rewrites /api/* to the internal API. new URL(...) in
+  // request() needs an absolute base, so resolve against the browser origin.
+  // All API calls run client-side; server-side has no origin, so fall back to
+  // the dev API (keeps new URL() valid — there are no SSR callers today).
+  if (configured?.startsWith("/")) {
+    return typeof window !== "undefined"
+      ? `${window.location.origin}${configured}`
+      : "http://127.0.0.1:8000";
   }
-  if (configured && configured.length > 0) {
-    return configured;
-  }
-  // Dev default: web (`next dev`) talks to the API directly.
-  return "http://127.0.0.1:8000";
+  // Absolute override (e.g. dev pointing straight at the API), else dev default.
+  return configured && configured.length > 0
+    ? configured
+    : "http://127.0.0.1:8000";
 }
 
 /** True when the dev-token textbox should be shown in the UI. */

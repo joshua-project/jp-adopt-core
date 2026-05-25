@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { paths } from "@jp-adopt/contracts";
 
+import { getBaseUrl } from "../lib/api-client";
 import { isDevTokenUiEnabled } from "../lib/b2c/msalConfig";
 import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
 import { StatusBadge } from "./StatusBadge";
@@ -26,7 +27,7 @@ export function ContactsDevOnly() {
   const [loading, setLoading] = useState(false);
   const showTokenUi = isDevTokenUiEnabled();
 
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const base = getBaseUrl();
 
   useEffect(() => {
     if (typeof window === "undefined" || !showTokenUi) {
