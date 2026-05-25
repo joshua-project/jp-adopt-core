@@ -27,7 +27,19 @@ export interface ApiClientContext {
 }
 
 export function getBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured && configured.length > 0) {
+    // A relative value ("/api") means "same origin, proxied by Next" — the
+    // web Container App rewrites /api/* to the internal API. new URL(...) in
+    // request() needs an absolute base, so resolve against the current
+    // origin in the browser. (All API calls run client-side.)
+    if (configured.startsWith("/") && typeof window !== "undefined") {
+      return `${window.location.origin}${configured}`;
+    }
+    return configured;
+  }
+  // Dev default: web (`next dev`) talks to the API directly.
+  return "http://127.0.0.1:8000";
 }
 
 /** True when the dev-token textbox should be shown in the UI. */
