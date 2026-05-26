@@ -46,6 +46,9 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-slate-400">{children}</p>;
 }
 
+const BTN =
+  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50";
+
 export function ContactRecord({ contactId }: { contactId: string }) {
   const ctx = useApiContext();
   const [contact, setContact] = useState<Contact | null>(null);
@@ -54,10 +57,16 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [activity, setActivity] = useState<Activity | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // U4 quick-action state
+  const [noteBody, setNoteBody] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setErr(null);
     try {
-      // Client-side fan-out (U5); a /timeline merge endpoint can replace this later.
       const [c, m, t, a] = await Promise.all([
         apiFetch<Contact>(ctx, `/v1/contacts/${contactId}`),
         apiFetch<Matches>(ctx, `/v1/contacts/${contactId}/matches`),
@@ -81,6 +90,46 @@ export function ContactRecord({ contactId }: { contactId: string }) {
     void load();
   }, [load]);
 
+  const addNote = useCallback(async () => {
+    const text = noteBody.trim();
+    if (!text) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await apiFetch(ctx, `/v1/contacts/${contactId}/activity`, {
+        method: "POST",
+        body: { body: text },
+      });
+      setNoteBody("");
+      await load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "Failed to add note");
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, noteBody, load]);
+
+  const saveName = useCallback(async () => {
+    const name = nameDraft.trim();
+    if (!name) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      // Status fields stay transition-only (see ContactPatch); this edits the
+      // free-form display name. The adoption-profile fields land in U9/U11.
+      await apiFetch(ctx, `/v1/contacts/${contactId}`, {
+        method: "PATCH",
+        body: { display_name: name },
+      });
+      setEditingName(false);
+      await load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "Failed to save name");
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, nameDraft, load]);
+
   if (err) {
     return (
       <div className="space-y-4">
@@ -101,7 +150,6 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const isAdopter = contact.party_kind === "adopter";
   const statusKind = isAdopter ? "adopter" : "facilitator";
   const status = isAdopter ? contact.adopter_status : contact.facilitator_status;
-  // Distinct FPG interests derived from the contact's matches.
   const rop3s = Array.from(
     new Set((matches?.items ?? []).map((m) => m.rop3).filter((r): r is string => !!r)),
   );
@@ -115,9 +163,31 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       {/* Header */}
       <header className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="space-y-2">
-          <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
-            {contact.display_name}
-          </h1>
+          {editingName ? (
+            <div className="flex items-center gap-2">
+              <input
+                className="rounded border border-slate-300 px-2 py-1 text-lg"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                autoFocus
+              />
+              <button type="button" className={BTN} disabled={busy} onClick={saveName}>
+                Save
+              </button>
+              <button
+                type="button"
+                className={BTN}
+                disabled={busy}
+                onClick={() => setEditingName(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-900">
+              {contact.display_name}
+            </h1>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
               {humanizePartyKind(contact.party_kind)}
@@ -133,7 +203,31 @@ export function ContactRecord({ contactId }: { contactId: string }) {
             Origin: {humanizeOrigin(contact.origin)} · updated {formatTimestamp(contact.updated_at)}
           </p>
         </div>
+
+        {/* Quick actions (U4) */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href={`/workflow/${contactId}`} className={BTN}>
+            Transition
+          </Link>
+          <button
+            type="button"
+            className={BTN}
+            disabled={busy}
+            onClick={() => {
+              setNameDraft(contact.display_name);
+              setEditingName(true);
+            }}
+          >
+            Edit name
+          </button>
+        </div>
       </header>
+
+      {actionErr ? (
+        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+          {actionErr}
+        </div>
+      ) : null}
 
       {/* Read tiles */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -194,6 +288,24 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         </Tile>
 
         <Tile title="Activity" count={activity?.total ?? 0}>
+          {/* Add-note composer (U4 → POST /v1/contacts/{id}/activity) */}
+          <div className="mb-3 space-y-2">
+            <textarea
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+              rows={2}
+              placeholder="Add a note…"
+              value={noteBody}
+              onChange={(e) => setNoteBody(e.target.value)}
+            />
+            <button
+              type="button"
+              className={BTN}
+              disabled={busy || !noteBody.trim()}
+              onClick={addNote}
+            >
+              {busy ? "Saving…" : "Add note"}
+            </button>
+          </div>
           {activity?.items.length ? (
             <ul className="space-y-3 text-sm">
               {activity.items.map((a) => (
