@@ -146,7 +146,7 @@ async def _load_staff_recipients(
     cheaper."""
     rows = (
         await session.execute(
-            select(Role.name, UserRole.user_b2c_subject_id)
+            select(Role.name, UserRole.user_subject_id)
             .join(UserRole, UserRole.role_id == Role.id)
             .where(Role.name.in_(STAFF_DIGEST_ROLE_NAMES))
         )
@@ -187,7 +187,7 @@ async def _load_facilitator_recipients(
         await session.execute(
             select(
                 FacilitatorOrgMembership.facilitator_org_id,
-                FacilitatorOrgMembership.user_b2c_subject_id,
+                FacilitatorOrgMembership.user_subject_id,
             ).where(FacilitatorOrgMembership.facilitator_org_id.in_(org_ids))
         )
     ).all()

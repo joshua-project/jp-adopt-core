@@ -98,7 +98,7 @@ async def _facilitator_org_ids(
 ) -> frozenset[uuid.UUID]:
     rows = await db.execute(
         select(FacilitatorOrgMembership.facilitator_org_id).where(
-            FacilitatorOrgMembership.user_b2c_subject_id == user_sub
+            FacilitatorOrgMembership.user_subject_id == user_sub
         )
     )
     return frozenset(rows.scalars().all())

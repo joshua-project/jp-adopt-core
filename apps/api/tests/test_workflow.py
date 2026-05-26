@@ -301,7 +301,7 @@ async def test_transition_facilitator_cross_org_returns_403(
     session.add(m)
     session.add(
         FacilitatorOrgMembership(
-            user_b2c_subject_id="dev-local",
+            user_subject_id="dev-local",
             facilitator_org_id=org_b.id,
         )
     )
@@ -335,7 +335,7 @@ async def test_transition_facilitator_cross_org_returns_403(
         )
         await session.execute(
             sa_delete(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == "dev-local"
+                FacilitatorOrgMembership.user_subject_id == "dev-local"
             )
         )
         await session.execute(

@@ -99,7 +99,7 @@ async def load_user_roles(db: AsyncSession, user_sub: str) -> frozenset[str]:
     rows = await db.execute(
         select(Role.name)
         .join(UserRole, UserRole.role_id == Role.id)
-        .where(UserRole.user_b2c_subject_id == user_sub)
+        .where(UserRole.user_subject_id == user_sub)
     )
     return frozenset(rows.scalars().all())
 

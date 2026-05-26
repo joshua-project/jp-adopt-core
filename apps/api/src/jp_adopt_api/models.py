@@ -133,10 +133,10 @@ class Role(Base):
 class UserRole(Base):
     __tablename__ = "user_roles"
     __table_args__ = (
-        PrimaryKeyConstraint("user_b2c_subject_id", "role_id"),
+        PrimaryKeyConstraint("user_subject_id", "role_id"),
     )
 
-    user_b2c_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False
     )
@@ -793,7 +793,7 @@ class FacilitatorOrgMembership(Base):
     __tablename__ = "facilitator_org_membership"
     __table_args__ = (
         PrimaryKeyConstraint(
-            "user_b2c_subject_id",
+            "user_subject_id",
             "facilitator_org_id",
             name="pk_facilitator_org_membership",
         ),
@@ -808,7 +808,7 @@ class FacilitatorOrgMembership(Base):
         ),
     )
 
-    user_b2c_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
     facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("facilitating_org.id", ondelete="CASCADE"),

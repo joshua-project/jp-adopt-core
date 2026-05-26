@@ -315,7 +315,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/admin/facilitator-memberships/{user_b2c_subject_id}/{facilitator_org_id}": {
+    "/v1/admin/facilitator-memberships/{user_subject_id}/{facilitator_org_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -330,7 +330,7 @@ export interface paths {
          * @description Revoke a facilitator-org membership. Idempotent: returns 204 whether
          *     or not the row existed (so re-runs of an onboarding script are safe).
          */
-        delete: operations["delete_facilitator_membership_v1_admin_facilitator_memberships__user_b2c_subject_id___facilitator_org_id__delete"];
+        delete: operations["delete_facilitator_membership_v1_admin_facilitator_memberships__user_subject_id___facilitator_org_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -736,8 +736,8 @@ export interface components {
         };
         /** FacilitatorMembershipCreateRequest */
         FacilitatorMembershipCreateRequest: {
-            /** User B2C Subject Id */
-            user_b2c_subject_id: string;
+            /** User Subject Id */
+            user_subject_id: string;
             /**
              * Facilitator Org Id
              * Format: uuid
@@ -751,8 +751,8 @@ export interface components {
         };
         /** FacilitatorMembershipRead */
         FacilitatorMembershipRead: {
-            /** User B2C Subject Id */
-            user_b2c_subject_id: string;
+            /** User Subject Id */
+            user_subject_id: string;
             /**
              * Facilitator Org Id
              * Format: uuid
@@ -1801,14 +1801,14 @@ export interface operations {
             };
         };
     };
-    delete_facilitator_membership_v1_admin_facilitator_memberships__user_b2c_subject_id___facilitator_org_id__delete: {
+    delete_facilitator_membership_v1_admin_facilitator_memberships__user_subject_id___facilitator_org_id__delete: {
         parameters: {
             query?: never;
             header?: {
                 authorization?: string | null;
             };
             path: {
-                user_b2c_subject_id: string;
+                user_subject_id: string;
                 facilitator_org_id: string;
             };
             cookie?: never;

@@ -58,7 +58,7 @@ class FacilitatingOrgListResponse(BaseModel):
 class FacilitatorMembershipCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    user_b2c_subject_id: str = Field(min_length=1, max_length=256)
+    user_subject_id: str = Field(min_length=1, max_length=256)
     facilitator_org_id: uuid.UUID
     role_in_org: str = Field(default="member", pattern=r"^(member|admin)$")
 
@@ -66,7 +66,7 @@ class FacilitatorMembershipCreateRequest(BaseModel):
 class FacilitatorMembershipRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    user_b2c_subject_id: str
+    user_subject_id: str
     facilitator_org_id: uuid.UUID
     role_in_org: str
 
@@ -124,7 +124,7 @@ async def create_facilitator_membership(
         )
 
     membership = FacilitatorOrgMembership(
-        user_b2c_subject_id=body.user_b2c_subject_id,
+        user_subject_id=body.user_subject_id,
         facilitator_org_id=body.facilitator_org_id,
         role_in_org=body.role_in_org,
     )
@@ -144,11 +144,11 @@ async def create_facilitator_membership(
 
 
 @router.delete(
-    "/v1/admin/facilitator-memberships/{user_b2c_subject_id}/{facilitator_org_id}",
+    "/v1/admin/facilitator-memberships/{user_subject_id}/{facilitator_org_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_facilitator_membership(
-    user_b2c_subject_id: str,
+    user_subject_id: str,
     facilitator_org_id: uuid.UUID,
     db: DbSession,
     _: Annotated[
@@ -159,7 +159,7 @@ async def delete_facilitator_membership(
     or not the row existed (so re-runs of an onboarding script are safe)."""
     await db.execute(
         delete(FacilitatorOrgMembership).where(
-            FacilitatorOrgMembership.user_b2c_subject_id == user_b2c_subject_id,
+            FacilitatorOrgMembership.user_subject_id == user_subject_id,
             FacilitatorOrgMembership.facilitator_org_id == facilitator_org_id,
         )
     )
