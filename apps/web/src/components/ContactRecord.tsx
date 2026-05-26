@@ -31,16 +31,21 @@ type Profile = NonNullable<Contact["profile"]>;
 
 const BTN =
   "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50";
+const INPUT = "w-full rounded border border-slate-300 px-2 py-1 text-sm";
 
-// U11 profile tiles — keyed to the dt-adoption-fields plugin tile layout.
-// `hint` drives formatting: enum/date get special handling, arrays + bools are
-// auto-detected, everything else renders as free text.
-type FieldHint = "text" | "enum" | "date";
-type FieldDef = readonly [keyof Profile, string, FieldHint?];
+type Input = "text" | "textarea" | "enum" | "bool" | "date" | "number" | "list" | "readonly";
+type FieldDef = readonly [keyof Profile, string, Input];
 type TileDef = {
   title: string;
   kinds: ReadonlyArray<"adopter" | "facilitator">;
   fields: readonly FieldDef[];
+};
+
+const ENUM_OPTIONS: Partial<Record<keyof Profile, readonly string[]>> = {
+  adopter_type: ["individual", "small_group", "church", "organization", "network"],
+  entity_size: ["1", "lt_30", "31_100", "101_500", "501_2000", "2001_plus"],
+  preferred_communication: ["email", "phone"],
+  mou_status: ["signed", "not_required", "not_sent"],
 };
 
 const PROFILE_TILES: readonly TileDef[] = [
@@ -48,14 +53,14 @@ const PROFILE_TILES: readonly TileDef[] = [
     title: "Contact information",
     kinds: ["adopter", "facilitator"],
     fields: [
-      ["primary_contact_name", "Primary contact"],
-      ["secondary_contact_name", "Secondary contact"],
-      ["secondary_contact_email", "Secondary email"],
-      ["secondary_contact_phone", "Secondary phone"],
-      ["website", "Website"],
+      ["primary_contact_name", "Primary contact", "text"],
+      ["secondary_contact_name", "Secondary contact", "text"],
+      ["secondary_contact_email", "Secondary email", "text"],
+      ["secondary_contact_phone", "Secondary phone", "text"],
+      ["website", "Website", "text"],
       ["preferred_communication", "Preferred contact", "enum"],
-      ["form_country", "Country (as submitted)"],
-      ["form_state_region", "State / region"],
+      ["form_country", "Country (as submitted)", "text"],
+      ["form_state_region", "State / region", "text"],
     ],
   },
   {
@@ -64,55 +69,55 @@ const PROFILE_TILES: readonly TileDef[] = [
     fields: [
       ["adopter_type", "Adopter type", "enum"],
       ["entity_size", "Entity size", "enum"],
-      ["commitment_types", "Commitment types"],
+      ["commitment_types", "Commitment types", "list"],
       ["commitment_date", "Commitment date", "date"],
-      ["ministry_areas", "Ministry areas"],
+      ["ministry_areas", "Ministry areas", "list"],
     ],
   },
   {
     title: "Facilitation profile",
     kinds: ["facilitator"],
     fields: [
-      ["works_with_fpgs", "Works with FPGs"],
-      ["willing_to_facilitate", "Willing to facilitate"],
-      ["facilitation_entity_types", "Facilitation entity types"],
-      ["facilitation_entity_sizes", "Facilitation entity sizes"],
+      ["works_with_fpgs", "Works with FPGs", "bool"],
+      ["willing_to_facilitate", "Willing to facilitate", "bool"],
+      ["facilitation_entity_types", "Facilitation entity types", "list"],
+      ["facilitation_entity_sizes", "Facilitation entity sizes", "list"],
       ["mou_status", "MOU status", "enum"],
-      ["mou_signature_name", "MOU signature"],
+      ["mou_signature_name", "MOU signature", "text"],
     ],
   },
   {
     title: "Connection preferences",
     kinds: ["adopter"],
     fields: [
-      ["want_facilitator_connection", "Wants facilitator connection"],
-      ["facilitator_entity_types", "Facilitator entity types"],
-      ["desired_facilitator_info", "Desired facilitator activities"],
+      ["want_facilitator_connection", "Wants facilitator connection", "bool"],
+      ["facilitator_entity_types", "Facilitator entity types", "list"],
+      ["desired_facilitator_info", "Desired facilitator activities", "list"],
     ],
   },
   {
     title: "Network & capacity",
     kinds: ["facilitator"],
     fields: [
-      ["want_network_connection", "Wants network connection"],
-      ["network_partner_info", "Network partnership"],
+      ["want_network_connection", "Wants network connection", "bool"],
+      ["network_partner_info", "Network partnership", "list"],
     ],
   },
   {
     title: "Vetting & compliance",
     kinds: ["adopter", "facilitator"],
     fields: [
-      ["has_doctrinal_distinctives", "Has doctrinal distinctives"],
-      ["doctrinal_distinctives", "Doctrinal distinctives"],
-      ["has_accountability_membership", "Has accountability membership"],
-      ["accountability_memberships", "Accountability memberships"],
+      ["has_doctrinal_distinctives", "Has doctrinal distinctives", "bool"],
+      ["doctrinal_distinctives", "Doctrinal distinctives", "textarea"],
+      ["has_accountability_membership", "Has accountability membership", "bool"],
+      ["accountability_memberships", "Accountability memberships", "textarea"],
     ],
   },
   {
     title: "Engagement",
     kinds: ["adopter", "facilitator"],
     fields: [
-      ["engagement_score", "Engagement score"],
+      ["engagement_score", "Engagement score", "number"],
       ["last_contact_date", "Last contact", "date"],
       ["next_followup_date", "Next follow-up", "date"],
     ],
@@ -121,26 +126,52 @@ const PROFILE_TILES: readonly TileDef[] = [
     title: "Form submission",
     kinds: ["adopter", "facilitator"],
     fields: [
-      ["referral_source", "Referral source"],
-      ["campaign", "Campaign"],
-      ["partner", "Partner"],
-      ["additional_notes", "Additional notes"],
+      ["referral_source", "Referral source", "readonly"],
+      ["campaign", "Campaign", "readonly"],
+      ["partner", "Partner", "readonly"],
+      ["additional_notes", "Additional notes", "textarea"],
     ],
   },
 ];
 
-function fmtVal(value: unknown, hint: FieldHint): ReactNode {
+const EDITABLE = PROFILE_TILES.flatMap((t) =>
+  t.fields.filter((f) => f[2] !== "readonly"),
+);
+
+function fmtRead(value: unknown, input: Input): ReactNode {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) {
     return value.length ? value.map((v) => humanize(String(v))).join(", ") : "—";
   }
-  if (hint === "date") return formatDate(String(value));
-  if (hint === "enum") return humanize(String(value));
+  if (input === "date") return formatDate(String(value));
+  if (input === "enum") return humanize(String(value));
   return String(value);
 }
 
-function Tile({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+/** profile value → string for an edit-mode input. */
+function toDraft(value: unknown, input: Input): string {
+  if (value === null || value === undefined) return "";
+  if (input === "list" && Array.isArray(value)) return value.join(", ");
+  if (input === "bool") return value === true ? "true" : value === false ? "false" : "";
+  return String(value);
+}
+
+/** draft string → typed value for the PATCH (null clears the field). */
+function fromDraft(raw: string, input: Input): unknown {
+  const t = raw.trim();
+  if (input === "list") {
+    const arr = t.split(",").map((s) => s.trim()).filter(Boolean);
+    return arr.length ? arr : null;
+  }
+  if (input === "bool") return t === "" ? null : t === "true";
+  if (input === "number") return t === "" ? null : Number(t);
+  return t === "" ? null : t;
+}
+
+function Tile({ title, count, action, children }: {
+  title: string; count?: number; action?: ReactNode; children: ReactNode;
+}) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -150,6 +181,7 @@ function Tile({ title, count, children }: { title: string; count?: number; child
             {count}
           </span>
         ) : null}
+        {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
       {children}
     </section>
@@ -158,15 +190,6 @@ function Tile({ title, count, children }: { title: string; count?: number; child
 
 function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-slate-400">{children}</p>;
-}
-
-function FieldRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 py-1 text-sm">
-      <span className="shrink-0 text-slate-500">{label}</span>
-      <span className="text-right text-slate-800">{value}</span>
-    </div>
-  );
 }
 
 export function ContactRecord({ contactId }: { contactId: string }) {
@@ -182,6 +205,9 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [nameDraft, setNameDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
+
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setErr(null);
@@ -247,6 +273,47 @@ export function ContactRecord({ contactId }: { contactId: string }) {
     }
   }, [ctx, contactId, nameDraft, load]);
 
+  const startEditProfile = useCallback(() => {
+    const p = (contact?.profile ?? {}) as Partial<Profile>;
+    const d: Record<string, string> = {};
+    for (const [key, , input] of EDITABLE) {
+      d[key as string] = toDraft(p[key], input);
+    }
+    setDraft(d);
+    setActionErr(null);
+    setEditingProfile(true);
+  }, [contact]);
+
+  const saveProfile = useCallback(async () => {
+    const original = (contact?.profile ?? {}) as Partial<Profile>;
+    const patch: Record<string, unknown> = {};
+    for (const [key, , input] of EDITABLE) {
+      const next = fromDraft(draft[key as string] ?? "", input);
+      const prev = original[key] ?? null;
+      if (JSON.stringify(next) !== JSON.stringify(prev)) {
+        patch[key as string] = next;
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditingProfile(false);
+      return;
+    }
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await apiFetch(ctx, `/v1/contacts/${contactId}`, {
+        method: "PATCH",
+        body: { profile: patch },
+      });
+      setEditingProfile(false);
+      await load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "Failed to save profile");
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, contact, draft, load]);
+
   if (err) {
     return (
       <div className="space-y-4">
@@ -268,8 +335,8 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const statusKind = isAdopter ? "adopter" : "facilitator";
   const status = isAdopter ? contact.adopter_status : contact.facilitator_status;
   const profile = contact.profile;
+  const partyKind = isAdopter ? "adopter" : "facilitator";
 
-  // Distinct FPG interests with name + country (per Joel's FYI), from matches.
   const interestMap = new Map<string, { name: string | null; country: string | null }>();
   for (const m of matches?.items ?? []) {
     if (m.rop3 && !interestMap.has(m.rop3)) {
@@ -277,6 +344,43 @@ export function ContactRecord({ contactId }: { contactId: string }) {
     }
   }
   const interests = [...interestMap.entries()];
+
+  function renderInput([key, , input]: FieldDef) {
+    const k = key as string;
+    const val = draft[k] ?? "";
+    const set = (v: string) => setDraft((d) => ({ ...d, [k]: v }));
+    if (input === "enum") {
+      return (
+        <select className={INPUT} value={val} onChange={(e) => set(e.target.value)}>
+          <option value="">—</option>
+          {(ENUM_OPTIONS[key] ?? []).map((o) => (
+            <option key={o} value={o}>{humanize(o)}</option>
+          ))}
+        </select>
+      );
+    }
+    if (input === "bool") {
+      return (
+        <select className={INPUT} value={val} onChange={(e) => set(e.target.value)}>
+          <option value="">—</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      );
+    }
+    if (input === "textarea") {
+      return <textarea className={INPUT} rows={2} value={val} onChange={(e) => set(e.target.value)} />;
+    }
+    return (
+      <input
+        className={INPUT}
+        type={input === "date" ? "date" : input === "number" ? "number" : "text"}
+        value={val}
+        placeholder={input === "list" ? "comma, separated" : undefined}
+        onChange={(e) => set(e.target.value)}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -295,15 +399,8 @@ export function ContactRecord({ contactId }: { contactId: string }) {
                 onChange={(e) => setNameDraft(e.target.value)}
                 autoFocus
               />
-              <button type="button" className={BTN} disabled={busy} onClick={saveName}>
-                Save
-              </button>
-              <button
-                type="button"
-                className={BTN}
-                disabled={busy}
-                onClick={() => setEditingName(false)}
-              >
+              <button type="button" className={BTN} disabled={busy} onClick={saveName}>Save</button>
+              <button type="button" className={BTN} disabled={busy} onClick={() => setEditingName(false)}>
                 Cancel
               </button>
             </div>
@@ -319,27 +416,19 @@ export function ContactRecord({ contactId }: { contactId: string }) {
             <StatusBadge status={status ?? undefined} kind={statusKind} />
             {contact.email_normalized ? <span>{contact.email_normalized}</span> : null}
             {contact.country_code ? <CodeChip>{contact.country_code}</CodeChip> : null}
-            {(contact.language_codes ?? []).map((l) => (
-              <CodeChip key={l}>{l}</CodeChip>
-            ))}
+            {(contact.language_codes ?? []).map((l) => <CodeChip key={l}>{l}</CodeChip>)}
           </div>
           <p className="text-xs text-slate-400">
             Origin: {humanizeOrigin(contact.origin)} · updated {formatTimestamp(contact.updated_at)}
           </p>
         </div>
-
         <div className="flex flex-wrap items-center gap-2">
-          <Link href={`/workflow/${contactId}`} className={BTN}>
-            Transition
-          </Link>
+          <Link href={`/workflow/${contactId}`} className={BTN}>Transition</Link>
           <button
             type="button"
             className={BTN}
             disabled={busy}
-            onClick={() => {
-              setNameDraft(contact.display_name);
-              setEditingName(true);
-            }}
+            onClick={() => { setNameDraft(contact.display_name); setEditingName(true); }}
           >
             Edit name
           </button>
@@ -380,9 +469,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
                   <span className="flex flex-wrap items-center gap-1.5">
                     <StatusBadge status={m.status} kind="match" />
                     <span className="text-slate-700">{m.facilitator_name}</span>
-                    {m.rop3_name ? (
-                      <span className="text-slate-500">· {m.rop3_name}</span>
-                    ) : null}
+                    {m.rop3_name ? <span className="text-slate-500">· {m.rop3_name}</span> : null}
                     {m.rop3_country ? <CodeChip>{m.rop3_country}</CodeChip> : null}
                     {m.rop3 ? <CodeChip>{m.rop3}</CodeChip> : null}
                   </span>
@@ -427,12 +514,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
               value={noteBody}
               onChange={(e) => setNoteBody(e.target.value)}
             />
-            <button
-              type="button"
-              className={BTN}
-              disabled={busy || !noteBody.trim()}
-              onClick={addNote}
-            >
+            <button type="button" className={BTN} disabled={busy || !noteBody.trim()} onClick={addNote}>
               {busy ? "Saving…" : "Add note"}
             </button>
           </div>
@@ -456,17 +538,49 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         </Tile>
       </div>
 
-      {/* Adoption-profile tiles (U11). Read-only for now; inline edit is the
-          next slice — values are editable via PATCH /v1/contacts/{id} {profile}. */}
+      {/* Adoption-profile tiles (U11) with inline edit. */}
+      <div className="flex items-center justify-between">
+        <h2 className="font-heading text-lg font-semibold text-slate-800">Adoption profile</h2>
+        {editingProfile ? (
+          <div className="flex gap-2">
+            <button type="button" className={BTN} disabled={busy} onClick={saveProfile}>
+              {busy ? "Saving…" : "Save profile"}
+            </button>
+            <button type="button" className={BTN} disabled={busy} onClick={() => setEditingProfile(false)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button type="button" className={BTN} disabled={busy} onClick={startEditProfile}>
+            Edit profile
+          </button>
+        )}
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        {PROFILE_TILES.filter((t) =>
-          t.kinds.includes(isAdopter ? "adopter" : "facilitator"),
-        ).map((tile) => (
+        {PROFILE_TILES.filter((t) => t.kinds.includes(partyKind)).map((tile) => (
           <Tile key={tile.title} title={tile.title}>
-            {profile ? (
+            {editingProfile ? (
+              <div className="space-y-2">
+                {tile.fields.map((f) => (
+                  <label key={f[0] as string} className="block text-xs text-slate-500">
+                    {f[1]}
+                    {f[2] === "readonly" ? (
+                      <div className="mt-0.5 text-sm text-slate-700">
+                        {fmtRead(profile?.[f[0]], f[2])} <span className="text-slate-400">(set at intake)</span>
+                      </div>
+                    ) : (
+                      <div className="mt-0.5">{renderInput(f)}</div>
+                    )}
+                  </label>
+                ))}
+              </div>
+            ) : profile ? (
               <div className="divide-y divide-slate-100">
-                {tile.fields.map(([key, label, hint]) => (
-                  <FieldRow key={key} label={label} value={fmtVal(profile[key], hint ?? "text")} />
+                {tile.fields.map((f) => (
+                  <div key={f[0] as string} className="flex items-baseline justify-between gap-3 py-1 text-sm">
+                    <span className="shrink-0 text-slate-500">{f[1]}</span>
+                    <span className="text-right text-slate-800">{fmtRead(profile[f[0]], f[2])}</span>
+                  </div>
                 ))}
               </div>
             ) : (
