@@ -46,12 +46,16 @@ from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     AdopterInterest,
     ApiIdempotencyKey,
+    Consent,
     Contact,
+    ContactProfile,
     SubmissionBlocked,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import (
     AdoptionIntake,
+    ConsentIn,
+    ContactProfileIntake,
     FacilitationIntake,
     IntakeError,
     IntakeErrorBody,
@@ -326,6 +330,51 @@ async def _resolve_contact(
     return contact, True
 
 
+async def _apply_profile(
+    session: AsyncSession,
+    contact: Contact,
+    profile_in: ContactProfileIntake | None,
+) -> None:
+    """U10: upsert the 1:1 contact_profile from the submitted profile fields.
+    Only fields the form actually sent are written (exclude_unset)."""
+    if profile_in is None:
+        return
+    data = profile_in.model_dump(exclude_unset=True)
+    if not data:
+        return
+    prof = (
+        await session.execute(
+            select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+        )
+    ).scalar_one_or_none()
+    if prof is None:
+        prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
+        session.add(prof)
+    for field_name, value in data.items():
+        setattr(prof, field_name, value)
+
+
+async def _write_consents(
+    session: AsyncSession,
+    contact: Contact,
+    consents: list[ConsentIn],
+) -> None:
+    """U10: persist MOU (or future) consent acceptances sent with the form."""
+    for c in consents:
+        session.add(
+            Consent(
+                id=uuid.uuid4(),
+                contact_id=contact.id,
+                consent_type=c.consent_type,
+                version=c.version,
+                content_hash=c.content_hash,
+                accepted_at=c.accepted_at,
+                conversation_id=c.conversation_id,
+                evidence=c.evidence,
+            )
+        )
+
+
 async def _process_adoption(
     session: AsyncSession,
     *,
@@ -429,10 +478,18 @@ async def _process_adoption(
                 rop3=sel.rop3,
                 commitment_level=sel.commitment_level,
                 notes=sel.notes,
+                commitment_types=sel.commitment_types,
+                engagement_status=sel.engagement_status,
+                facilitation_services=sel.facilitation_services,
+                network_services=sel.network_services,
             )
             session.add(interest)
             await session.flush()
             interest_ids.append(interest.id)
+
+    # U10: persist the submitted adoption profile + consent records.
+    await _apply_profile(session, contact, payload.profile)
+    await _write_consents(session, contact, payload.consents)
 
     submission_id = uuid.uuid4()
     outbox_payload = {
@@ -516,6 +573,10 @@ async def _process_facilitation(
             contact_id=contact.id,
             interest_ids=[],
         )
+
+    # U10: persist the submitted profile + consent records (facilitation).
+    await _apply_profile(session, contact, payload.profile)
+    await _write_consents(session, contact, payload.consents)
 
     submission_id = uuid.uuid4()
     outbox_payload = {

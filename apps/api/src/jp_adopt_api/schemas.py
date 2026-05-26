@@ -302,6 +302,38 @@ class FpgInterestIn(BaseModel):
     rop3: str = Field(min_length=1, max_length=32)
     commitment_level: str | None = Field(default=None, max_length=64)
     notes: str | None = Field(default=None, max_length=2048)
+    # U10: per-FPG answers from the forms → adopter_interest (U7 columns).
+    commitment_types: list[str] | None = None
+    engagement_status: str | None = Field(default=None, max_length=32)
+    facilitation_services: list[str] | None = None
+    network_services: list[str] | None = None
+
+
+class ContactProfileIntake(ContactProfilePatch):
+    """Profile fields accepted at intake. Lenient (ignores unknown form keys)
+    and — unlike the staff PATCH surface — includes the submission-derived
+    fields (referral_source / campaign / partner / file_download_url) that are
+    readonly once set."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    referral_source: str | None = Field(default=None, max_length=512)
+    campaign: str | None = Field(default=None, max_length=512)
+    partner: str | None = Field(default=None, max_length=512)
+    file_download_url: str | None = Field(default=None, max_length=2048)
+
+
+class ConsentIn(BaseModel):
+    """An MOU (or future) consent acceptance sent with a submission."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    consent_type: str = Field(max_length=64)
+    version: str = Field(max_length=64)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    accepted_at: datetime
+    conversation_id: str | None = Field(default=None, max_length=128)
+    evidence: dict[str, Any] | None = None
 
 
 class IntakeBase(BaseModel):
@@ -317,6 +349,9 @@ class IntakeBase(BaseModel):
     # to preserve verbatim in the outbox event payload + (eventually) in a
     # raw_submission audit table.
     extra: dict[str, Any] | None = None
+    # U10: structured adoption profile + consent records the forms now send.
+    profile: ContactProfileIntake | None = None
+    consents: list[ConsentIn] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def normalize_strings(self) -> Self:
