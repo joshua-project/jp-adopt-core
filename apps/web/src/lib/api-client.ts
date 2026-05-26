@@ -5,11 +5,11 @@ import type { IPublicClientApplication, AccountInfo } from "@azure/msal-browser"
 
 import type { paths } from "@jp-adopt/contracts";
 
-import { getApiScopeList, isB2cClientConfigured } from "./b2c/msalConfig";
+import { API_ACCESS_SCOPES, isEntraClientConfigured } from "./msalConfig";
 
 /**
  * Shared fetch wrapper that injects the MSAL bearer (or dev-local token when
- * B2C isn't configured). Used by every Client Component that calls /v1/*.
+ * Entra isn't configured). Used by every Client Component that calls /v1/*.
  *
  * Designed to be tree-shakeable: keeps the typed-paths surface in one file so
  * generated routes don't leak into individual components.
@@ -22,7 +22,7 @@ export type ApiPaths = paths;
 export interface ApiClientContext {
   instance: IPublicClientApplication | null;
   accounts: readonly AccountInfo[];
-  /** Optional override; consumed when B2C is not configured (dev-local). */
+  /** Optional override; consumed when Entra is not configured (dev-local). */
   devToken?: string;
 }
 
@@ -47,13 +47,13 @@ export function getBaseUrl(): string {
 /** True when the dev-token textbox should be shown in the UI. */
 export function isDevTokenAvailable(): boolean {
   if (typeof window === "undefined") return false;
-  return !isB2cClientConfigured();
+  return !isEntraClientConfigured();
 }
 
 export async function resolveAccessToken(
   ctx: ApiClientContext,
 ): Promise<string> {
-  if (!isB2cClientConfigured()) {
+  if (!isEntraClientConfigured()) {
     const stored =
       typeof window !== "undefined"
         ? window.localStorage.getItem(DEV_TOKEN_STORAGE_KEY)
@@ -65,12 +65,6 @@ export async function resolveAccessToken(
   if (!ctx.instance) {
     throw new Error("MSAL instance is not initialized");
   }
-  const scopes = getApiScopeList();
-  if (scopes.length === 0) {
-    throw new Error(
-      "NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES is required for B2C-authenticated requests",
-    );
-  }
   const account = ctx.instance.getActiveAccount() ?? ctx.accounts[0] ?? null;
   if (!account) {
     throw new Error("No active MSAL account; sign in first");
@@ -78,14 +72,23 @@ export async function resolveAccessToken(
   try {
     const result = await ctx.instance.acquireTokenSilent({
       account,
-      scopes,
+      scopes: API_ACCESS_SCOPES,
       forceRefresh: false,
     });
     return result.accessToken;
   } catch (e) {
     if (e instanceof InteractionRequiredAuthError) {
-      const result = await ctx.instance.acquireTokenPopup({ account, scopes });
-      return result.accessToken;
+      // Redirect, not popup: SPA-PKCE token refresh is triggered from a
+      // background fetch (no user gesture), so popups are blocked by modern
+      // browsers. Redirect navigates away — user re-auths and lands at
+      // /auth/callback → /. Form state is lost (documented risk).
+      await ctx.instance.acquireTokenRedirect({
+        account,
+        scopes: API_ACCESS_SCOPES,
+      });
+      // acquireTokenRedirect navigates the page; this throw is unreachable
+      // in practice but keeps the function's return type honest.
+      throw new Error("Redirect to Entra in progress");
     }
     throw e;
   }
