@@ -11,9 +11,11 @@ from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
+    Campaign,
     Contact,
     ContactAssignment,
     ContactProfile,
+    Enrollment,
     FacilitatingOrg,
     Fpg,
     Match,
@@ -24,6 +26,8 @@ from jp_adopt_api.schemas import (
     ContactActivityResponse,
     ContactActivityRow,
     ContactAssignmentRequest,
+    ContactEnrollmentRow,
+    ContactEnrollmentsResponse,
     ContactListResponse,
     ContactMatchesResponse,
     ContactMatchRow,
@@ -398,6 +402,51 @@ async def get_contact_activity(
         items=[ContactActivityRow.model_validate(r) for r in rows],
         total=total,
     )
+
+
+@router.get("/{contact_id}/enrollments", response_model=ContactEnrollmentsResponse)
+async def get_contact_enrollments(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ContactEnrollmentsResponse:
+    """Drip-campaign enrollments for the contact (the #55 read slice)."""
+    await _require_contact(db, contact_id)
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Enrollment)
+                .where(Enrollment.contact_id == contact_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await db.execute(
+            select(Enrollment, Campaign.name)
+            .join(Campaign, Campaign.id == Enrollment.campaign_id)
+            .where(Enrollment.contact_id == contact_id)
+            .order_by(Enrollment.enrolled_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items = [
+        ContactEnrollmentRow(
+            id=e.id,
+            campaign_id=e.campaign_id,
+            campaign_name=name,
+            state=e.state,
+            current_step_position=e.current_step_position,
+            enrolled_at=e.enrolled_at,
+            last_step_sent_at=e.last_step_sent_at,
+            exit_reason=e.exit_reason,
+        )
+        for (e, name) in rows
+    ]
+    return ContactEnrollmentsResponse(items=items, total=total)
 
 
 @router.get("/{contact_id}/timeline", response_model=ContactTimelineResponse)

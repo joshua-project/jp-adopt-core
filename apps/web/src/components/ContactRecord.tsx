@@ -37,6 +37,8 @@ type Transitions =
   paths["/v1/contacts/{contact_id}/transitions"]["get"]["responses"]["200"]["content"]["application/json"];
 type Activity =
   paths["/v1/contacts/{contact_id}/activity"]["get"]["responses"]["200"]["content"]["application/json"];
+type Enrollments =
+  paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
 type Profile = NonNullable<Contact["profile"]>;
 
 const BTN =
@@ -208,6 +210,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [matches, setMatches] = useState<Matches | null>(null);
   const [transitions, setTransitions] = useState<Transitions | null>(null);
   const [activity, setActivity] = useState<Activity | null>(null);
+  const [enrollments, setEnrollments] = useState<Enrollments | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [noteBody, setNoteBody] = useState("");
@@ -222,11 +225,12 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [c, m, t, a] = await Promise.all([
+      const [c, m, t, a, en] = await Promise.all([
         apiFetch<Contact>(ctx, `/v1/contacts/${contactId}`),
         apiFetch<Matches>(ctx, `/v1/contacts/${contactId}/matches`),
         apiFetch<Transitions>(ctx, `/v1/contacts/${contactId}/transitions`),
         apiFetch<Activity>(ctx, `/v1/contacts/${contactId}/activity`),
+        apiFetch<Enrollments>(ctx, `/v1/contacts/${contactId}/enrollments`),
       ]);
       if (!c) {
         setErr("Contact not found");
@@ -236,6 +240,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setMatches(m ?? null);
       setTransitions(t ?? null);
       setActivity(a ?? null);
+      setEnrollments(en ?? null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load contact");
     }
@@ -605,6 +610,31 @@ export function ContactRecord({ contactId }: { contactId: string }) {
             </ul>
           ) : (
             <Empty>No activity yet.</Empty>
+          )}
+        </Tile>
+
+        <Tile title="Drip enrollments" count={enrollments?.total ?? 0}>
+          {enrollments?.items.length ? (
+            <ul className="space-y-2 text-sm">
+              {enrollments.items.map((en) => (
+                <li key={en.id} className="flex items-center justify-between gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                      {humanize(en.state)}
+                    </span>
+                    <span className="text-slate-700">{en.campaign_name}</span>
+                    {en.exit_reason ? (
+                      <span className="text-slate-400">· {humanize(en.exit_reason)}</span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-400">
+                    step {en.current_step_position} · {formatTimestamp(en.enrolled_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Empty>No drip enrollments.</Empty>
           )}
         </Tile>
       </div>

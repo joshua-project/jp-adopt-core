@@ -176,6 +176,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Enrollments
+         * @description Drip-campaign enrollments for the contact (the #55 read slice).
+         */
+        get: operations["get_contact_enrollments_v1_contacts__contact_id__enrollments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/contacts/{contact_id}/timeline": {
         parameters: {
             query?: never;
@@ -764,6 +784,44 @@ export interface components {
         ContactAssignmentRequest: {
             /** User Subject Id */
             user_subject_id?: string | null;
+        };
+        /**
+         * ContactEnrollmentRow
+         * @description One drip-campaign enrollment for the contact (the #55 read slice).
+         */
+        ContactEnrollmentRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Campaign Id
+             * Format: uuid
+             */
+            campaign_id: string;
+            /** Campaign Name */
+            campaign_name: string;
+            /** State */
+            state: string;
+            /** Current Step Position */
+            current_step_position: number;
+            /**
+             * Enrolled At
+             * Format: date-time
+             */
+            enrolled_at: string;
+            /** Last Step Sent At */
+            last_step_sent_at: string | null;
+            /** Exit Reason */
+            exit_reason: string | null;
+        };
+        /** ContactEnrollmentsResponse */
+        ContactEnrollmentsResponse: {
+            /** Items */
+            items: components["schemas"]["ContactEnrollmentRow"][];
+            /** Total */
+            total: number;
         };
         /** ContactListResponse */
         ContactListResponse: {
@@ -1840,6 +1898,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContactActivityRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_enrollments_v1_contacts__contact_id__enrollments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactEnrollmentsResponse"];
                 };
             };
             /** @description Validation Error */

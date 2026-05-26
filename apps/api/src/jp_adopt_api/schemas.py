@@ -256,6 +256,26 @@ class ContactActivityResponse(BaseModel):
     total: int
 
 
+class ContactEnrollmentRow(BaseModel):
+    """One drip-campaign enrollment for the contact (the #55 read slice)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    campaign_id: uuid.UUID
+    campaign_name: str
+    state: str
+    current_step_position: int
+    enrolled_at: datetime
+    last_step_sent_at: datetime | None
+    exit_reason: str | None
+
+
+class ContactEnrollmentsResponse(BaseModel):
+    items: list[ContactEnrollmentRow]
+    total: int
+
+
 class ContactTimelineEntry(BaseModel):
     """One merged feed entry. ``type`` discriminates the source table so the
     UI can pick an icon; ``ref_id`` is the source row id as a string."""

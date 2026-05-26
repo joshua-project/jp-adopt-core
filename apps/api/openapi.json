@@ -699,6 +699,89 @@
         }
       }
     },
+    "/v1/contacts/{contact_id}/enrollments": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Get Contact Enrollments",
+        "description": "Drip-campaign enrollments for the contact (the #55 read slice).",
+        "operationId": "get_contact_enrollments_v1_contacts__contact_id__enrollments_get",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactEnrollmentsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contacts/{contact_id}/timeline": {
       "get": {
         "tags": [
@@ -2850,6 +2933,94 @@
         "type": "object",
         "title": "ContactAssignmentRequest",
         "description": "Assign a contact to a staff user. ``user_subject_id`` omitted \u2192 assign to\nthe calling user (the common 'assign to me' case)."
+      },
+      "ContactEnrollmentRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "campaign_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Campaign Id"
+          },
+          "campaign_name": {
+            "type": "string",
+            "title": "Campaign Name"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "current_step_position": {
+            "type": "integer",
+            "title": "Current Step Position"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enrolled At"
+          },
+          "last_step_sent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Step Sent At"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "campaign_id",
+          "campaign_name",
+          "state",
+          "current_step_position",
+          "enrolled_at",
+          "last_step_sent_at",
+          "exit_reason"
+        ],
+        "title": "ContactEnrollmentRow",
+        "description": "One drip-campaign enrollment for the contact (the #55 read slice)."
+      },
+      "ContactEnrollmentsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContactEnrollmentRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ContactEnrollmentsResponse"
       },
       "ContactListResponse": {
         "properties": {
