@@ -125,13 +125,13 @@ async def _assign_role(
     existing = (
         await session.execute(
             select(UserRole).where(
-                UserRole.user_b2c_subject_id == user_sub,
+                UserRole.user_subject_id == user_sub,
                 UserRole.role_id == role.id,
             )
         )
     ).scalar_one_or_none()
     if existing is None:
-        session.add(UserRole(user_b2c_subject_id=user_sub, role_id=role.id))
+        session.add(UserRole(user_subject_id=user_sub, role_id=role.id))
         await session.commit()
 
 
@@ -159,7 +159,7 @@ async def _cleanup(session: AsyncSession, contacts: list[Contact]) -> None:
         if c.b2c_subject_id:
             await session.execute(
                 delete(UserRole).where(
-                    UserRole.user_b2c_subject_id == c.b2c_subject_id
+                    UserRole.user_subject_id == c.b2c_subject_id
                 )
             )
         await session.execute(delete(Contact).where(Contact.id == c.id))
@@ -204,7 +204,7 @@ async def test_build_digest_groups_staff_and_facilitator(
 
     session.add(
         FacilitatorOrgMembership(
-            user_b2c_subject_id=fac_sub, facilitator_org_id=org_a.id
+            user_subject_id=fac_sub, facilitator_org_id=org_a.id
         )
     )
     await session.commit()
@@ -246,7 +246,7 @@ async def test_build_digest_groups_staff_and_facilitator(
     finally:
         await session.execute(
             delete(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == fac_sub
+                FacilitatorOrgMembership.user_subject_id == fac_sub
             )
         )
         await session.commit()

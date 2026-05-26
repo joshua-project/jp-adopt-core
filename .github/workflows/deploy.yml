@@ -306,11 +306,8 @@ jobs:
           build-args: |
             API_PROXY_TARGET=${{ steps.apifqdn.outputs.api_proxy_target }}
             NEXT_PUBLIC_API_URL=/api
-            NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID }}
-            NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME }}
-            NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID }}
-            NEXT_PUBLIC_AZURE_AD_B2C_POLICY=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_POLICY }}
-            NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES=${{ vars.NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES }}
+            NEXT_PUBLIC_AZURE_AD_TENANT_ID=761e2c5f-34bd-4872-b86c-3a9f3b29d63a
+            NEXT_PUBLIC_AZURE_AD_CLIENT_ID=${{ vars.NEXT_PUBLIC_AZURE_AD_CLIENT_ID }}
           tags: |
             ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:${{ github.sha }}
             ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-web:latest

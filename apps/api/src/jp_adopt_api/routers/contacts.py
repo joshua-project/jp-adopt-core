@@ -4,10 +4,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
-from jp_adopt_api.deps import CurrentUser, DbSession
+from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.models import Contact
 from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import (
@@ -20,6 +20,14 @@ from jp_adopt_api.schemas import (
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
 EVENT_CONTACT_UPDATED = "jp.adopt.v1.contact.updated"
+
+# Staff roles allowed to read/write contacts. Mirrors `manual_contacts._STAFF_ROLES`
+# — the set of staff users who triage adopter/facilitator records. Without this
+# gate, `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
+# account; the role check (row-level) is the second defense gate (U22 of the
+# Entra direct plan).
+_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
+_STAFF_DEP = require_role(*_STAFF_ROLES)
 
 # Allowed status values per kind — mirrors the CHECK constraints on the
 # ``contacts`` table (see migration 0001 + models.py). Keeping the lists
@@ -50,7 +58,7 @@ _UNSET_KEY = "__unset__"
 @router.get("", response_model=ContactListResponse)
 async def list_contacts(
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     # Pipeline views (/adopters, /facilitators) request limit=200 so the
     # kanban can show everything in one shot without paging — most JP
     # cohorts are well under 500 contacts total. Bump max to 500 to give
@@ -139,7 +147,7 @@ async def list_contacts(
 @router.get("/status_counts", response_model=ContactStatusCounts)
 async def contact_status_counts(
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     party_kind: Annotated[
         Literal["adopter", "facilitator"],
         Query(
@@ -194,7 +202,7 @@ async def contact_status_counts(
 async def get_contact(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> ContactRead:
     row = await db.get(Contact, contact_id)
     if row is None:
@@ -207,7 +215,7 @@ async def patch_contact(
     contact_id: uuid.UUID,
     body: ContactPatch,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> ContactRead:
     updates = body.model_dump(exclude_unset=True)
     if not updates:

@@ -1192,22 +1192,22 @@
         }
       }
     },
-    "/v1/admin/facilitator-memberships/{user_b2c_subject_id}/{facilitator_org_id}": {
+    "/v1/admin/facilitator-memberships/{user_subject_id}/{facilitator_org_id}": {
       "delete": {
         "tags": [
           "admin"
         ],
         "summary": "Delete Facilitator Membership",
         "description": "Revoke a facilitator-org membership. Idempotent: returns 204 whether\nor not the row existed (so re-runs of an onboarding script are safe).",
-        "operationId": "delete_facilitator_membership_v1_admin_facilitator_memberships__user_b2c_subject_id___facilitator_org_id__delete",
+        "operationId": "delete_facilitator_membership_v1_admin_facilitator_memberships__user_subject_id___facilitator_org_id__delete",
         "parameters": [
           {
-            "name": "user_b2c_subject_id",
+            "name": "user_subject_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "User B2C Subject Id"
+              "title": "User Subject Id"
             }
           },
           {
@@ -2619,11 +2619,11 @@
       },
       "FacilitatorMembershipCreateRequest": {
         "properties": {
-          "user_b2c_subject_id": {
+          "user_subject_id": {
             "type": "string",
             "maxLength": 256,
             "minLength": 1,
-            "title": "User B2C Subject Id"
+            "title": "User Subject Id"
           },
           "facilitator_org_id": {
             "type": "string",
@@ -2640,16 +2640,16 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "user_b2c_subject_id",
+          "user_subject_id",
           "facilitator_org_id"
         ],
         "title": "FacilitatorMembershipCreateRequest"
       },
       "FacilitatorMembershipRead": {
         "properties": {
-          "user_b2c_subject_id": {
+          "user_subject_id": {
             "type": "string",
-            "title": "User B2C Subject Id"
+            "title": "User Subject Id"
           },
           "facilitator_org_id": {
             "type": "string",
@@ -2663,7 +2663,7 @@
         },
         "type": "object",
         "required": [
-          "user_b2c_subject_id",
+          "user_subject_id",
           "facilitator_org_id",
           "role_in_org"
         ],

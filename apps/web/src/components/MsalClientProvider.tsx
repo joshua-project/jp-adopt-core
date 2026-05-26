@@ -6,48 +6,45 @@ import { EventType, PublicClientApplication } from "@azure/msal-browser";
 import type { AuthenticationResult, EventMessage } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 
-import { buildMsalConfiguration, isB2cClientConfigured } from "../lib/b2c/msalConfig";
+import { buildEntraConfiguration, isEntraClientConfigured } from "../lib/msalConfig";
 
 /**
- * MsalProvider wrapper, migrated to MSAL v5 (Day 1 of the amy-return build).
+ * MsalProvider wrapper for Azure Entra ID single-tenant SSO. Migrated to MSAL
+ * v5 (Day 1 of the amy-return build); B2C scaffolding stripped 2026-05-26 when
+ * Microsoft closed B2C to new customers.
  *
- * v5 differences from v3 we care about here:
- *   - `instance.initialize()` returns a Promise we MUST await before any
- *     other API; v5 enforces this with a runtime check (v3 was lax).
- *   - The `addEventCallback` payload now uses the `EventMessage` shape; the
- *     v3 `setActiveAccount`-on-login callback we use to keep the active
- *     account in sync still works, but the union of EventType values has
- *     changed names (we use the constant rather than a string literal so
- *     a future rename surfaces at the type-check site).
+ * v5 idioms preserved here:
+ *   - `instance.initialize()` returns a Promise we MUST await before any other
+ *     MSAL API; v5 enforces this with a runtime check (v3 was lax).
+ *   - The `addEventCallback` payload uses the `EventMessage` shape; we use the
+ *     `EventType.LOGIN_SUCCESS` constant rather than a string literal so a
+ *     future rename surfaces at the type-check site.
+ *   - `navigateToLoginRequestUrl` moved to a per-request option on
+ *     `handleRedirectPromise` — see `app/auth/callback/page.tsx`, which passes
+ *     `{ navigateToLoginRequestUrl: false }` so navigation is explicit.
+ *
+ * `redirectUri` is NOT overridden here — the Entra config builder sets it to
+ * `${origin}/auth/callback` (matching the SPA app reg's registered URIs).
+ * Overriding it back to the bare origin caused `AADSTS50011` in the round-1
+ * doc review; we leave the config's value intact.
  */
 export function MsalClientProvider({ children }: { children: React.ReactNode }) {
   const [instance, setInstance] = useState<PublicClientApplication | null>(null);
-  /** If B2C is not configured, we do not need to wait for MSAL init. */
-  const [ready, setReady] = useState(() => !isB2cClientConfigured());
+  /** If Entra is not configured, we do not need to wait for MSAL init. */
+  const [ready, setReady] = useState(() => !isEntraClientConfigured());
   const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isB2cClientConfigured()) {
+    if (!isEntraClientConfigured()) {
       setReady(true);
       return;
     }
-    const config = buildMsalConfiguration();
+    const config = buildEntraConfiguration();
     if (!config) {
       setReady(true);
       return;
     }
-    const pca = new PublicClientApplication({
-      ...config,
-      auth: {
-        ...config.auth,
-        redirectUri:
-          typeof window !== "undefined" ? window.location.origin : config.auth?.redirectUri,
-        postLogoutRedirectUri:
-          typeof window !== "undefined"
-            ? window.location.origin
-            : config.auth?.postLogoutRedirectUri,
-      },
-    });
+    const pca = new PublicClientApplication(config);
 
     pca
       .initialize()
@@ -72,7 +69,7 @@ export function MsalClientProvider({ children }: { children: React.ReactNode }) 
         setReady(true);
       })
       .catch((e: unknown) => {
-        setInitError(e instanceof Error ? e.message : "MSAL initialize failed");
+        setInitError(e instanceof Error ? e.message : "Entra MSAL initialize failed");
         setReady(true);
       });
   }, []);
