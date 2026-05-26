@@ -430,11 +430,22 @@ jobs:
         id: rollapi
         run: |
           set -euo pipefail
+          # ENTRA_DIRECT_AUDIENCE pins the JWT `aud` the API will accept. For
+          # tokens issued via the v2.0 endpoint, Entra puts the resource's
+          # *appId GUID* in `aud`, NOT the identifier URI — so this is the
+          # API app reg's appId, not "api://jp-adopt-core". See
+          # docs/runbooks/multi-idp-b2c.md (v2-token aud quirk) and
+          # docs/solutions/azure-entra-auth/. Hardcoded because the SPA and API
+          # app reg appIds are stable Terraform outputs in jp-infrastructure
+          # (stacks/azure/entra/jp-adopt-core-sso); rotation would happen via
+          # a TF change + matching deploy.yml bump in the same PR.
           new_rev=$(az containerapp update \
             --name "${{ env.ACA_API_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-api:${{ github.sha }}" \
-            --set-env-vars "DEPLOY_SHA=${{ github.sha }}" \
+            --set-env-vars \
+              "DEPLOY_SHA=${{ github.sha }}" \
+              "ENTRA_DIRECT_AUDIENCE=75edd3b3-90c8-4982-a619-d038ebaa50ea" \
             --query properties.latestRevisionName -o tsv)
           if [ -z "$new_rev" ]; then echo "::error::could not determine new API revision name"; exit 1; fi
           echo "Rolled API → $new_rev"

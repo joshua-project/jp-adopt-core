@@ -135,3 +135,38 @@ the `dev-local` bearer token outright. There is no override.
 
 `MAGIC_LINK_SIGNING_KEY` is validated to be >= 32 bytes when `APP_ENV=production`
 (see `Settings.magic_link_key_must_be_strong_in_production`).
+
+## v2-token `aud` quirk (Entra direct)
+
+When a token is issued via the **v2.0 endpoint** — which is the case for
+the SPA, because the API app registration is created with
+`requestedAccessTokenVersion = 2` — Entra populates the `aud` claim with
+the **resource appId GUID**, *not* its identifier URI. The identifier URI
+(`api://jp-adopt-core`) shows up only in v1 access tokens.
+
+Concretely, the JP API app reg (`75edd3b3-90c8-4982-a619-d038ebaa50ea`)
+has `identifierUris = ["api://jp-adopt-core"]`. A token Entra issues for
+the `api://jp-adopt-core/api.access` scope carries:
+
+```
+aud = "75edd3b3-90c8-4982-a619-d038ebaa50ea"      # NOT "api://jp-adopt-core"
+ver = "2.0"
+iss = "https://login.microsoftonline.com/<tid>/v2.0"
+scp = "api.access"
+```
+
+So the API must validate `aud` against the **appId GUID**, not the URI.
+The `ENTRA_DIRECT_AUDIENCE` env var is set by `.github/workflows/deploy.yml`
+on every API deploy; the default in `config.py` keeps the URI form only as
+a dev/test convenience and includes a warning. Failure mode if this drifts:
+every authenticated request returns `401 {"detail":"Invalid or expired
+access token"}` because `jwt.decode(...)` raises `InvalidAudienceError`.
+The application logger records the precise failure at DEBUG level
+(`auth.py: "JWT validation failed: …"`), which is below the default INFO
+threshold — so when diagnosing, either decode the token offline or bump
+the log level.
+
+Rotating the API appId (rare; would happen via a Terraform change in
+`jp-infrastructure/stacks/azure/entra/jp-adopt-core-sso/`) requires a
+matching update to the hardcoded GUID in `deploy.yml` — keep them in the
+same PR.

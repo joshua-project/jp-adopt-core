@@ -101,8 +101,20 @@ class Settings(BaseSettings):
     # The issuer claim minted on magic-link JWTs. Verified on every claim.
     magic_link_issuer: str = "https://api.joshuaproject.net/magic-link/v1"
 
-    # Entra direct side-car: aud claim the API requires on multi-tenant Entra tokens.
-    # This is the Application ID URI of the API app registration in Entra.
+    # Entra direct: `aud` claim the API requires on Entra-issued JWTs.
+    #
+    # Footgun: for tokens issued via the **v2.0 endpoint** (which the SPA uses
+    # because the API app reg sets ``requestedAccessTokenVersion=2``), Entra
+    # populates `aud` with the resource app reg's **appId GUID**, NOT its
+    # identifier URI. So in production this must be set to the API app reg's
+    # ``appId`` (a GUID), e.g. ``75edd3b3-90c8-4982-a619-d038ebaa50ea``. The
+    # identifier URI form (``api://jp-adopt-core``) only appears in v1 tokens.
+    #
+    # The default below is the identifier URI for dev/test ergonomics where
+    # token issuance is mocked or a v1 setup is used. In production the
+    # ``ENTRA_DIRECT_AUDIENCE`` env var MUST be set to the API appId GUID —
+    # ``.github/workflows/deploy.yml`` sets it on every API deploy. See
+    # ``docs/runbooks/multi-idp-b2c.md`` (v2-token aud quirk).
     entra_direct_audience: str = "api://jp-adopt-core"
 
     # Azure Communication Services Email (worker uses this; API only reads
