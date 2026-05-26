@@ -53,12 +53,17 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# Disable interactive docs + OpenAPI schema in production: with the web
+# Container App's /api proxy, /docs would otherwise be publicly reachable
+# without auth. `get_settings()` is cached (lru_cache); calling it here is
+# the same instance the rest of the app uses.
+_docs_disabled = get_settings().is_production
 app = FastAPI(
     title="JP ADOPT API",
     version="0.1.0",
-    openapi_url="/openapi.json",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    openapi_url=None if _docs_disabled else "/openapi.json",
+    docs_url=None if _docs_disabled else "/docs",
+    redoc_url=None if _docs_disabled else "/redoc",
     lifespan=lifespan,
 )
 
