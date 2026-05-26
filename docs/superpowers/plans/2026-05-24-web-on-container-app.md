@@ -480,15 +480,15 @@ Expected: root `200` serving the Next.js app (not helloworld placeholder); `/api
 
 ### Task C1: Move `adoption.joshuaproject.net` to the web Container App
 
-**Files:** jp-infrastructure (domain/cert binding) OR manual `az` if doing it out-of-band first to de-risk.
+**Files:** jp-infrastructure — **both** the DNS stack and the apps stack.
 
-- [ ] **Step 1: Add the custom domain + managed certificate** to `jp-adopt-core-web-production`. A custom domain can be bound to only one resource at a time, so unbind from the SWA as part of this step. Prefer codifying in jp-infrastructure; if validating manually first:
+> **⚠ The domain is already bound to the SWA in Terraform (found during code review).** The DNS stack `stacks/production/dns/joshuaproject-net/` declares **`cloudflare_record.swa_adoption`** (CNAME `adoption` → the SWA default hostname) **and** **`azurerm_static_web_app_custom_domain.adoption`** (binds `adoption.joshuaproject.net` to the SWA). A hostname can be validated/bound to only one Azure resource at a time, and TF owns the Cloudflare CNAME — so flipping it out-of-band self-reverts on the next DNS-stack apply. The cutover therefore must be a **single coordinated change**, not `az containerapp hostname add`.
 
-```bash
-az containerapp hostname add --hostname adoption.joshuaproject.net \
-  -n jp-adopt-core-web-production -g rg-jp-adopt-core-production
-# then bind a managed cert per the ACA managed-cert flow
-```
+- [ ] **Step 1: In one PR (or carefully sequenced applies), do all of:**
+  - **Remove** `azurerm_static_web_app_custom_domain.adoption` (unbinds the hostname from the SWA — required before any other Azure resource can validate it).
+  - **Add** the ACA custom-domain binding for `jp-adopt-core-web-production` (`azurerm_container_app_custom_domain` + a managed certificate, or the azapi equivalent), which requires an `asuid.adoption` TXT record + the CNAME pointing at the web app's ACA FQDN for validation.
+  - **Repoint/replace** `cloudflare_record.swa_adoption` so `adoption` → the web app's ACA FQDN (and add the `asuid` TXT validation record). Keep TF as the owner so it doesn't drift back.
+  - Sequence: SWA unbind must apply before the ACA bind validates (same hostname can't be on both). Cross-stack ordering (DNS stack reads the apps stack's `web_container_app_fqdn` via remote state) mirrors the existing SWA `swa_default_hostname` handshake.
 
 - [ ] **Step 2: Verify the public domain serves the app and proxies the API**
 
@@ -504,7 +504,7 @@ Expected: root `200` Next.js app; `/api/healthz` carries the deploy SHA.
 scripts/smoke-local.sh   # if it accepts a base URL; else run the runbook §8 checks against adoption.joshuaproject.net
 ```
 
-- [ ] **Step 4: Rollback rehearsal note (do not execute unless needed):** to revert, re-bind `adoption.joshuaproject.net` to the SWA (`ambitious-pebble-07e6a6210.7.azurestaticapps.net`). The SWA is still provisioned (Part D not yet run).
+- [ ] **Step 4: Rollback rehearsal note (do not execute unless needed):** revert the Step 1 change set — unbind the hostname from the ACA web app, re-add `azurerm_static_web_app_custom_domain.adoption`, and repoint `cloudflare_record.swa_adoption` back at the SWA default hostname (`ambitious-pebble-07e6a6210.7.azurestaticapps.net`). The SWA is still provisioned (Part D not yet run). Because TF owns the CNAME, the revert is a TF apply, not a manual Cloudflare edit (which would self-revert). **Caveat:** confirm the idle SWA actually serves before relying on it — its linked backend points at the now-internal API (see Part D item).
 
 ---
 
