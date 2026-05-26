@@ -115,6 +115,60 @@ equivalent — needs a `consent`/MOU table, not just a status field.
 
 ---
 
+## 2.6 Provenance: WordPress/stock-DT vs JP-custom (authoritative)
+
+**Source of truth:** `dt-adoption-fields/includes/custom-fields.php` (the WordPress
+plugin JP layers on top of the DT theme). Whatever that file registers is
+**JP-custom**; everything else on the contacts post type is **stock
+disciple.tools / WordPress**. The plugin also *explicitly hides* a set of stock
+DT fields — that hide-list is the authoritative "not used by the adoption
+program" set.
+
+### A. JP-custom fields (42) — built by JP, grouped by the plugin's own tile keys
+
+These tile keys are the **authoritative Phase 2 contact-page IA** (not guessed
+from the crawl):
+
+| Plugin tile key | Fields |
+|---|---|
+| `adopter_pipeline` | adopter_status |
+| `facilitator_pipeline` | facilitator_status |
+| `contact_info` | ministry_areas, entity_size, primary_contact_name, secondary_contact_name, secondary_contact_email, secondary_contact_phone, website, preferred_communication, form_country, form_state_region |
+| `adoption_profile` | adopter_type, commitment_level, commitment_types, commitment_date |
+| `facilitation_profile` | works_with_fpgs, willing_to_facilitate, facilitation_entity_types, facilitation_entity_sizes, mou_status, mou_signature_name |
+| `connection_prefs` | want_facilitator_connection, facilitator_entity_types, desired_facilitator_info |
+| `network_prefs` | want_network_connection, network_partner_info |
+| `vetting` | has_doctrinal_distinctives, doctrinal_distinctives, has_accountability_membership, accountability_memberships |
+| `fpg_commitments` | fpg_submission_data (hidden JSON blob, rendered by a custom tile) |
+| `engagement` | last_contact_date, engagement_score, drip_campaign_status, next_followup_date |
+| `form_submission` | submission_id, referral_source (readonly), campaign (readonly), partner (readonly), additional_notes, file_download_url (hidden) |
+
+These ~42 are the **real "specific to our platform" set** and the Phase 2 build
+target. jp-adopt-core already models 2–3 of them (adopter_status,
+facilitator_status; commitment_level on AdopterInterest) → ~38 net-new.
+
+### B. Stock DT/WordPress fields the platform KEEPS (used, not JP-built)
+`title` (→ display_name), `type`, `sub_type` (→ party_kind), `contact_email`,
+`contact_phone`, `notes`, plus DT system fields left visible (`assigned_to`,
+`tasks`, `last_modified`, `post_date`, `favorite`, `requires_update`,
+`duplicate_data`, `location_grid`). These are disciple.tools/WordPress, not JP —
+jp-adopt-core re-implements the handful it needs natively.
+
+### C. Stock DT/WordPress fields the plugin EXPLICITLY HIDES (definitively out of scope)
+From `dt_adoption_hide_unused_fields()`: `overall_status`, `contact_status`,
+`contact_facebook`, `contact_other`, `baptism_date`, `milestones`, `baptized_by`,
+`baptized`, `faith_status`, `coaching`, `coached_by`, `seeker_path`, `tags`,
+`relation`, `groups`, **`people_groups`**. Note JP hides DT's `people_groups`
+connection and uses `fpg_submission_data` (JSON) + its own FPG model instead.
+
+> **Net for the plan:** Phase 2 = section A (the JP-custom plugin fields), using
+> the plugin tile keys as the page IA. Sections B/C are disciple.tools base, not
+> parity work. Also authoritative from the plugin: DT remaps a single
+> `contact_status` to adopter/facilitator status by `sub_type` and defaults to
+> `new` — jp-adopt-core already splits these, so no remap shim is needed.
+
+---
+
 ## 3. Contact field matrix (DT contacts post type → jp-adopt-core)
 
 Status legend: ✓ present (model+UI) · ◐ backend only / partial · ✗ missing.
