@@ -217,6 +217,41 @@ class ContactProfile(Base):
     )
 
 
+class Consent(Base):
+    """U8: MOU (or future) consent acceptance record for a contact. 1:N audit
+    rows; ``content_hash`` is the sha-256 hex of the consent text the user saw.
+    """
+
+    __tablename__ = "consent"
+    __table_args__ = (
+        Index("ix_consent_contact_type", "contact_id", "consent_type"),
+        CheckConstraint(
+            "content_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_consent_content_hash_sha256",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    consent_type: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Outbox(Base):
     __tablename__ = "outbox"
 
