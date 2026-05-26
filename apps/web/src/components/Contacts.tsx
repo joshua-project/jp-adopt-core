@@ -6,7 +6,8 @@ import { useMsal } from "@azure/msal-react";
 
 import type { paths } from "@jp-adopt/contracts";
 
-import { getApiScopeList, isDevTokenUiEnabled } from "../lib/b2c/msalConfig";
+import { getBaseUrl } from "../lib/api-client";
+import { API_ACCESS_SCOPES, isDevTokenUiEnabled } from "../lib/msalConfig";
 import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
 import { StatusBadge } from "./StatusBadge";
 import { humanizePartyKind } from "../lib/vocab";
@@ -32,22 +33,22 @@ function useManualTokenState() {
   return { showDev, token, setToken };
 }
 
-export function ContactsB2C() {
+export function Contacts() {
   const { instance, accounts } = useMsal();
   const { showDev, token: devToken, setToken: setDevToken } = useManualTokenState();
   const [data, setData] = useState<ListResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
-  const scopes = getApiScopeList();
+  const base = getBaseUrl();
+  const scopes = API_ACCESS_SCOPES;
 
   const resolveAccessToken = useCallback(async () => {
     const account = instance.getActiveAccount() ?? accounts[0] ?? null;
     if (account) {
       if (scopes.length === 0) {
         throw new Error(
-          "API scope is not configured. Ask an administrator to set the Azure AD B2C API scope.",
+          "API scope is not configured. Ask an administrator to set the jp-adopt-core API scope.",
         );
       }
       try {
@@ -101,7 +102,7 @@ export function ContactsB2C() {
   const signIn = useCallback(() => {
     if (scopes.length === 0) {
       setErr(
-        "API scope is not configured. Ask an administrator to set the Azure AD B2C API scope.",
+        "API scope is not configured. Ask an administrator to set the jp-adopt-core API scope.",
       );
       return;
     }

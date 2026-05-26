@@ -20,17 +20,19 @@ Build-API, Build-worker (parallel) → push to ACR
   ↓
 Migrate → alembic upgrade head against production Postgres
   ↓ (only if migrations succeed)
-Deploy-API, Deploy-worker (parallel) → roll new ACA revisions
+Deploy-API, Deploy-worker, Deploy-web (parallel) → roll new ACA revisions
   ↓
-Smoke check /healthz exposes the new SHA
-  ↓
-Deploy-web (Static Web Apps, parallel with API/worker)
+Smoke (after API + web) → web root 200, /api proxy reaches the API,
+  and /api/healthz carries the new API SHA
 ```
 
 If migrations fail, the deploy aborts and the previous revisions keep
-serving traffic. The web deploy is independent — it pushes a new
-static build to Azure Static Web Apps and doesn't depend on the API
-container being rolled.
+serving traffic. The web app runs as its own Azure Container App (a
+standalone Next.js Node server — **not** Static Web Apps, which cannot
+run a standalone server). The browser calls same-origin `/api/*`, which
+the Next server rewrites to the API's **internal** container-app FQDN
+(baked into the image at build time). The API ingress stays
+internal-only; the web Container App is its public front door.
 
 ## One-time provisioning
 
@@ -59,8 +61,10 @@ the Terraform; this runbook references the resources it creates.
    - `azure-tenant-id`, `azure-subscription-id`, `azure-client-id`
    - `acr-login-server` (e.g. `jpadopt.azurecr.io`)
    - `aca-resource-group` (e.g. `rg-jp-adopt-prod`)
-   - `aca-api-app-name`, `aca-worker-app-name`
-   - `swa-app-name`, `swa-api-token`
+   - `aca-api-app-name`, `aca-worker-app-name`, `aca-web-app-name`
+   - `swa-app-name`, `swa-api-token` (retained only as a rollback
+     escape hatch while the web Container App soaks; not used by the
+     deploy steps and not in the preflight required list)
 
    **Category B — Terraform-managed secrets** (consumed by
    jp-infrastructure's `terraform.yml`; NOT used directly here): 10
@@ -90,12 +94,9 @@ the Terraform; this runbook references the resources it creates.
    verification is green.
 
 6. **GitHub repo "variables" (non-secret) used by the web build.**
-   - `NEXT_PUBLIC_API_URL`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_POLICY`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES`
+   - `NEXT_PUBLIC_API_URL` (set to `/api` so the browser hits the same-origin proxy)
+   - `NEXT_PUBLIC_AZURE_AD_CLIENT_ID` — the **SPA** app reg client ID (output `spa_client_id` from `stacks/azure/entra/jp-adopt-core-sso` in jp-infrastructure). Public; ships in the SPA bundle. Tenant ID is hardcoded in `deploy.yml` since this is a single-tenant SPA.
+   - (B2C build args removed — B2C was closed to new customers 2025-05-01; staff auth is Entra direct via the SPA app reg.)
 
    These are non-secret (they ship in the SPA's JS bundle) but
    environment-specific, so they live in repo `vars`, not `secrets`.
@@ -110,24 +111,28 @@ gh workflow run deploy.yml -f target=api -R joshua-project/jp-adopt-core
 
 ## Verification after deploy
 
-The workflow's `Smoke check /healthz exposes new SHA` step does this
-automatically (hitting the public SWA URL), but the operator should
-re-run after a manual deploy:
+The workflow's `smoke` job does this automatically (web root 200, the
+`/api` proxy reaching the API, and `/api/healthz` carrying the new API
+SHA), but the operator should re-run after a manual deploy:
 
 ```bash
-curl -fsS "https://adopt.joshuaproject.net/api/healthz"
+curl -fsS "https://adoption.joshuaproject.net/api/healthz"
 # Expected: {"status":"ok","sha":"<10-char commit prefix>"}
 
-curl -fsS "https://adopt.joshuaproject.net/api/readyz"
+curl -fsS "https://adoption.joshuaproject.net/api/readyz"
 # Expected: {"status":"ready","sha":"<10-char commit prefix>"}
 ```
 
-These URLs go through Static Web Apps' linked-backend forwarding
-(`/api/*` → API ACA), so they exercise the public entry path that
-real users hit. **Don't curl the ACA FQDN directly** — the
-infrastructure provisioning (jp-infrastructure PR #157 U5) marks the
-API ingress as `external_enabled=false`, so the ACA FQDN is only
-reachable from inside the managed environment.
+These URLs go through the web Container App's Next.js `/api/*` rewrite
+(`/api/*` → API's internal ACA FQDN, `/api` prefix stripped), so they
+exercise the public entry path real users hit. The hostname is
+`adoption.joshuaproject.net` (with the `-ion` suffix) — `adopt.*` is the
+legacy DT WordPress site. Pre-domain-cutover, use the ACA-generated web
+FQDN (`az containerapp show -n jp-adopt-core-web-production -g <rg>
+--query properties.configuration.ingress.fqdn -o tsv`). **Don't curl the
+API ACA FQDN directly** — its ingress is `external_enabled=false`, so it
+is only reachable from inside the managed environment (and now via the
+web proxy).
 
 If `/api/readyz` returns 503, Postgres is unreachable from the
 container. Check the container's `DATABASE_URL` injection (via ACA
@@ -151,8 +156,14 @@ az containerapp ingress traffic set \
   --revision-weight <previous-revision-name>=100
 
 # 3. Confirm /healthz returns the old SHA
-curl -fsS "https://adopt.joshuaproject.net/api/healthz"
+curl -fsS "https://adoption.joshuaproject.net/api/healthz"
 ```
+
+The same `ingress traffic set` procedure rolls back the **web** Container
+App (`jp-adopt-core-web-production`). As a last-resort escape hatch the
+idle Static Web App still exists — re-binding `adoption.joshuaproject.net`
+to it reverts to the pre-migration path (verify the SWA actually serves
+first; its linked backend points at the now-internal API).
 
 Migrations are NOT rolled back automatically. If the bad deploy
 applied a migration with breaking behavior, also run:
@@ -169,8 +180,8 @@ the per-PR migration body for the safest downgrade target.
 
 Set up a synthetic monitor (Azure Monitor / Datadog / Uptime Robot —
 pick one) hitting:
-- `GET https://adopt.joshuaproject.net/api/healthz` every 60s — pages on 2 consecutive failures
-- `GET https://adopt.joshuaproject.net/api/readyz` every 5 min — pages on 1 failure (Postgres outage)
+- `GET https://adoption.joshuaproject.net/api/healthz` every 60s — pages on 2 consecutive failures
+- `GET https://adoption.joshuaproject.net/api/readyz` every 5 min — pages on 1 failure (Postgres outage)
 
 Both endpoints return the deploy SHA in the response body so the
 monitor's history can correlate "started failing" with "new revision
@@ -184,11 +195,11 @@ rolled".
 - **ACA + Key Vault references do NOT auto-rotate.** When a referenced
   secret rotates, the container revision needs a restart. See
   `secret-rotation.md` for the procedure.
-- **Web deploy doesn't share the API's smoke check.** The Static Web
-  Apps deploy is fire-and-forget; if the build artifact references a
-  stale `NEXT_PUBLIC_API_URL`, the browser console reveals it but the
-  workflow doesn't catch it. Eyeball `/contacts` after every web
-  deploy.
+- **Proxy target is baked at build, not env-portable.** The web image
+  hard-codes the API's internal FQDN (resolved at build by `build-web`).
+  If the API container app is recreated with a new internal FQDN, the
+  web image must be rebuilt; a runtime env change won't take effect
+  (Next freezes `rewrites()` at build time).
 - **Terraform changes (jp-infrastructure repo)** apply on a separate
   workflow. This runbook only covers the container/web layer. ACS
   Email DNS, ACA managed environment, Key Vault references, etc.,

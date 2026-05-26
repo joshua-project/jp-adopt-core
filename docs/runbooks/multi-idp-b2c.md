@@ -1,5 +1,17 @@
 # Multi-IdP authentication (B2C + Entra direct + magic-link)
 
+> **Update 2026-05-26:** B2C was closed by Microsoft to new customers
+> (2025-05-01). The launch staff auth is **Entra direct** (Phase 2 /
+> jp-adopt-core#60). The B2C decoder code stays in place but is no longer
+> exercised. The web-side UI lives at `/signin` and `/auth/callback`
+> (MSAL v5 PKCE, single-tenant). Staff Entra OIDs are seeded in
+> `user_roles` via Alembic — see migration `0014_seed_staff_user_roles`.
+> Adding a new staff member is an `az ad user show` lookup + a new
+> Alembic revision inserting one row; deferred admin UI is in Part F of
+> the Entra direct plan (`docs/superpowers/plans/2026-05-26-entra-direct-staff-auth.md`).
+> `partner_tenants` is seeded with the JP Entra tenant
+> (`761e2c5f-34bd-4872-b86c-3a9f3b29d63a`) by migration `0013`.
+
 This runbook covers the operator-facing tasks for the JP ADOPT multi-IdP
 authentication stack introduced in U3.
 
@@ -123,3 +135,38 @@ the `dev-local` bearer token outright. There is no override.
 
 `MAGIC_LINK_SIGNING_KEY` is validated to be >= 32 bytes when `APP_ENV=production`
 (see `Settings.magic_link_key_must_be_strong_in_production`).
+
+## v2-token `aud` quirk (Entra direct)
+
+When a token is issued via the **v2.0 endpoint** — which is the case for
+the SPA, because the API app registration is created with
+`requestedAccessTokenVersion = 2` — Entra populates the `aud` claim with
+the **resource appId GUID**, *not* its identifier URI. The identifier URI
+(`api://jp-adopt-core`) shows up only in v1 access tokens.
+
+Concretely, the JP API app reg (`75edd3b3-90c8-4982-a619-d038ebaa50ea`)
+has `identifierUris = ["api://jp-adopt-core"]`. A token Entra issues for
+the `api://jp-adopt-core/api.access` scope carries:
+
+```
+aud = "75edd3b3-90c8-4982-a619-d038ebaa50ea"      # NOT "api://jp-adopt-core"
+ver = "2.0"
+iss = "https://login.microsoftonline.com/<tid>/v2.0"
+scp = "api.access"
+```
+
+So the API must validate `aud` against the **appId GUID**, not the URI.
+The `ENTRA_DIRECT_AUDIENCE` env var is set by `.github/workflows/deploy.yml`
+on every API deploy; the default in `config.py` keeps the URI form only as
+a dev/test convenience and includes a warning. Failure mode if this drifts:
+every authenticated request returns `401 {"detail":"Invalid or expired
+access token"}` because `jwt.decode(...)` raises `InvalidAudienceError`.
+The application logger records the precise failure at DEBUG level
+(`auth.py: "JWT validation failed: …"`), which is below the default INFO
+threshold — so when diagnosing, either decode the token offline or bump
+the log level.
+
+Rotating the API appId (rare; would happen via a Terraform change in
+`jp-infrastructure/stacks/azure/entra/jp-adopt-core-sso/`) requires a
+matching update to the hardcoded GUID in `deploy.yml` — keep them in the
+same PR.

@@ -159,13 +159,13 @@ async def _seed_role(session: AsyncSession, user_sub: str, role_name: str) -> No
     existing = (
         await session.execute(
             select(UserRole).where(
-                UserRole.user_b2c_subject_id == user_sub,
+                UserRole.user_subject_id == user_sub,
                 UserRole.role_id == role.id,
             )
         )
     ).scalar_one_or_none()
     if existing is None:
-        session.add(UserRole(user_b2c_subject_id=user_sub, role_id=role.id))
+        session.add(UserRole(user_subject_id=user_sub, role_id=role.id))
         await session.commit()
 
 
@@ -175,7 +175,7 @@ async def _grant_org_membership(
     existing = (
         await session.execute(
             select(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == user_sub,
+                FacilitatorOrgMembership.user_subject_id == user_sub,
                 FacilitatorOrgMembership.facilitator_org_id == org_id,
             )
         )
@@ -183,7 +183,7 @@ async def _grant_org_membership(
     if existing is None:
         session.add(
             FacilitatorOrgMembership(
-                user_b2c_subject_id=user_sub,
+                user_subject_id=user_sub,
                 facilitator_org_id=org_id,
             )
         )
@@ -968,7 +968,7 @@ async def test_decide_facilitator_cross_org_returns_403(
         # Clean up the membership row first to avoid an orphan after _cleanup_org.
         await session.execute(
             delete(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == "dev-local"
+                FacilitatorOrgMembership.user_subject_id == "dev-local"
             )
         )
         await session.commit()

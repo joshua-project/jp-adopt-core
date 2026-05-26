@@ -3,6 +3,7 @@ import { Inter_Tight, Open_Sans } from "next/font/google";
 import "./globals.css";
 
 import { MsalClientProvider } from "../src/components/MsalClientProvider";
+import { RequireAuth } from "../src/components/RequireAuth";
 import { SiteHeader } from "../src/components/SiteHeader";
 
 // JP brand fonts — Inter Tight for headings, Open Sans for body. Loaded
@@ -38,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <MsalClientProvider>
           <SiteHeader />
           <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-            {children}
+            <RequireAuth>{children}</RequireAuth>
           </main>
         </MsalClientProvider>
       </body>

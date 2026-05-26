@@ -113,21 +113,21 @@ async def test_create_facilitator_membership_grants_access(
     r = client.post(
         "/v1/admin/facilitator-memberships",
         json={
-            "user_b2c_subject_id": user_sub,
+            "user_subject_id": user_sub,
             "facilitator_org_id": str(_seeded_org.id),
         },
         headers=_auth_headers(),
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["user_b2c_subject_id"] == user_sub
+    assert body["user_subject_id"] == user_sub
     assert body["facilitator_org_id"] == str(_seeded_org.id)
     assert body["role_in_org"] == "member"
     # Persisted.
     existing = (
         await session.execute(
             select(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == user_sub
+                FacilitatorOrgMembership.user_subject_id == user_sub
             )
         )
     ).scalar_one_or_none()
@@ -142,7 +142,7 @@ async def test_create_facilitator_membership_duplicate_returns_409(
 ) -> None:
     user_sub = f"user-{uuid.uuid4().hex[:8]}"
     payload = {
-        "user_b2c_subject_id": user_sub,
+        "user_subject_id": user_sub,
         "facilitator_org_id": str(_seeded_org.id),
     }
     r1 = client.post(
@@ -169,7 +169,7 @@ async def test_delete_facilitator_membership_revokes(
     user_sub = f"user-{uuid.uuid4().hex[:8]}"
     session.add(
         FacilitatorOrgMembership(
-            user_b2c_subject_id=user_sub,
+            user_subject_id=user_sub,
             facilitator_org_id=_seeded_org.id,
         )
     )
@@ -182,7 +182,7 @@ async def test_delete_facilitator_membership_revokes(
     remaining = (
         await session.execute(
             select(FacilitatorOrgMembership).where(
-                FacilitatorOrgMembership.user_b2c_subject_id == user_sub
+                FacilitatorOrgMembership.user_subject_id == user_sub
             )
         )
     ).scalar_one_or_none()

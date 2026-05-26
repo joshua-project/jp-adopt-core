@@ -4,10 +4,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
-from jp_adopt_api.deps import CurrentUser, DbSession
+from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
@@ -36,6 +36,14 @@ from jp_adopt_api.schemas import (
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
 EVENT_CONTACT_UPDATED = "jp.adopt.v1.contact.updated"
+
+# Staff roles allowed to read/write contacts. Mirrors `manual_contacts._STAFF_ROLES`
+# — the set of staff users who triage adopter/facilitator records. Without this
+# gate, `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
+# account; the role check (row-level) is the second defense gate (U22 of the
+# Entra direct plan).
+_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
+_STAFF_DEP = require_role(*_STAFF_ROLES)
 
 # Allowed status values per kind — mirrors the CHECK constraints on the
 # ``contacts`` table (see migration 0001 + models.py). Keeping the lists
@@ -66,7 +74,7 @@ _UNSET_KEY = "__unset__"
 @router.get("", response_model=ContactListResponse)
 async def list_contacts(
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     # Pipeline views (/adopters, /facilitators) request limit=200 so the
     # kanban can show everything in one shot without paging — most JP
     # cohorts are well under 500 contacts total. Bump max to 500 to give
@@ -155,7 +163,7 @@ async def list_contacts(
 @router.get("/status_counts", response_model=ContactStatusCounts)
 async def contact_status_counts(
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     party_kind: Annotated[
         Literal["adopter", "facilitator"],
         Query(
@@ -210,7 +218,7 @@ async def contact_status_counts(
 async def get_contact(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> ContactRead:
     row = await db.get(Contact, contact_id)
     if row is None:
@@ -220,9 +228,8 @@ async def get_contact(
 
 # ── Contact record (U1/U2): per-contact aggregates + add-note ──────────────
 #
-# Access mirrors the sibling contact endpoints (any authenticated user): the
-# record page is a staff tool and `list_contacts`/`get_contact` already expose
-# contact data to `CurrentUser`. Sub-resources stay consistent with the parent.
+# Role-gated to staff via _STAFF_DEP, consistent with the sibling contact
+# endpoints after the Entra-direct auth overhaul.
 
 
 async def _require_contact(db: DbSession, contact_id: uuid.UUID) -> Contact:
@@ -238,7 +245,7 @@ async def _require_contact(db: DbSession, contact_id: uuid.UUID) -> Contact:
 async def get_contact_matches(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ContactMatchesResponse:
@@ -293,7 +300,7 @@ async def get_contact_matches(
 async def get_contact_transitions(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ContactTransitionsResponse:
@@ -326,7 +333,7 @@ async def get_contact_transitions(
 async def get_contact_activity(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ContactActivityResponse:
@@ -359,7 +366,7 @@ async def get_contact_activity(
 async def get_contact_timeline(
     contact_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
     limit: int = Query(50, ge=1, le=200),
 ) -> ContactTimelineResponse:
     """Merged newest-first feed of transitions + matches + activity. Fetches
@@ -437,11 +444,12 @@ async def add_contact_note(
     contact_id: uuid.UUID,
     body: ContactNoteCreate,
     db: DbSession,
-    user: CurrentUser,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> ContactActivityRow:
     """Write a staff note into ``activity_log`` (kind defaults to ``note``).
     No outbox event — an internal note is not a domain state change."""
     await _require_contact(db, contact_id)
+    user, _roles = user_with_roles
     note = ActivityLog(
         id=uuid.uuid4(),
         contact_id=contact_id,
@@ -462,7 +470,7 @@ async def patch_contact(
     contact_id: uuid.UUID,
     body: ContactPatch,
     db: DbSession,
-    _user: CurrentUser,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> ContactRead:
     updates = body.model_dump(exclude_unset=True)
     if not updates:
