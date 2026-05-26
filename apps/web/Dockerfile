@@ -16,6 +16,12 @@
 # from repo `vars` and forwards. Dev defaults assume the API on
 # http://127.0.0.1:8000 — change with --build-arg NEXT_PUBLIC_API_URL.
 
+# API_PROXY_TARGET is the INTERNAL container-app FQDN of the API. Next.js
+# evaluates next.config.ts `rewrites()` at BUILD time and freezes the result
+# into the standalone server, so this must be present during `next build`
+# (a runtime container env var is NOT read by the baked server). The deploy
+# workflow resolves the API's internal FQDN via `az` and passes it here.
+ARG API_PROXY_TARGET=
 ARG NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 ARG NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID=
 ARG NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME=
@@ -57,6 +63,7 @@ COPY apps/web ./apps/web
 COPY packages/contracts ./packages/contracts
 
 # Re-import build args for this stage (Docker scopes ARG per stage).
+ARG API_PROXY_TARGET
 ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID
 ARG NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME
@@ -66,6 +73,7 @@ ARG NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES
 ARG NEXT_PUBLIC_AZURE_AD_B2C_KNOWN_AUTHORITIES
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
+    API_PROXY_TARGET=${API_PROXY_TARGET} \
     NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID=${NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID} \
     NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME=${NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME} \
