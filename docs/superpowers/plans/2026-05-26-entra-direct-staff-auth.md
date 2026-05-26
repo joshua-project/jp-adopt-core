@@ -11,6 +11,19 @@ origin: https://github.com/joshua-project/jp-adopt-core/issues/60
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Errata (2026-05-26, post-launch):** The plan asserts in several places that
+> the API will validate `aud = "api://jp-adopt-core"`. That's wrong for the
+> SPA→API token flow this plan ships. The API app reg sets
+> `requestedAccessTokenVersion = 2`; for v2.0-endpoint tokens, Entra populates
+> `aud` with the resource app reg's **appId GUID**
+> (`75edd3b3-90c8-4982-a619-d038ebaa50ea`), not its identifier URI. The
+> production fix sets `ENTRA_DIRECT_AUDIENCE=<GUID>` in
+> `.github/workflows/deploy.yml` on the API container. See
+> `docs/runbooks/multi-idp-b2c.md` ("v2-token `aud` quirk") for the full
+> writeup. Section "Routing/Auth Contract" line `API expected aud (incoming
+> JWT)` and the relevant U2 assertions are inaccurate; the running system is
+> correct.
+
 **Goal:** Implement jp-adopt-core#60 as the **launch auth** for adopt-core's staff web — staff sign in with their `@joshuaproject.net` Microsoft account, get a JWT the API already validates, and reach the dashboard.
 
 **Architecture:** Single-tenant Entra direct via MSAL v5 PKCE. The API already dispatches Entra-issued JWTs (`apps/api/src/jp_adopt_api/auth.py:_ENTRA_ISSUER_RE` → `auth_entra.py:decode_entra_direct_token`, validating against a `partner_tenants` allowlist with `aud = api://jp-adopt-core`). Two new Entra app registrations land in jp-infrastructure: an **API app reg** (exposes the `api.access` scope under `api://jp-adopt-core`) and a **SPA app reg** (PKCE, redirect URIs for both the ACA FQDN and the future custom domain). The web app gets a new Entra MSAL config that replaces the dead B2C scaffolding, a `/signin` page, a `/auth/callback` handler, a client-side auth gate, and a tweak to `api-client.ts` that puts the MSAL-acquired access token on every API request. A new Alembic migration seeds the JP tenant in `partner_tenants`. The dev-token textbox stays dead-code-eliminated by the existing `NODE_ENV === "production"` gate.
