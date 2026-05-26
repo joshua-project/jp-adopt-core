@@ -462,7 +462,7 @@ jobs:
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
               --revision "$REVISION" \
               --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
-            IFS=$'\t' read -r prov running <<< "$line"
+            { read -r prov; read -r running; } <<< "$line"  # az tsv emits newline-separated for [a,b]
             if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
               echo "API revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
@@ -571,7 +571,7 @@ jobs:
               --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
               --revision "$REVISION" \
               --query "[properties.provisioningState, properties.runningState]" -o tsv 2>/dev/null || echo "")
-            IFS=$'\t' read -r prov running <<< "$line"
+            { read -r prov; read -r running; } <<< "$line"  # az tsv emits newline-separated for [a,b]
             if [ "$prov" = "Provisioned" ] && [ "$running" = "Running" ]; then
               echo "Web revision $REVISION ready (Provisioned+Running) after ${i} polls."
               exit 0
