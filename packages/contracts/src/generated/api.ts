@@ -758,6 +758,10 @@ export interface components {
             adopter_interest_id: string;
             /** Rop3 */
             rop3: string | null;
+            /** Rop3 Name */
+            rop3_name?: string | null;
+            /** Rop3 Country */
+            rop3_country?: string | null;
             /**
              * Facilitator Org Id
              * Format: uuid

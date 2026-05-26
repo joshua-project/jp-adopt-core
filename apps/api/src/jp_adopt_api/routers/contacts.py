@@ -14,6 +14,7 @@ from jp_adopt_api.models import (
     Contact,
     ContactProfile,
     FacilitatingOrg,
+    Fpg,
     Match,
     TransitionAudit,
 )
@@ -285,9 +286,16 @@ async def get_contact_matches(
     )
     rows = (
         await db.execute(
-            select(Match, AdopterInterest.rop3, FacilitatingOrg.name)
+            select(
+                Match,
+                AdopterInterest.rop3,
+                FacilitatingOrg.name,
+                Fpg.name,
+                Fpg.country_code,
+            )
             .join(AdopterInterest, interest_join)
             .join(FacilitatingOrg, FacilitatingOrg.id == Match.facilitator_org_id)
+            .outerjoin(Fpg, Fpg.rop3 == AdopterInterest.rop3)
             .where(AdopterInterest.contact_id == contact_id)
             .order_by(Match.recommended_at.desc())
             .offset(offset)
@@ -299,6 +307,8 @@ async def get_contact_matches(
             id=m.id,
             adopter_interest_id=m.adopter_interest_id,
             rop3=rop3,
+            rop3_name=fpg_name,
+            rop3_country=fpg_country,
             facilitator_org_id=m.facilitator_org_id,
             facilitator_name=name,
             status=m.status,
@@ -308,7 +318,7 @@ async def get_contact_matches(
             decision_reason_code=m.decision_reason_code,
             decision_reason_text=m.decision_reason_text,
         )
-        for (m, rop3, name) in rows
+        for (m, rop3, name, fpg_name, fpg_country) in rows
     ]
     return ContactMatchesResponse(items=items, total=total)
 

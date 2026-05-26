@@ -193,6 +193,8 @@ class ContactMatchRow(BaseModel):
     id: uuid.UUID
     adopter_interest_id: uuid.UUID
     rop3: str | None
+    rop3_name: str | None = None
+    rop3_country: str | None = None
     facilitator_org_id: uuid.UUID
     facilitator_name: str
     status: str

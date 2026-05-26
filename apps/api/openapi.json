@@ -2764,6 +2764,28 @@
             ],
             "title": "Rop3"
           },
+          "rop3_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rop3 Name"
+          },
+          "rop3_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rop3 Country"
+          },
           "facilitator_org_id": {
             "type": "string",
             "format": "uuid",
