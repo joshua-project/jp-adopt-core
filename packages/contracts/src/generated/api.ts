@@ -114,6 +114,90 @@ export interface paths {
         patch: operations["patch_contact_v1_contacts__contact_id__patch"];
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Matches
+         * @description All Matches across this contact's AdopterInterests (newest first).
+         *
+         *     The matches API is otherwise keyed on AdopterInterest; the record page
+         *     needs the whole-contact view, so we join through interests here.
+         */
+        get: operations["get_contact_matches_v1_contacts__contact_id__matches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Contact Transitions */
+        get: operations["get_contact_transitions_v1_contacts__contact_id__transitions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Contact Activity */
+        get: operations["get_contact_activity_v1_contacts__contact_id__activity_get"];
+        put?: never;
+        /**
+         * Add Contact Note
+         * @description Write a staff note into ``activity_log`` (kind defaults to ``note``).
+         *     No outbox event — an internal note is not a domain state change.
+         */
+        post: operations["add_contact_note_v1_contacts__contact_id__activity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Timeline
+         * @description Merged newest-first feed of transitions + matches + activity. Fetches
+         *     up to ``limit`` of each source, merges in memory, and returns the top
+         *     ``limit``. A future optimization can push the merge into SQL.
+         */
+        get: operations["get_contact_timeline_v1_contacts__contact_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/magic-link/request": {
         parameters: {
             query?: never;
@@ -618,6 +702,37 @@ export interface components {
              */
             created_at: string;
         };
+        /** ContactActivityResponse */
+        ContactActivityResponse: {
+            /** Items */
+            items: components["schemas"]["ContactActivityRow"][];
+            /** Total */
+            total: number;
+        };
+        /** ContactActivityRow */
+        ContactActivityRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Author Id */
+            author_id: string;
+            /** Body */
+            body: string;
+            /** Kind */
+            kind: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** ContactListResponse */
         ContactListResponse: {
             /** Items */
@@ -628,6 +743,60 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /** ContactMatchRow */
+        ContactMatchRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Adopter Interest Id
+             * Format: uuid
+             */
+            adopter_interest_id: string;
+            /** Rop3 */
+            rop3: string | null;
+            /**
+             * Facilitator Org Id
+             * Format: uuid
+             */
+            facilitator_org_id: string;
+            /** Facilitator Name */
+            facilitator_name: string;
+            /** Status */
+            status: string;
+            /**
+             * Recommended At
+             * Format: date-time
+             */
+            recommended_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decision Reason Code */
+            decision_reason_code: string | null;
+            /** Decision Reason Text */
+            decision_reason_text: string | null;
+        };
+        /** ContactMatchesResponse */
+        ContactMatchesResponse: {
+            /** Items */
+            items: components["schemas"]["ContactMatchRow"][];
+            /** Total */
+            total: number;
+        };
+        /** ContactNoteCreate */
+        ContactNoteCreate: {
+            /** Body */
+            body: string;
+            /**
+             * Kind
+             * @default note
+             */
+            kind: string | null;
         };
         /** ContactPatch */
         ContactPatch: {
@@ -685,6 +854,66 @@ export interface components {
             counts: {
                 [key: string]: number;
             };
+            /** Total */
+            total: number;
+        };
+        /**
+         * ContactTimelineEntry
+         * @description One merged feed entry. ``type`` discriminates the source table so the
+         *     UI can pick an icon; ``ref_id`` is the source row id as a string.
+         */
+        ContactTimelineEntry: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "transition" | "match" | "activity";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Title */
+            title: string;
+            /** Detail */
+            detail?: string | null;
+            /** Ref Id */
+            ref_id: string;
+        };
+        /** ContactTimelineResponse */
+        ContactTimelineResponse: {
+            /** Items */
+            items: components["schemas"]["ContactTimelineEntry"][];
+        };
+        /** ContactTransitionRow */
+        ContactTransitionRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** From State */
+            from_state: string | null;
+            /** To State */
+            to_state: string;
+            /** Actor Id */
+            actor_id: string | null;
+            /** Actor Role */
+            actor_role: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Reason Text */
+            reason_text: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+        };
+        /** ContactTransitionsResponse */
+        ContactTransitionsResponse: {
+            /** Items */
+            items: components["schemas"]["ContactTransitionRow"][];
             /** Total */
             total: number;
         };
@@ -1273,6 +1502,186 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContactRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_matches_v1_contacts__contact_id__matches_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactMatchesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_transitions_v1_contacts__contact_id__transitions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactTransitionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_activity_v1_contacts__contact_id__activity_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_contact_note_v1_contacts__contact_id__activity_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactNoteCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactActivityRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_timeline_v1_contacts__contact_id__timeline_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactTimelineResponse"];
                 };
             };
             /** @description Validation Error */

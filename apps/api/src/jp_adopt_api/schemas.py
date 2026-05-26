@@ -77,6 +77,94 @@ class ContactPatch(BaseModel):
         return self
 
 
+# ── Contact record (U1): per-contact aggregates for /contacts/[id] ─────────
+#
+# These power the canonical contact-record page. They surface data already
+# stored (matches, transition_audit, activity_log) that previously had no read
+# surface. Raw enum values are returned as-is; the web client humanizes via
+# apps/web/src/lib/vocab.ts.
+
+
+class ContactMatchRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    adopter_interest_id: uuid.UUID
+    rop3: str | None
+    facilitator_org_id: uuid.UUID
+    facilitator_name: str
+    status: str
+    recommended_at: datetime
+    decided_at: datetime | None
+    decided_by: str | None
+    decision_reason_code: str | None
+    decision_reason_text: str | None
+
+
+class ContactMatchesResponse(BaseModel):
+    items: list[ContactMatchRow]
+    total: int
+
+
+class ContactTransitionRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    from_state: str | None
+    to_state: str
+    actor_id: str | None
+    actor_role: str | None
+    reason_code: str | None
+    reason_text: str | None
+    occurred_at: datetime
+
+
+class ContactTransitionsResponse(BaseModel):
+    items: list[ContactTransitionRow]
+    total: int
+
+
+class ContactActivityRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    author_id: str
+    body: str
+    kind: str | None
+    occurred_at: datetime
+    created_at: datetime
+
+
+class ContactActivityResponse(BaseModel):
+    items: list[ContactActivityRow]
+    total: int
+
+
+class ContactTimelineEntry(BaseModel):
+    """One merged feed entry. ``type`` discriminates the source table so the
+    UI can pick an icon; ``ref_id`` is the source row id as a string."""
+
+    type: Literal["transition", "match", "activity"]
+    at: datetime
+    title: str
+    detail: str | None = None
+    ref_id: str
+
+
+class ContactTimelineResponse(BaseModel):
+    items: list[ContactTimelineEntry]
+
+
+# ── Add-note (U2): write a staff note into activity_log ────────────────────
+
+
+class ContactNoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=8192)
+    kind: str | None = Field(default="note", max_length=64)
+
+
 # ── Intake (U4): Form A facilitation + Form B adoption ─────────────────────
 #
 # These schemas mirror jp-adopt-forms' POST envelope and accept the subset of
