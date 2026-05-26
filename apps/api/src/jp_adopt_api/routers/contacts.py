@@ -12,6 +12,7 @@ from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
     Contact,
+    ContactProfile,
     FacilitatingOrg,
     Match,
     TransitionAudit,
@@ -25,6 +26,7 @@ from jp_adopt_api.schemas import (
     ContactMatchRow,
     ContactNoteCreate,
     ContactPatch,
+    ContactProfileRead,
     ContactRead,
     ContactStatusCounts,
     ContactTimelineEntry,
@@ -214,6 +216,21 @@ async def contact_status_counts(
     )
 
 
+async def _contact_read_with_profile(
+    db: DbSession, contact: Contact
+) -> ContactRead:
+    """Build ContactRead and attach the 1:1 contact_profile (U9), if present."""
+    read = ContactRead.model_validate(contact)
+    prof = (
+        await db.execute(
+            select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+        )
+    ).scalar_one_or_none()
+    if prof is not None:
+        read.profile = ContactProfileRead.model_validate(prof)
+    return read
+
+
 @router.get("/{contact_id}", response_model=ContactRead)
 async def get_contact(
     contact_id: uuid.UUID,
@@ -223,7 +240,7 @@ async def get_contact(
     row = await db.get(Contact, contact_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-    return ContactRead.model_validate(row)
+    return await _contact_read_with_profile(db, row)
 
 
 # ── Contact record (U1/U2): per-contact aggregates + add-note ──────────────
@@ -483,39 +500,54 @@ async def patch_contact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
     now = datetime.now(UTC)
+    contact_changed = False
     if "party_kind" in updates:
         contact.party_kind = updates["party_kind"]
+        contact_changed = True
     if "display_name" in updates:
         contact.display_name = updates["display_name"]
-    # NOTE: adopter_status / facilitator_status were intentionally removed
-    # from ContactPatch in F5: status mutations must flow through the
-    # state-machine entrypoints (transition_adopter / transition_facilitator)
-    # to enforce role checks, reason-code validation, and the audit row.
-    # A follow-up unit (U7) will add ``POST /v1/contacts/{id}/transition``;
-    # until then, this PATCH endpoint covers display_name / party_kind only.
-    contact.updated_at = now
+        contact_changed = True
+    # adopter_status / facilitator_status are intentionally NOT patchable here
+    # (F5): status mutations flow through POST /v1/contacts/{id}/transition so
+    # role checks, reason codes, and the audit row are enforced.
 
-    payload = {
-        "event": EVENT_CONTACT_UPDATED,
-        "schema_version": "jp.adopt.v1",
-        "timestamp": now.isoformat(),
-        "contact_id": str(contact.id),
-        "data": {
-            "display_name": contact.display_name,
-            "party_kind": contact.party_kind,
-            "adopter_status": contact.adopter_status,
-            "facilitator_status": contact.facilitator_status,
-        },
-    }
-    # Route via emit_outbox so bulk-import paths can suppress this event
-    # under their summary; outside suppression, this writes a normal Outbox
-    # row (preserving the previous behavior).
-    emit_outbox(
-        db,
-        event_type=EVENT_CONTACT_UPDATED,
-        payload=payload,
-    )
+    # U9: adoption-profile edits upsert the 1:1 contact_profile row. Kept off
+    # the Contact row so they don't bump Contact.version (the optimistic-lock
+    # column the match/transition flows gate on).
+    if body.profile is not None:
+        prof = (
+            await db.execute(
+                select(ContactProfile).where(
+                    ContactProfile.contact_id == contact.id
+                )
+            )
+        ).scalar_one_or_none()
+        if prof is None:
+            prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
+            db.add(prof)
+        for field_name, value in body.profile.model_dump(exclude_unset=True).items():
+            setattr(prof, field_name, value)
+
+    # Only stamp + emit a contact.updated event when contact-level fields moved.
+    if contact_changed:
+        contact.updated_at = now
+        emit_outbox(
+            db,
+            event_type=EVENT_CONTACT_UPDATED,
+            payload={
+                "event": EVENT_CONTACT_UPDATED,
+                "schema_version": "jp.adopt.v1",
+                "timestamp": now.isoformat(),
+                "contact_id": str(contact.id),
+                "data": {
+                    "display_name": contact.display_name,
+                    "party_kind": contact.party_kind,
+                    "adopter_status": contact.adopter_status,
+                    "facilitator_status": contact.facilitator_status,
+                },
+            },
+        )
 
     await db.commit()
     await db.refresh(contact)
-    return ContactRead.model_validate(contact)
+    return await _contact_read_with_profile(db, contact)

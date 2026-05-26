@@ -1,10 +1,106 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+
+# ── Adoption profile (U9): contact_profile field enums ─────────────────────
+# Option sets mirror dt-adoption-fields/custom-fields.php + migration 0012.
+EntitySize = Literal["1", "lt_30", "31_100", "101_500", "501_2000", "2001_plus"]
+AdopterType = Literal[
+    "individual", "small_group", "church", "organization", "network"
+]
+MouStatus = Literal["signed", "not_required", "not_sent"]
+PreferredCommunication = Literal["email", "phone"]
+
+
+class ContactProfileRead(BaseModel):
+    """Read view of the 1:1 contact_profile (the JP-custom adoption fields).
+    Enum-shaped fields are typed ``str`` here so stored values always
+    round-trip even if the option set later changes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    ministry_areas: list[str] | None = None
+    entity_size: str | None = None
+    primary_contact_name: str | None = None
+    secondary_contact_name: str | None = None
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = None
+    website: str | None = None
+    preferred_communication: str | None = None
+    form_country: str | None = None
+    form_state_region: str | None = None
+    adopter_type: str | None = None
+    commitment_types: list[str] | None = None
+    commitment_date: date | None = None
+    works_with_fpgs: bool | None = None
+    willing_to_facilitate: bool | None = None
+    facilitation_entity_types: list[str] | None = None
+    facilitation_entity_sizes: list[str] | None = None
+    mou_status: str | None = None
+    mou_signature_name: str | None = None
+    want_facilitator_connection: bool | None = None
+    facilitator_entity_types: list[str] | None = None
+    desired_facilitator_info: list[str] | None = None
+    want_network_connection: bool | None = None
+    network_partner_info: list[str] | None = None
+    has_doctrinal_distinctives: bool | None = None
+    doctrinal_distinctives: str | None = None
+    has_accountability_membership: bool | None = None
+    accountability_memberships: str | None = None
+    last_contact_date: date | None = None
+    engagement_score: int | None = None
+    next_followup_date: date | None = None
+    referral_source: str | None = None
+    campaign: str | None = None
+    partner: str | None = None
+    additional_notes: str | None = None
+    file_download_url: str | None = None
+
+
+class ContactProfilePatch(BaseModel):
+    """Editable subset of the profile. Enum fields are validated here so a bad
+    value is a 422, not a DB CHECK 500. ``referral_source`` / ``campaign`` /
+    ``partner`` / ``file_download_url`` are set at intake and intentionally
+    NOT patchable. Status stays transition-only (never here)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ministry_areas: list[str] | None = None
+    entity_size: EntitySize | None = None
+    primary_contact_name: str | None = Field(default=None, max_length=512)
+    secondary_contact_name: str | None = Field(default=None, max_length=512)
+    secondary_contact_email: str | None = Field(default=None, max_length=512)
+    secondary_contact_phone: str | None = Field(default=None, max_length=128)
+    website: str | None = Field(default=None, max_length=1024)
+    preferred_communication: PreferredCommunication | None = None
+    form_country: str | None = Field(default=None, max_length=128)
+    form_state_region: str | None = Field(default=None, max_length=128)
+    adopter_type: AdopterType | None = None
+    commitment_types: list[str] | None = None
+    commitment_date: date | None = None
+    works_with_fpgs: bool | None = None
+    willing_to_facilitate: bool | None = None
+    facilitation_entity_types: list[str] | None = None
+    facilitation_entity_sizes: list[str] | None = None
+    mou_status: MouStatus | None = None
+    mou_signature_name: str | None = Field(default=None, max_length=512)
+    want_facilitator_connection: bool | None = None
+    facilitator_entity_types: list[str] | None = None
+    desired_facilitator_info: list[str] | None = None
+    want_network_connection: bool | None = None
+    network_partner_info: list[str] | None = None
+    has_doctrinal_distinctives: bool | None = None
+    doctrinal_distinctives: str | None = Field(default=None, max_length=4096)
+    has_accountability_membership: bool | None = None
+    accountability_memberships: str | None = Field(default=None, max_length=4096)
+    last_contact_date: date | None = None
+    engagement_score: int | None = Field(default=None, ge=0, le=100)
+    next_followup_date: date | None = None
+    additional_notes: str | None = Field(default=None, max_length=4096)
 
 
 class ContactRead(BaseModel):
@@ -27,6 +123,8 @@ class ContactRead(BaseModel):
     newsletter_opt_in: bool
     created_at: datetime
     updated_at: datetime
+    # U9: 1:1 adoption profile (null when the contact has no profile row yet).
+    profile: ContactProfileRead | None = None
 
 
 class ContactListResponse(BaseModel):
@@ -67,6 +165,10 @@ class ContactPatch(BaseModel):
 
     party_kind: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, min_length=1, max_length=512)
+    # U9: adoption-profile edits upsert the 1:1 contact_profile row. This does
+    # NOT touch Contact.version (the optimistic-lock column the match/transition
+    # flows gate on) — profile churn stays off the hot contact row.
+    profile: ContactProfilePatch | None = None
 
     @model_validator(mode="after")
     def reject_null_for_non_nullable_columns(self) -> Self:

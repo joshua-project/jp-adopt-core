@@ -804,6 +804,160 @@ export interface components {
             party_kind?: string | null;
             /** Display Name */
             display_name?: string | null;
+            profile?: components["schemas"]["ContactProfilePatch"] | null;
+        };
+        /**
+         * ContactProfilePatch
+         * @description Editable subset of the profile. Enum fields are validated here so a bad
+         *     value is a 422, not a DB CHECK 500. ``referral_source`` / ``campaign`` /
+         *     ``partner`` / ``file_download_url`` are set at intake and intentionally
+         *     NOT patchable. Status stays transition-only (never here).
+         */
+        ContactProfilePatch: {
+            /** Ministry Areas */
+            ministry_areas?: string[] | null;
+            /** Entity Size */
+            entity_size?: ("1" | "lt_30" | "31_100" | "101_500" | "501_2000" | "2001_plus") | null;
+            /** Primary Contact Name */
+            primary_contact_name?: string | null;
+            /** Secondary Contact Name */
+            secondary_contact_name?: string | null;
+            /** Secondary Contact Email */
+            secondary_contact_email?: string | null;
+            /** Secondary Contact Phone */
+            secondary_contact_phone?: string | null;
+            /** Website */
+            website?: string | null;
+            /** Preferred Communication */
+            preferred_communication?: ("email" | "phone") | null;
+            /** Form Country */
+            form_country?: string | null;
+            /** Form State Region */
+            form_state_region?: string | null;
+            /** Adopter Type */
+            adopter_type?: ("individual" | "small_group" | "church" | "organization" | "network") | null;
+            /** Commitment Types */
+            commitment_types?: string[] | null;
+            /** Commitment Date */
+            commitment_date?: string | null;
+            /** Works With Fpgs */
+            works_with_fpgs?: boolean | null;
+            /** Willing To Facilitate */
+            willing_to_facilitate?: boolean | null;
+            /** Facilitation Entity Types */
+            facilitation_entity_types?: string[] | null;
+            /** Facilitation Entity Sizes */
+            facilitation_entity_sizes?: string[] | null;
+            /** Mou Status */
+            mou_status?: ("signed" | "not_required" | "not_sent") | null;
+            /** Mou Signature Name */
+            mou_signature_name?: string | null;
+            /** Want Facilitator Connection */
+            want_facilitator_connection?: boolean | null;
+            /** Facilitator Entity Types */
+            facilitator_entity_types?: string[] | null;
+            /** Desired Facilitator Info */
+            desired_facilitator_info?: string[] | null;
+            /** Want Network Connection */
+            want_network_connection?: boolean | null;
+            /** Network Partner Info */
+            network_partner_info?: string[] | null;
+            /** Has Doctrinal Distinctives */
+            has_doctrinal_distinctives?: boolean | null;
+            /** Doctrinal Distinctives */
+            doctrinal_distinctives?: string | null;
+            /** Has Accountability Membership */
+            has_accountability_membership?: boolean | null;
+            /** Accountability Memberships */
+            accountability_memberships?: string | null;
+            /** Last Contact Date */
+            last_contact_date?: string | null;
+            /** Engagement Score */
+            engagement_score?: number | null;
+            /** Next Followup Date */
+            next_followup_date?: string | null;
+            /** Additional Notes */
+            additional_notes?: string | null;
+        };
+        /**
+         * ContactProfileRead
+         * @description Read view of the 1:1 contact_profile (the JP-custom adoption fields).
+         *     Enum-shaped fields are typed ``str`` here so stored values always
+         *     round-trip even if the option set later changes.
+         */
+        ContactProfileRead: {
+            /** Ministry Areas */
+            ministry_areas?: string[] | null;
+            /** Entity Size */
+            entity_size?: string | null;
+            /** Primary Contact Name */
+            primary_contact_name?: string | null;
+            /** Secondary Contact Name */
+            secondary_contact_name?: string | null;
+            /** Secondary Contact Email */
+            secondary_contact_email?: string | null;
+            /** Secondary Contact Phone */
+            secondary_contact_phone?: string | null;
+            /** Website */
+            website?: string | null;
+            /** Preferred Communication */
+            preferred_communication?: string | null;
+            /** Form Country */
+            form_country?: string | null;
+            /** Form State Region */
+            form_state_region?: string | null;
+            /** Adopter Type */
+            adopter_type?: string | null;
+            /** Commitment Types */
+            commitment_types?: string[] | null;
+            /** Commitment Date */
+            commitment_date?: string | null;
+            /** Works With Fpgs */
+            works_with_fpgs?: boolean | null;
+            /** Willing To Facilitate */
+            willing_to_facilitate?: boolean | null;
+            /** Facilitation Entity Types */
+            facilitation_entity_types?: string[] | null;
+            /** Facilitation Entity Sizes */
+            facilitation_entity_sizes?: string[] | null;
+            /** Mou Status */
+            mou_status?: string | null;
+            /** Mou Signature Name */
+            mou_signature_name?: string | null;
+            /** Want Facilitator Connection */
+            want_facilitator_connection?: boolean | null;
+            /** Facilitator Entity Types */
+            facilitator_entity_types?: string[] | null;
+            /** Desired Facilitator Info */
+            desired_facilitator_info?: string[] | null;
+            /** Want Network Connection */
+            want_network_connection?: boolean | null;
+            /** Network Partner Info */
+            network_partner_info?: string[] | null;
+            /** Has Doctrinal Distinctives */
+            has_doctrinal_distinctives?: boolean | null;
+            /** Doctrinal Distinctives */
+            doctrinal_distinctives?: string | null;
+            /** Has Accountability Membership */
+            has_accountability_membership?: boolean | null;
+            /** Accountability Memberships */
+            accountability_memberships?: string | null;
+            /** Last Contact Date */
+            last_contact_date?: string | null;
+            /** Engagement Score */
+            engagement_score?: number | null;
+            /** Next Followup Date */
+            next_followup_date?: string | null;
+            /** Referral Source */
+            referral_source?: string | null;
+            /** Campaign */
+            campaign?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /** Additional Notes */
+            additional_notes?: string | null;
+            /** File Download Url */
+            file_download_url?: string | null;
         };
         /** ContactRead */
         ContactRead: {
@@ -842,6 +996,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            profile?: components["schemas"]["ContactProfileRead"] | null;
         };
         /** ContactStatusCounts */
         ContactStatusCounts: {
