@@ -157,7 +157,9 @@ class ContactProfile(Base):
     form_state_region: Mapped[str | None] = mapped_column(Text, nullable=True)
     # adoption_profile tile
     adopter_type: Mapped[str | None] = mapped_column(Text, nullable=True)
-    commitment_types: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    commitment_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
     commitment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # facilitation_profile tile
     works_with_fpgs: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -542,6 +544,11 @@ class AdopterInterest(Base):
     __table_args__ = (
         Index("ix_adopter_interest_contact_id", "contact_id"),
         Index("ix_adopter_interest_rop3", "rop3"),
+        CheckConstraint(
+            "engagement_status IS NULL OR engagement_status IN "
+            "('ready', 'potential', 'none')",
+            name="ck_adopter_interest_engagement_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -557,6 +564,17 @@ class AdopterInterest(Base):
     )
     commitment_level: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # U7: per-FPG intake answers from jp-adopt-forms.
+    commitment_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    engagement_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    facilitation_services: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    network_services: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
