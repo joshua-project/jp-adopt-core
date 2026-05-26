@@ -9,7 +9,6 @@ import type { paths } from "@jp-adopt/contracts";
 import { apiFetch } from "../lib/api-client";
 import { useApiContext } from "../lib/useApiContext";
 import {
-  formatDate,
   formatTimestamp,
   humanize,
   humanizeOrigin,
@@ -17,6 +16,17 @@ import {
   humanizeReasonCode,
   humanizeStatus,
 } from "../lib/vocab";
+
+/** Format a date-only value (YYYY-MM-DD) without the new Date() UTC→local
+ * day-shift that bites users in negative time zones. */
+function fmtDateOnly(value: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!m) return value;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString(undefined, {
+    timeZone: "UTC",
+    dateStyle: "medium",
+  });
+}
 import { CodeChip, StatusBadge } from "./StatusBadge";
 
 type Contact =
@@ -144,7 +154,7 @@ function fmtRead(value: unknown, input: Input): ReactNode {
   if (Array.isArray(value)) {
     return value.length ? value.map((v) => humanize(String(v))).join(", ") : "—";
   }
-  if (input === "date") return formatDate(String(value));
+  if (input === "date") return fmtDateOnly(String(value));
   if (input === "enum") return humanize(String(value));
   return String(value);
 }
@@ -318,8 +328,19 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const saveProfile = useCallback(async () => {
     const original = (contact?.profile ?? {}) as Partial<Profile>;
     const patch: Record<string, unknown> = {};
-    for (const [key, , input] of EDITABLE) {
-      const next = fromDraft(draft[key as string] ?? "", input);
+    for (const [key, label, input] of EDITABLE) {
+      const rawDraft = draft[key as string] ?? "";
+      // Block save on a non-numeric entry rather than silently clearing the
+      // field (NaN → JSON null would otherwise wipe it).
+      if (
+        input === "number" &&
+        rawDraft.trim() !== "" &&
+        !Number.isFinite(Number(rawDraft))
+      ) {
+        setActionErr(`${label} must be a number.`);
+        return;
+      }
+      const next = fromDraft(rawDraft, input);
       const prev = original[key] ?? null;
       if (JSON.stringify(next) !== JSON.stringify(prev)) {
         patch[key as string] = next;
@@ -406,6 +427,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       <input
         className={INPUT}
         type={input === "date" ? "date" : input === "number" ? "number" : "text"}
+        step={input === "number" ? 1 : undefined}
         value={val}
         placeholder={input === "list" ? "comma, separated" : undefined}
         onChange={(e) => set(e.target.value)}

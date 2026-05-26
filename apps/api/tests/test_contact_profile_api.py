@@ -102,6 +102,15 @@ def test_bad_enum_rejected_at_schema(client: TestClient, contact_id: str):
     assert r.status_code == 422
 
 
+def test_empty_profile_patch_does_not_create_row(client: TestClient, contact_id: str):
+    # Copilot review: an empty {profile:{}} must NOT materialize a profile row.
+    r = client.patch(f"/v1/contacts/{contact_id}", headers=AUTH, json={"profile": {}})
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] is None
+    again = client.get(f"/v1/contacts/{contact_id}", headers=AUTH).json()
+    assert again["profile"] is None
+
+
 def test_engagement_score_range_rejected(client: TestClient, contact_id: str):
     r = client.patch(
         f"/v1/contacts/{contact_id}",

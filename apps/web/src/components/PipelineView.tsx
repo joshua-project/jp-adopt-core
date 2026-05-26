@@ -264,12 +264,7 @@ function ContactRowView({
           : undefined
       }
       action={
-        <a
-          href={`/contacts/${contact.id}`}
-          className="text-sm font-medium text-jp-accent hover:underline"
-        >
-          Open →
-        </a>
+        <span className="text-sm font-medium text-jp-accent">Open →</span>
       }
     />
   );

@@ -590,18 +590,22 @@ async def patch_contact(
     # the Contact row so they don't bump Contact.version (the optimistic-lock
     # column the match/transition flows gate on).
     if body.profile is not None:
-        prof = (
-            await db.execute(
-                select(ContactProfile).where(
-                    ContactProfile.contact_id == contact.id
+        profile_updates = body.profile.model_dump(exclude_unset=True)
+        # Don't materialize an empty contact_profile row on a no-op PATCH —
+        # that would make a profile look "present" with no data behind it.
+        if profile_updates:
+            prof = (
+                await db.execute(
+                    select(ContactProfile).where(
+                        ContactProfile.contact_id == contact.id
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if prof is None:
-            prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
-            db.add(prof)
-        for field_name, value in body.profile.model_dump(exclude_unset=True).items():
-            setattr(prof, field_name, value)
+            ).scalar_one_or_none()
+            if prof is None:
+                prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
+                db.add(prof)
+            for field_name, value in profile_updates.items():
+                setattr(prof, field_name, value)
 
     # Only stamp + emit a contact.updated event when contact-level fields moved.
     if contact_changed:
