@@ -1,5 +1,17 @@
 # Multi-IdP authentication (B2C + Entra direct + magic-link)
 
+> **Update 2026-05-26:** B2C was closed by Microsoft to new customers
+> (2025-05-01). The launch staff auth is **Entra direct** (Phase 2 /
+> jp-adopt-core#60). The B2C decoder code stays in place but is no longer
+> exercised. The web-side UI lives at `/signin` and `/auth/callback`
+> (MSAL v5 PKCE, single-tenant). Staff Entra OIDs are seeded in
+> `user_roles` via Alembic — see migration `0014_seed_staff_user_roles`.
+> Adding a new staff member is an `az ad user show` lookup + a new
+> Alembic revision inserting one row; deferred admin UI is in Part F of
+> the Entra direct plan (`docs/superpowers/plans/2026-05-26-entra-direct-staff-auth.md`).
+> `partner_tenants` is seeded with the JP Entra tenant
+> (`761e2c5f-34bd-4872-b86c-3a9f3b29d63a`) by migration `0013`.
+
 This runbook covers the operator-facing tasks for the JP ADOPT multi-IdP
 authentication stack introduced in U3.
 

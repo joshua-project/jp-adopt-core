@@ -94,12 +94,9 @@ the Terraform; this runbook references the resources it creates.
    verification is green.
 
 6. **GitHub repo "variables" (non-secret) used by the web build.**
-   - `NEXT_PUBLIC_API_URL`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_CLIENT_ID`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_TENANT_NAME`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_TENANT_ID`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_POLICY`
-   - `NEXT_PUBLIC_AZURE_AD_B2C_API_SCOPES`
+   - `NEXT_PUBLIC_API_URL` (set to `/api` so the browser hits the same-origin proxy)
+   - `NEXT_PUBLIC_AZURE_AD_CLIENT_ID` — the **SPA** app reg client ID (output `spa_client_id` from `stacks/azure/entra/jp-adopt-core-sso` in jp-infrastructure). Public; ships in the SPA bundle. Tenant ID is hardcoded in `deploy.yml` since this is a single-tenant SPA.
+   - (B2C build args removed — B2C was closed to new customers 2025-05-01; staff auth is Entra direct via the SPA app reg.)
 
    These are non-secret (they ship in the SPA's JS bundle) but
    environment-specific, so they live in repo `vars`, not `secrets`.
