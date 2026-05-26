@@ -198,6 +198,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Assign Contact
+         * @description Assign the contact to a staff user (1:1; re-assigning replaces). Omitting
+         *     ``user_subject_id`` assigns to the caller. Off the contacts row → no version
+         *     bump.
+         */
+        put: operations["assign_contact_v1_contacts__contact_id__assignment_put"];
+        post?: never;
+        /** Unassign Contact */
+        delete: operations["unassign_contact_v1_contacts__contact_id__assignment_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/magic-link/request": {
         parameters: {
             query?: never;
@@ -733,6 +756,15 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * ContactAssignmentRequest
+         * @description Assign a contact to a staff user. ``user_subject_id`` omitted → assign to
+         *     the calling user (the common 'assign to me' case).
+         */
+        ContactAssignmentRequest: {
+            /** User Subject Id */
+            user_subject_id?: string | null;
+        };
         /** ContactListResponse */
         ContactListResponse: {
             /** Items */
@@ -1001,6 +1033,8 @@ export interface components {
              */
             updated_at: string;
             profile?: components["schemas"]["ContactProfileRead"] | null;
+            /** Assigned To */
+            assigned_to?: string | null;
         };
         /** ContactStatusCounts */
         ContactStatusCounts: {
@@ -1842,6 +1876,74 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContactTimelineResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_contact_v1_contacts__contact_id__assignment_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactAssignmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unassign_contact_v1_contacts__contact_id__assignment_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -273,6 +273,37 @@ export function ContactRecord({ contactId }: { contactId: string }) {
     }
   }, [ctx, contactId, nameDraft, load]);
 
+  const assignToMe = useCallback(async () => {
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await apiFetch(ctx, `/v1/contacts/${contactId}/assignment`, {
+        method: "PUT",
+        body: {},
+      });
+      await load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "Failed to assign");
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, load]);
+
+  const unassign = useCallback(async () => {
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await apiFetch(ctx, `/v1/contacts/${contactId}/assignment`, {
+        method: "DELETE",
+      });
+      await load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "Failed to unassign");
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, load]);
+
   const startEditProfile = useCallback(() => {
     const p = (contact?.profile ?? {}) as Partial<Profile>;
     const d: Record<string, string> = {};
@@ -422,16 +453,34 @@ export function ContactRecord({ contactId }: { contactId: string }) {
             Origin: {humanizeOrigin(contact.origin)} · updated {formatTimestamp(contact.updated_at)}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Link href={`/workflow/${contactId}`} className={BTN}>Transition</Link>
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => { setNameDraft(contact.display_name); setEditingName(true); }}
-          >
-            Edit name
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href={`/workflow/${contactId}`} className={BTN}>Transition</Link>
+            <button
+              type="button"
+              className={BTN}
+              disabled={busy}
+              onClick={() => { setNameDraft(contact.display_name); setEditingName(true); }}
+            >
+              Edit name
+            </button>
+            {contact.assigned_to ? (
+              <button type="button" className={BTN} disabled={busy} onClick={unassign}>
+                Unassign
+              </button>
+            ) : (
+              <button type="button" className={BTN} disabled={busy} onClick={assignToMe}>
+                Assign to me
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-500">
+            {contact.assigned_to ? (
+              <>Assigned to <span className="font-medium text-slate-700">{contact.assigned_to}</span></>
+            ) : (
+              "Unassigned"
+            )}
+          </p>
         </div>
       </header>
 

@@ -252,6 +252,26 @@ class Consent(Base):
     )
 
 
+class ContactAssignment(Base):
+    """U13: 1:1 staff owner for a contact (DT's ``assigned_to``). ``contact_id``
+    is the PK, so re-assigning replaces. Kept off the contacts row to avoid
+    bumping ``Contact.version``."""
+
+    __tablename__ = "contact_assignment"
+    __table_args__ = (Index("ix_contact_assignment_user", "user_subject_id"),)
+
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    assigned_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class Outbox(Base):
     __tablename__ = "outbox"
 

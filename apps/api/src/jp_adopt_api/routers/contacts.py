@@ -5,13 +5,14 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
     Contact,
+    ContactAssignment,
     ContactProfile,
     FacilitatingOrg,
     Fpg,
@@ -22,6 +23,7 @@ from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import (
     ContactActivityResponse,
     ContactActivityRow,
+    ContactAssignmentRequest,
     ContactListResponse,
     ContactMatchesResponse,
     ContactMatchRow,
@@ -229,6 +231,15 @@ async def _contact_read_with_profile(
     ).scalar_one_or_none()
     if prof is not None:
         read.profile = ContactProfileRead.model_validate(prof)
+    asn = (
+        await db.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact.id
+            )
+        )
+    ).scalar_one_or_none()
+    if asn is not None:
+        read.assigned_to = asn.user_subject_id
     return read
 
 
@@ -490,6 +501,60 @@ async def add_contact_note(
     await db.commit()
     await db.refresh(note)
     return ContactActivityRow.model_validate(note)
+
+
+@router.put("/{contact_id}/assignment", response_model=ContactRead)
+async def assign_contact(
+    contact_id: uuid.UUID,
+    body: ContactAssignmentRequest,
+    db: DbSession,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactRead:
+    """Assign the contact to a staff user (1:1; re-assigning replaces). Omitting
+    ``user_subject_id`` assigns to the caller. Off the contacts row → no version
+    bump."""
+    contact = await _require_contact(db, contact_id)
+    user, _roles = user_with_roles
+    assignee = body.user_subject_id or user.sub
+    asn = (
+        await db.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact_id
+            )
+        )
+    ).scalar_one_or_none()
+    if asn is None:
+        db.add(
+            ContactAssignment(
+                contact_id=contact.id,
+                user_subject_id=assignee,
+                assigned_by=user.sub,
+            )
+        )
+    else:
+        asn.user_subject_id = assignee
+        asn.assigned_by = user.sub
+        asn.assigned_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(contact)
+    return await _contact_read_with_profile(db, contact)
+
+
+@router.delete(
+    "/{contact_id}/assignment", status_code=status.HTTP_204_NO_CONTENT
+)
+async def unassign_contact(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> None:
+    await _require_contact(db, contact_id)
+    await db.execute(
+        delete(ContactAssignment).where(
+            ContactAssignment.contact_id == contact_id
+        )
+    )
+    await db.commit()
 
 
 @router.patch("/{contact_id}", response_model=ContactRead)

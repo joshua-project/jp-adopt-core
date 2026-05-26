@@ -125,6 +125,18 @@ class ContactRead(BaseModel):
     updated_at: datetime
     # U9: 1:1 adoption profile (null when the contact has no profile row yet).
     profile: ContactProfileRead | None = None
+    # U13: assigned staff owner's subject (null = unassigned). Populated on the
+    # single-contact read, not the list.
+    assigned_to: str | None = None
+
+
+class ContactAssignmentRequest(BaseModel):
+    """Assign a contact to a staff user. ``user_subject_id`` omitted → assign to
+    the calling user (the common 'assign to me' case)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_subject_id: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class ContactListResponse(BaseModel):

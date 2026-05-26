@@ -771,6 +771,126 @@
         }
       }
     },
+    "/v1/contacts/{contact_id}/assignment": {
+      "put": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Assign Contact",
+        "description": "Assign the contact to a staff user (1:1; re-assigning replaces). Omitting\n``user_subject_id`` assigns to the caller. Off the contacts row \u2192 no version\nbump.",
+        "operationId": "assign_contact_v1_contacts__contact_id__assignment_put",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Unassign Contact",
+        "operationId": "unassign_contact_v1_contacts__contact_id__assignment_delete",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/magic-link/request": {
       "post": {
         "tags": [
@@ -2710,6 +2830,27 @@
         ],
         "title": "ContactActivityRow"
       },
+      "ContactAssignmentRequest": {
+        "properties": {
+          "user_subject_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Subject Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContactAssignmentRequest",
+        "description": "Assign a contact to a staff user. ``user_subject_id`` omitted \u2192 assign to\nthe calling user (the common 'assign to me' case)."
+      },
       "ContactListResponse": {
         "properties": {
           "items": {
@@ -3918,6 +4059,17 @@
                 "type": "null"
               }
             ]
+          },
+          "assigned_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To"
           }
         },
         "type": "object",
