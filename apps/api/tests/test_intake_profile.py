@@ -149,3 +149,55 @@ async def test_adoption_intake_resolves_people_id3_to_rop3(
         await session.execute(delete(Contact).where(Contact.email_normalized == email))
         await session.execute(delete(Fpg).where(Fpg.rop3 == "TSTPID1"))
         await session.commit()
+
+
+async def test_facilitation_intake_creates_per_fpg_interests(
+    client: TestClient, session: AsyncSession
+):
+    # U12: facilitators pick FPGs too; intake resolves people_id3 -> rop3 and
+    # stores the per-FPG facilitation/network services on adopter_interest.
+    fpg = Fpg(
+        rop3="TSTPID2", people_id3="9990002", name="Facil PID FPG", frontier=True
+    )
+    session.add(fpg)
+    await session.commit()
+    email = f"facpid-{uuid.uuid4().hex[:10]}@example.com"
+    body = {
+        "email": email,
+        "display_name": "Helper Org",
+        "origin": "website",
+        "organization_name": "Helper Org",
+        "fpg_selections": [
+            {
+                "people_id3": 9990002,
+                "engagement_status": "ready",
+                "facilitation_services": ["coaching"],
+                "network_services": ["intro"],
+            }
+        ],
+    }
+    try:
+        r = client.post(
+            "/v1/intake/facilitation",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {TEST_INTAKE_KEY}",
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert len(r.json()["data"]["interestIds"]) == 1
+        contact_id = uuid.UUID(r.json()["data"]["contactId"])
+        interest = (
+            await session.execute(
+                select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
+            )
+        ).scalar_one()
+        assert interest.rop3 == "TSTPID2"
+        assert interest.engagement_status == "ready"
+        assert interest.facilitation_services == ["coaching"]
+        assert interest.network_services == ["intro"]
+    finally:
+        await session.execute(delete(Contact).where(Contact.email_normalized == email))
+        await session.execute(delete(Fpg).where(Fpg.rop3 == "TSTPID2"))
+        await session.commit()

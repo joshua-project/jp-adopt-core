@@ -434,6 +434,11 @@ class FacilitationIntake(IntakeBase):
 
     party_kind: Literal["facilitator"] = "facilitator"
     organization_name: str | None = Field(default=None, max_length=512)
+    # U12: facilitators also pick FPGs (which groups they can serve, with
+    # per-FPG engagement_status / facilitation_services / network_services).
+    # Same shape + bound as the adoption side; an empty list is fine (a
+    # facilitator with no specific FPGs yet).
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=20)
 
 
 class IntakeSuccessData(BaseModel):
