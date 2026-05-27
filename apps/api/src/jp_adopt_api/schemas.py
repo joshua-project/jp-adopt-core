@@ -331,7 +331,12 @@ class FpgInterestIn(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    rop3: str = Field(min_length=1, max_length=32)
+    # U12: identify the people group by ROP3 (canonical) OR people_id3 (what the
+    # public forms carry — they have no ROP3). At least one is required; the
+    # intake handler resolves people_id3 → rop3 via the fpg table when rop3 is
+    # absent, falling back to an unresolved (rop3=NULL) interest for triage.
+    rop3: str | None = Field(default=None, max_length=32)
+    people_id3: int | None = None
     commitment_level: str | None = Field(default=None, max_length=64)
     notes: str | None = Field(default=None, max_length=2048)
     # U10: per-FPG answers from the forms → adopter_interest (U7 columns).
@@ -339,6 +344,12 @@ class FpgInterestIn(BaseModel):
     engagement_status: str | None = Field(default=None, max_length=32)
     facilitation_services: list[str] | None = None
     network_services: list[str] | None = None
+
+    @model_validator(mode="after")
+    def require_identifier(self) -> Self:
+        if not self.rop3 and self.people_id3 is None:
+            raise ValueError("each fpg selection needs rop3 or people_id3")
+        return self
 
 
 class ContactProfileIntake(ContactProfilePatch):

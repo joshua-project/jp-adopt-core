@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from jp_adopt_api.config import get_settings
-from jp_adopt_api.models import AdopterInterest, Consent, Contact, ContactProfile
+from jp_adopt_api.models import AdopterInterest, Consent, Contact, ContactProfile, Fpg
 
 TEST_INTAKE_KEY = "test-intake-key-do-not-use-in-prod"
 os.environ["INTAKE_API_KEYS"] = TEST_INTAKE_KEY
@@ -109,4 +109,43 @@ async def test_adoption_intake_persists_profile_and_consent(
         await session.execute(
             delete(Contact).where(Contact.email_normalized == email)
         )
+        await session.commit()
+
+
+async def test_adoption_intake_resolves_people_id3_to_rop3(
+    client: TestClient, session: AsyncSession
+):
+    # U12: forms send people_id3 (not rop3); intake resolves it via fpg.
+    fpg = Fpg(
+        rop3="TSTPID1", people_id3="9990001", name="PID Resolve Test", frontier=True
+    )
+    session.add(fpg)
+    await session.commit()
+    email = f"pid-{uuid.uuid4().hex[:10]}@example.com"
+    body = {
+        "email": email,
+        "display_name": "PID Adopter",
+        "origin": "website",
+        "fpg_selections": [{"people_id3": 9990001, "commitment_level": "going"}],
+    }
+    try:
+        r = client.post(
+            "/v1/intake/adoption",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {TEST_INTAKE_KEY}",
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+        )
+        assert r.status_code == 201, r.text
+        contact_id = uuid.UUID(r.json()["data"]["contactId"])
+        interest = (
+            await session.execute(
+                select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
+            )
+        ).scalar_one()
+        assert interest.rop3 == "TSTPID1"
+    finally:
+        await session.execute(delete(Contact).where(Contact.email_normalized == email))
+        await session.execute(delete(Fpg).where(Fpg.rop3 == "TSTPID1"))
         await session.commit()

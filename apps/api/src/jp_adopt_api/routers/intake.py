@@ -49,6 +49,7 @@ from jp_adopt_api.models import (
     Consent,
     Contact,
     ContactProfile,
+    Fpg,
     SubmissionBlocked,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
@@ -472,10 +473,20 @@ async def _process_adoption(
         interest_ids.append(no_fpg.id)
     else:
         for sel in payload.fpg_selections:
+            # U12: forms carry people_id3, not rop3 — resolve via the fpg table.
+            rop3 = sel.rop3
+            if rop3 is None and sel.people_id3 is not None:
+                rop3 = (
+                    await session.execute(
+                        select(Fpg.rop3).where(
+                            Fpg.people_id3 == str(sel.people_id3)
+                        )
+                    )
+                ).scalar_one_or_none()
             interest = AdopterInterest(
                 id=uuid.uuid4(),
                 contact_id=contact.id,
-                rop3=sel.rop3,
+                rop3=rop3,
                 commitment_level=sel.commitment_level,
                 notes=sel.notes,
                 commitment_types=sel.commitment_types,
