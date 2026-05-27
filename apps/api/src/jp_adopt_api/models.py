@@ -553,6 +553,11 @@ class Fpg(Base):
             "frontier",
             postgresql_where="frontier = TRUE",
         ),
+        Index(
+            "ix_fpg_people_id3",
+            "people_id3",
+            postgresql_where="people_id3 IS NOT NULL",
+        ),
     )
 
     rop3: Mapped[str] = mapped_column(Text, primary_key=True)

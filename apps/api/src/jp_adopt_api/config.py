@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     # public-website submissions land here; Form A facilitator submissions
     # likewise. Override per-submission via the `origin` field on the body.
     intake_default_origin: str = "website"
+    # Joshua Project API key (api.joshuaproject.net) used by the fpg sync
+    # script to populate the fpg reference table (rop3 + people_id3 + name +
+    # country). Empty disables the sync. See scripts/sync_fpg.py.
+    joshua_project_api_key: str = ""
 
     @property
     def intake_api_keys_list(self) -> list[str]:
