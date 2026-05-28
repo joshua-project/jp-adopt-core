@@ -1,31 +1,33 @@
-"""Staff-admin endpoints (U8 follow-up, F15).
+"""Staff-admin endpoints (U8 follow-up, F15; Entra Part F user_roles).
 
-Onboarding a facilitator currently requires a direct DB insert into
-``facilitating_org`` and ``facilitator_org_membership``. Three thin
-``require_role('staff_admin')`` endpoints close that gap:
+Facilitator onboarding and platform role assignment share this router, all
+gated on ``require_role('staff_admin')``:
 
   * ``GET  /v1/facilitating-orgs``               — list active orgs.
-  * ``POST /v1/admin/facilitator-memberships``   — grant a B2C subject access
-                                                   to one facilitator org.
-  * ``DELETE /v1/admin/facilitator-memberships/{user_sub}/{org_id}`` —
-                                                   revoke that grant.
-
-Everything more ambitious — full CRUD on orgs, bulk-membership import, etc.
-is a v2 concern.
+  * ``POST /v1/admin/facilitator-memberships``   — grant facilitator-org access.
+  * ``DELETE /v1/admin/facilitator-memberships/{user_sub}/{org_id}`` — revoke.
+  * ``GET  /v1/admin/roles``                   — list assignable platform roles.
+  * ``GET  /v1/admin/user-roles``              — list current user_roles grants.
+  * ``POST /v1/admin/user-roles``              — grant a platform role (outbox).
+  * ``DELETE /v1/admin/user-roles/{user_sub}/{role_id}`` — revoke (outbox).
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.deps import DbSession, require_role
-from jp_adopt_api.models import FacilitatingOrg, FacilitatorOrgMembership
+from jp_adopt_api.models import FacilitatingOrg, FacilitatorOrgMembership, Role, UserRole
+from jp_adopt_api.outbox_suppression import emit_outbox
 
 router = APIRouter(tags=["admin"])
 
@@ -69,6 +71,62 @@ class FacilitatorMembershipRead(BaseModel):
     user_subject_id: str
     facilitator_org_id: uuid.UUID
     role_in_org: str
+
+
+class RoleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+
+
+class RoleListResponse(BaseModel):
+    items: list[RoleRead]
+    total: int
+
+
+class UserRoleRead(BaseModel):
+    user_subject_id: str
+    role_id: uuid.UUID
+    role_name: str
+    granted_at: datetime
+
+
+class UserRoleListResponse(BaseModel):
+    items: list[UserRoleRead]
+    total: int
+
+
+class UserRoleGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_subject_id: str = Field(min_length=1, max_length=256)
+    role_id: uuid.UUID
+
+
+async def _user_role_read(
+    db: DbSession, *, user_subject_id: str, role_id: uuid.UUID
+) -> UserRoleRead | None:
+    row = (
+        await db.execute(
+            select(UserRole, Role.name)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                UserRole.user_subject_id == user_subject_id,
+                UserRole.role_id == role_id,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    ur, role_name = row
+    return UserRoleRead(
+        user_subject_id=ur.user_subject_id,
+        role_id=ur.role_id,
+        role_name=role_name,
+        granted_at=ur.granted_at,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -162,6 +220,167 @@ async def delete_facilitator_membership(
             FacilitatorOrgMembership.user_subject_id == user_subject_id,
             FacilitatorOrgMembership.facilitator_org_id == facilitator_org_id,
         )
+    )
+    await db.commit()
+    return None
+
+
+@router.get(
+    "/v1/admin/roles",
+    response_model=RoleListResponse,
+)
+async def list_roles(
+    db: DbSession,
+    _: Annotated[
+        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> RoleListResponse:
+    """List platform roles for the admin grant dropdown."""
+    rows = (
+        await db.execute(select(Role).order_by(Role.name.asc()))
+    ).scalars().all()
+    items = [RoleRead.model_validate(r) for r in rows]
+    return RoleListResponse(items=items, total=len(items))
+
+
+@router.get(
+    "/v1/admin/user-roles",
+    response_model=UserRoleListResponse,
+)
+async def list_user_roles(
+    db: DbSession,
+    _: Annotated[
+        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> UserRoleListResponse:
+    """List all ``user_roles`` grants joined with role names."""
+    rows = (
+        await db.execute(
+            select(UserRole, Role.name)
+            .join(Role, Role.id == UserRole.role_id)
+            .order_by(UserRole.granted_at.desc())
+        )
+    ).all()
+    items = [
+        UserRoleRead(
+            user_subject_id=ur.user_subject_id,
+            role_id=ur.role_id,
+            role_name=role_name,
+            granted_at=ur.granted_at,
+        )
+        for ur, role_name in rows
+    ]
+    return UserRoleListResponse(items=items, total=len(items))
+
+
+@router.post(
+    "/v1/admin/user-roles",
+    response_model=UserRoleRead,
+)
+async def grant_user_role(
+    body: UserRoleGrantRequest,
+    db: DbSession,
+    actor: Annotated[tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)],
+) -> UserRoleRead:
+    """Grant a platform role to an Entra OID. Idempotent on the composite PK."""
+    user, _roles = actor
+    role = await db.get(Role, body.role_id)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "role_not_found",
+                "message": f"No role with id {body.role_id}",
+            },
+        )
+
+    await db.execute(
+        pg_insert(UserRole)
+        .values(
+            user_subject_id=body.user_subject_id,
+            role_id=body.role_id,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["user_subject_id", "role_id"],
+        )
+    )
+    emit_outbox(
+        db,
+        event_type="admin.role.granted",
+        payload={
+            "actor_subject_id": user.sub,
+            "target_subject_id": body.user_subject_id,
+            "role_id": str(role.id),
+            "role_name": role.name,
+        },
+    )
+    await db.commit()
+
+    read = await _user_role_read(
+        db, user_subject_id=body.user_subject_id, role_id=body.role_id
+    )
+    assert read is not None
+    return read
+
+
+@router.delete(
+    "/v1/admin/user-roles/{user_subject_id}/{role_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_user_role(
+    user_subject_id: str,
+    role_id: uuid.UUID,
+    db: DbSession,
+    actor: Annotated[tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)],
+) -> None:
+    """Revoke a platform role grant. Refuses self-revoke of ``staff_admin``."""
+    user, _roles = actor
+    role = await db.get(Role, role_id)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "role_not_found",
+                "message": f"No role with id {role_id}",
+            },
+        )
+
+    if user_subject_id == user.sub and role.name == "staff_admin":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "self_revoke_forbidden",
+                "message": "Cannot revoke your own staff_admin role",
+            },
+        )
+
+    existing = (
+        await db.execute(
+            select(UserRole).where(
+                UserRole.user_subject_id == user_subject_id,
+                UserRole.role_id == role_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "user_role_not_found",
+                "message": "No grant for this user and role",
+            },
+        )
+
+    await db.delete(existing)
+    emit_outbox(
+        db,
+        event_type="admin.role.revoked",
+        payload={
+            "actor_subject_id": user.sub,
+            "target_subject_id": user_subject_id,
+            "role_id": str(role.id),
+            "role_name": role.name,
+        },
     )
     await db.commit()
     return None

@@ -438,10 +438,24 @@ of truth for the nav.
      `admin.role.revoked` rows from the test.
 - CI green (API + web build + contracts artifact check).
 
+## Implementation notes (2026-05-28)
+
+- **`post_logout_redirect_uris`:** Verified absent on the SPA app reg in
+  `jp-infrastructure/stacks/azure/entra/jp-adopt-core-sso/main.tf` (only
+  `redirect_uris` under `single_page_application`). Sign-out still calls
+  `logoutRedirect({ postLogoutRedirectUri: window.location.origin })`; expect
+  a sibling infra PR to add matching logout URIs before production E2E.
+- **Roles dropdown:** Implemented `GET /v1/admin/roles` (U2) instead of a
+  static name list — foundation seeds four roles (`staff_admin`,
+  `adoption_manager`, `triage_facilitator`, `facilitator`); there is no
+  `staff` role. U4 plan text referenced `staff`; the UI lists all DB roles.
+- **Self-revoke test:** Uses a real `user_roles` row plus patched
+  `deps.authenticate_bearer_async` (not `dev-local` sub alone) because
+  `dev-local` has no DB row by default.
+
 ## Open questions deferred to implementation
 
-- **Roles dropdown source** — static list vs new `GET /v1/admin/roles`
-  endpoint. Either works; pick during U4. Document the choice in the PR.
+- **Roles dropdown source** — resolved: `GET /v1/admin/roles` (see above).
 - **Account display name shape** — `accounts[0].name` (display name) vs
   `accounts[0].username` (UPN/email). MSAL populates both; pick the one
   that renders cleanly with no overflow. Trivial during U1.

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMsal } from "@azure/msal-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,7 +10,10 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/facilitators", label: "Facilitators" },
   { href: "/contacts/new", label: "Add contact" },
   { href: "/facilitator", label: "My contacts" },
+  { href: "/admin/users", label: "Admin" },
 ];
+
+const AUTH_EXEMPT_PATHS = new Set(["/signin", "/auth/callback"]);
 
 /**
  * Top navigation, modelled on the JpNavbar component used by the public
@@ -25,9 +29,21 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
  */
 export function SiteHeader() {
   const pathname = usePathname() ?? "/";
+  const { instance, accounts } = useMsal();
+  const account = accounts[0];
+  const showSessionChrome = !AUTH_EXEMPT_PATHS.has(pathname);
+  const displayName =
+    account?.name?.trim() || account?.username?.trim() || null;
+
+  const onSignOut = () => {
+    void instance.logoutRedirect({
+      postLogoutRedirectUri: window.location.origin,
+    });
+  };
+
   return (
     <header className="jp-nav border-b border-black/30">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-6 px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
         <Link
           href="/"
           className="font-heading text-lg font-semibold tracking-tight text-white"
@@ -38,26 +54,47 @@ export function SiteHeader() {
             Staff console
           </span>
         </Link>
-        <nav className="flex items-stretch text-sm" aria-label="Primary">
-          {NAV_ITEMS.map((item) => {
-            const active =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname === item.href ||
-                  pathname.startsWith(`${item.href}/`);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                data-active={active ? "true" : "false"}
+        <div className="flex min-w-0 flex-1 flex-wrap items-stretch justify-end gap-4">
+          <nav className="flex items-stretch text-sm" aria-label="Primary">
+            {NAV_ITEMS.map((item) => {
+              const active =
+                item.href === "/"
+                  ? pathname === "/"
+                  : pathname === item.href ||
+                    pathname.startsWith(`${item.href}/`);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  data-active={active ? "true" : "false"}
+                  className="jp-nav-link"
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+          {showSessionChrome && account ? (
+            <div className="flex items-stretch gap-3 border-l border-white/20 pl-4 text-sm">
+              {displayName ? (
+                <span
+                  className="hidden max-w-[12rem] truncate self-center text-white/80 sm:inline"
+                  title={displayName}
+                >
+                  {displayName}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={onSignOut}
                 className="jp-nav-link"
               >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+                Sign out
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </header>
   );
