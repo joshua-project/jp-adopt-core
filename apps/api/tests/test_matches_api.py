@@ -97,23 +97,23 @@ async def _make_contact(
     return contact
 
 
-async def _ensure_fpg(session: AsyncSession, rop3: str) -> None:
-    existing_fpg = await session.get(Fpg, rop3)
+async def _ensure_fpg(session: AsyncSession, people_id3: str) -> None:
+    existing_fpg = await session.get(Fpg, people_id3)
     if existing_fpg is None:
         session.add(
-            Fpg(rop3=rop3, name=f"Test FPG {rop3}", country_code="US", frontier=True)
+            Fpg(people_id3=people_id3, name=f"Test FPG {people_id3}", country_code="US", frontier=True)
         )
         await session.flush()
         await session.commit()
 
 
 async def _make_interest(
-    session: AsyncSession, contact: Contact, rop3: str | None
+    session: AsyncSession, contact: Contact, people_id3: str | None
 ) -> AdopterInterest:
-    if rop3 is not None:
-        await _ensure_fpg(session, rop3)
+    if people_id3 is not None:
+        await _ensure_fpg(session, people_id3)
     interest = AdopterInterest(
-        id=uuid.uuid4(), contact_id=contact.id, rop3=rop3
+        id=uuid.uuid4(), contact_id=contact.id, people_id3=people_id3
     )
     session.add(interest)
     await session.flush()
@@ -124,14 +124,14 @@ async def _make_interest(
 async def _make_org_with_coverage(
     session: AsyncSession,
     *,
-    rop3: str,
+    people_id3: str,
     capacity_total: int = 5,
     capacity_committed: int = 0,
 ) -> FacilitatingOrg:
-    await _ensure_fpg(session, rop3)
+    await _ensure_fpg(session, people_id3)
     org = FacilitatingOrg(
         id=uuid.uuid4(),
-        name=f"Org {rop3} {uuid.uuid4().hex[:6]}",
+        name=f"Org {people_id3} {uuid.uuid4().hex[:6]}",
         country_code="US",
         language_codes=["en"],
         capacity_total=capacity_total,
@@ -140,7 +140,7 @@ async def _make_org_with_coverage(
         is_triage_org=False,
     )
     session.add(org)
-    session.add(FacilitatorFpgCoverage(facilitator_org_id=org.id, rop3=rop3))
+    session.add(FacilitatorFpgCoverage(facilitator_org_id=org.id, people_id3=people_id3))
     await session.flush()
     await session.commit()
     return org
@@ -265,7 +265,7 @@ async def _cleanup_test_orgs_at_session_end(
         if oid not in seed_org_ids:
             await _cleanup_org(session, oid)
     await session.execute(
-        delete(Fpg).where(Fpg.rop3.like("TST%"))
+        delete(Fpg).where(Fpg.people_id3.like("TST%"))
     )
     await session.commit()
 
@@ -294,10 +294,10 @@ async def test_queue_returns_open_matches_for_staff(
     """dev-local has staff_admin (via _DEV_LOCAL_ROLES) so it sees every open
     Match. Run /run/{contact_id} to populate the queue, then GET /queue and
     assert the seeded match is present with its score breakdown."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session)
-    await _make_interest(session, contact, rop3)
-    org = await _make_org_with_coverage(session, rop3=rop3)
+    await _make_interest(session, contact, people_id3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
 
     try:
         r = client.post(
@@ -314,7 +314,7 @@ async def test_queue_returns_open_matches_for_staff(
         assert str(contact.id) in ids
         ours = next(i for i in body["items"] if i["contact_id"] == str(contact.id))
         assert ours["status"] == "recommended"
-        assert ours["rop3"] == rop3
+        assert ours["people_id3"] == people_id3
         # Score breakdown is embedded on each candidate.
         assert ours["candidates"], "Expected ranked alternates"
         first = ours["candidates"][0]
@@ -341,9 +341,9 @@ async def test_queue_unauthenticated_returns_401(client: TestClient) -> None:
 
 
 async def _seed_recommended_match(
-    session: AsyncSession, contact: Contact, org: FacilitatingOrg, rop3: str
+    session: AsyncSession, contact: Contact, org: FacilitatingOrg, people_id3: str
 ) -> Match:
-    interest = await _make_interest(session, contact, rop3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -374,10 +374,10 @@ async def _seed_recommended_match(
 async def test_decide_accept_transitions_contact_to_matched(
     client: TestClient, session: AsyncSession
 ) -> None:
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org = await _make_org_with_coverage(session, rop3=rop3, capacity_committed=0)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3, capacity_committed=0)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     initial_committed = org.capacity_committed
     try:
         r = client.post(
@@ -403,11 +403,11 @@ async def test_decide_send_back_excludes_facilitator_on_rematch(
 ) -> None:
     """After Amy sends back a recommendation, a fresh match_or_route run for
     the same contact must not re-recommend the same facilitator."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="matched")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -468,10 +468,10 @@ async def test_decide_send_back_excludes_facilitator_on_rematch(
 async def test_decide_send_back_requires_reason_code(
     client: TestClient, session: AsyncSession
 ) -> None:
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="matched")
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/{m.id}/decide",
@@ -493,10 +493,10 @@ async def test_decide_already_decided_same_decision_is_idempotent(
     ``accepted`` (manager accept) OR ``active`` (manager → facilitator
     accept) must be a deterministic 200. The previous test admitted both
     200 and 409 because the idempotency check only matched ``accepted``."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/{m.id}/decide",
@@ -535,11 +535,11 @@ async def test_decide_terminal_state_returns_409(
 ) -> None:
     """A match that's reached a terminal state (declined via route_elsewhere)
     is no longer in the queue and can't be acted on again."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -604,10 +604,10 @@ async def test_decide_terminal_state_returns_409(
 async def test_decide_accept_emits_outbox_event(
     client: TestClient, session: AsyncSession
 ) -> None:
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/{m.id}/decide",
@@ -633,10 +633,10 @@ async def test_decide_accept_emits_outbox_event(
 async def test_run_refuses_when_open_match_exists_without_force(
     client: TestClient, session: AsyncSession
 ) -> None:
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session)
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/run/{contact.id}",
@@ -658,10 +658,10 @@ async def test_run_with_force_overwrites_existing_open_match(
     contact already has an open match. The matcher hits the uq_match_open_per_interest
     conflict guard; the outcome is still well-defined (savepoint refetch
     returns the existing winner, no exception leaks)."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session)
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/run/{contact.id}",
@@ -694,11 +694,11 @@ async def test_decide_route_elsewhere_creates_new_recommended(
     the original Match is declined, a new ``recommended`` Match is created
     against the chosen alternate's facilitator, and the new Match is
     properly visible via the queue."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -762,10 +762,10 @@ async def test_decide_route_elsewhere_no_alternates_returns_409(
 ) -> None:
     """F25: with no ranked alternate available, route_elsewhere must 409
     with ``no_alternates`` rather than 500 or 200."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -805,11 +805,11 @@ async def test_decide_route_elsewhere_invalid_next_attempt_id_returns_400(
 ) -> None:
     """F25: an unknown ``next_attempt_id`` must surface as 400
     ``alternate_not_found``, not silently fall through to the highest-ranked."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -852,10 +852,10 @@ async def test_decide_send_back_emits_outbox_event(
 ) -> None:
     """F26: send_back must emit ``jp.adopt.v1.match.sent_back`` (the
     state-machine's event_type for matched → sent_back)."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="matched")
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/{m.id}/decide",
@@ -880,11 +880,11 @@ async def test_decide_route_elsewhere_emits_outbox_event(
 ) -> None:
     """F26: route_elsewhere must emit ``jp.adopt.v1.match.routed_elsewhere``
     with both from/to facilitator_org_id populated."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    interest = await _make_interest(session, contact, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    interest = await _make_interest(session, contact, people_id3)
     m = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -943,11 +943,11 @@ async def test_decide_facilitator_cross_org_returns_403(
     inaccessible."""
     from jp_adopt_api import deps as deps_module
 
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org_a = await _make_org_with_coverage(session, rop3=rop3)
-    org_b = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org_a, rop3)
+    org_a = await _make_org_with_coverage(session, people_id3=people_id3)
+    org_b = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org_a, people_id3)
     # Grant the dev-local subject membership only in org_b — explicitly NOT
     # the org that owns the Match under test.
     await _grant_org_membership(session, user_sub="dev-local", org_id=org_b.id)
@@ -986,10 +986,10 @@ async def test_decide_accept_with_next_attempt_id_returns_422(
 ) -> None:
     """F24: sending ``next_attempt_id`` with a non-``route_elsewhere`` verb
     is silently dropped today; surface it as a 422 from the schema layer."""
-    rop3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="new")
-    org = await _make_org_with_coverage(session, rop3=rop3)
-    m = await _seed_recommended_match(session, contact, org, rop3)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
     try:
         r = client.post(
             f"/v1/matches/{m.id}/decide",

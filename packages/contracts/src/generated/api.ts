@@ -846,12 +846,12 @@ export interface components {
              * Format: uuid
              */
             adopter_interest_id: string;
-            /** Rop3 */
-            rop3: string | null;
-            /** Rop3 Name */
-            rop3_name?: string | null;
-            /** Rop3 Country */
-            rop3_country?: string | null;
+            /** People Id3 */
+            people_id3: string | null;
+            /** People Id3 Name */
+            people_id3_name?: string | null;
+            /** People Id3 Country */
+            people_id3_country?: string | null;
             /**
              * Facilitator Org Id
              * Format: uuid
@@ -1379,8 +1379,8 @@ export interface components {
              * @default false
              */
             newsletter_opt_in: boolean;
-            /** Fpg Rop3S */
-            fpg_rop3s?: string[];
+            /** Fpg People Id3S */
+            fpg_people_id3s?: string[];
             /** Facilitator Org Id */
             facilitator_org_id?: string | null;
             /** Notes */
@@ -1466,8 +1466,8 @@ export interface components {
             contact_display_name: string;
             /** Contact Adopter Status */
             contact_adopter_status: string | null;
-            /** Rop3 */
-            rop3: string | null;
+            /** People Id3 */
+            people_id3: string | null;
             /**
              * Facilitator Org Id
              * Format: uuid

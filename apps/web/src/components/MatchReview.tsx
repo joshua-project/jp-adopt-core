@@ -173,7 +173,7 @@ export function MatchReview({ matchId }: { matchId: string }) {
           <span className="text-slate-300">·</span>
           <span>
             <span className="text-slate-500">FPG:</span>{" "}
-            <span className="font-mono text-slate-800">{data.rop3 ?? "—"}</span>
+            <span className="font-mono text-slate-800">{data.people_id3 ?? "—"}</span>
           </span>
         </p>
       </div>

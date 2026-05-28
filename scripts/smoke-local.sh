@@ -180,7 +180,7 @@ manual_body=$(cat <<JSON
   "party_kind": "adopter",
   "origin": "manual_entry",
   "country_code": "US",
-  "fpg_rop3s": ["AAA01"],
+  "fpg_people_id3s": ["AAA01"],
   "newsletter_opt_in": false,
   "notes": "Smoke test row — safe to delete."
 }

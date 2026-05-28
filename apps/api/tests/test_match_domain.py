@@ -63,15 +63,15 @@ async def _make_contact(conn: AsyncConnection) -> uuid.UUID:
 
 
 async def _make_interest(
-    conn: AsyncConnection, contact_id: uuid.UUID, rop3: str | None = "AAA03"
+    conn: AsyncConnection, contact_id: uuid.UUID, people_id3: str | None = "AAA03"
 ) -> uuid.UUID:
     iid = uuid.uuid4()
     await conn.execute(
         text(
-            "INSERT INTO adopter_interest (id, contact_id, rop3) "
-            "VALUES (:id, :cid, :rop3)"
+            "INSERT INTO adopter_interest (id, contact_id, people_id3) "
+            "VALUES (:id, :cid, :people_id3)"
         ),
-        {"id": iid, "cid": contact_id, "rop3": rop3},
+        {"id": iid, "cid": contact_id, "people_id3": people_id3},
     )
     return iid
 
@@ -93,19 +93,42 @@ async def test_all_six_tables_exist(conn: AsyncConnection) -> None:
 
 
 async def test_seed_data_present(conn: AsyncConnection) -> None:
-    """3 facilitating_orgs, 5 FPGs, 6 coverage rows are loaded."""
+    """Migration seed: 3 demo orgs, 5 FPGs, 6 coverage rows (0021 re-inserts FPGs)."""
+    seed_org_ids = (
+        TRIAGE_ORG_ID,
+        EXAMPLE_MISSION_ID,
+        FRONTIER_ALLIANCE_ID,
+    )
     orgs = (
-        await conn.execute(text("SELECT COUNT(*) FROM facilitating_org"))
-    ).scalar_one()
-    fpgs = (await conn.execute(text("SELECT COUNT(*) FROM fpg"))).scalar_one()
-    cov = (
         await conn.execute(
-            text("SELECT COUNT(*) FROM facilitator_fpg_coverage")
+            text(
+                "SELECT COUNT(*) FROM facilitating_org "
+                "WHERE id::text = ANY(:ids)"
+            ),
+            {"ids": list(seed_org_ids)},
         )
     ).scalar_one()
-    assert orgs == 3, f"expected 3 facilitating_orgs, got {orgs}"
-    assert fpgs == 5, f"expected 5 fpgs, got {fpgs}"
-    assert cov == 6, f"expected 6 coverage rows, got {cov}"
+    demo_people_id3s = ("AAA01", "AAA02", "AAA03", "AAA04", "AAA05")
+    fpgs = (
+        await conn.execute(
+            text(
+                "SELECT COUNT(*) FROM fpg WHERE people_id3 = ANY(:codes)"
+            ),
+            {"codes": list(demo_people_id3s)},
+        )
+    ).scalar_one()
+    cov = (
+        await conn.execute(
+            text(
+                "SELECT COUNT(*) FROM facilitator_fpg_coverage "
+                "WHERE people_id3 = ANY(:codes)"
+            ),
+            {"codes": list(demo_people_id3s)},
+        )
+    ).scalar_one()
+    assert orgs == 3, f"expected 3 seed facilitating_orgs, got {orgs}"
+    assert fpgs == 5, f"expected 5 demo fpgs, got {fpgs}"
+    assert cov == 6, f"expected 6 demo coverage rows, got {cov}"
 
 
 async def test_exactly_one_triage_org_in_seed(conn: AsyncConnection) -> None:
@@ -136,7 +159,7 @@ async def test_unique_partial_open_match_blocks_double_recommended(
     )
     async with conn.begin():
         cid = await _make_contact(conn)
-        iid = await _make_interest(conn, cid, rop3="AAA03")
+        iid = await _make_interest(conn, cid, people_id3="AAA03")
         await conn.execute(
             insert_match,
             {
@@ -173,7 +196,7 @@ async def test_unique_partial_open_match_allows_completed_plus_recommended(
     )
     async with conn.begin():
         cid = await _make_contact(conn)
-        iid = await _make_interest(conn, cid, rop3="AAA03")
+        iid = await _make_interest(conn, cid, people_id3="AAA03")
         await conn.execute(
             insert_match,
             {
@@ -243,7 +266,7 @@ async def test_cascade_delete_fpg_drops_coverage(
         await conn.execute(
             text(
                 """
-                INSERT INTO fpg (rop3, name, frontier)
+                INSERT INTO fpg (people_id3, name, frontier)
                 VALUES ('ZZZ99', 'Throwaway FPG', TRUE)
                 """
             )
@@ -252,7 +275,7 @@ async def test_cascade_delete_fpg_drops_coverage(
             text(
                 """
                 INSERT INTO facilitator_fpg_coverage
-                    (facilitator_org_id, rop3)
+                    (facilitator_org_id, people_id3)
                 VALUES (:fid, 'ZZZ99')
                 """
             ),
@@ -262,19 +285,19 @@ async def test_cascade_delete_fpg_drops_coverage(
             await conn.execute(
                 text(
                     "SELECT COUNT(*) FROM facilitator_fpg_coverage "
-                    "WHERE rop3 = 'ZZZ99'"
+                    "WHERE people_id3 = 'ZZZ99'"
                 )
             )
         ).scalar_one()
         assert before == 1
 
-        await conn.execute(text("DELETE FROM fpg WHERE rop3 = 'ZZZ99'"))
+        await conn.execute(text("DELETE FROM fpg WHERE people_id3 = 'ZZZ99'"))
 
         after = (
             await conn.execute(
                 text(
                     "SELECT COUNT(*) FROM facilitator_fpg_coverage "
-                    "WHERE rop3 = 'ZZZ99'"
+                    "WHERE people_id3 = 'ZZZ99'"
                 )
             )
         ).scalar_one()
@@ -285,7 +308,7 @@ async def test_match_attempt_jsonb_roundtrip(conn: AsyncConnection) -> None:
     """match_attempt persists the full score_breakdown JSONB used by U6."""
     async with conn.begin():
         cid = await _make_contact(conn)
-        iid = await _make_interest(conn, cid, rop3="AAA03")
+        iid = await _make_interest(conn, cid, people_id3="AAA03")
         run_id = uuid.uuid4()
         attempt_id = uuid.uuid4()
 

@@ -289,7 +289,7 @@ async def test_transition_facilitator_cross_org_returns_403(
     )
     session.add_all([org_a, org_b])
     interest = AdopterInterest(
-        id=uuid.uuid4(), contact_id=contact.id, rop3=None
+        id=uuid.uuid4(), contact_id=contact.id, people_id3=None
     )
     session.add(interest)
     m = Match(

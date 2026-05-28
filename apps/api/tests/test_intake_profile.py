@@ -44,7 +44,7 @@ async def test_adoption_intake_persists_profile_and_consent(
         "display_name": "U10 Adopter Org",
         "origin": "website",
         "fpg_selections": [
-            {"rop3": "AAA01", "commitment_level": "going",
+            {"people_id3": "AAA01", "commitment_level": "going",
              "commitment_types": ["prayer", "financial"]},
         ],
         "profile": {
@@ -112,21 +112,25 @@ async def test_adoption_intake_persists_profile_and_consent(
         await session.commit()
 
 
-async def test_adoption_intake_resolves_people_id3_to_rop3(
+async def test_adoption_intake_stores_people_id3_directly(
     client: TestClient, session: AsyncSession
 ):
-    # U12: forms send people_id3 (not rop3); intake resolves it via fpg.
-    fpg = Fpg(
-        rop3="TSTPID1", people_id3="9990001", name="PID Resolve Test", frontier=True
-    )
-    session.add(fpg)
-    await session.commit()
     email = f"pid-{uuid.uuid4().hex[:10]}@example.com"
+    people_id3 = "9990001"
+    session.add(
+        Fpg(
+            people_id3=people_id3,
+            name="Test PID group",
+            country_code="US",
+            frontier=True,
+        )
+    )
+    await session.commit()
     body = {
         "email": email,
         "display_name": "PID Adopter",
         "origin": "website",
-        "fpg_selections": [{"people_id3": 9990001, "commitment_level": "going"}],
+        "fpg_selections": [{"people_id3": int(people_id3), "commitment_level": "going"}],
     }
     try:
         r = client.post(
@@ -144,24 +148,28 @@ async def test_adoption_intake_resolves_people_id3_to_rop3(
                 select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
             )
         ).scalar_one()
-        assert interest.rop3 == "TSTPID1"
+        assert interest.people_id3 == people_id3
     finally:
         await session.execute(delete(Contact).where(Contact.email_normalized == email))
-        await session.execute(delete(Fpg).where(Fpg.rop3 == "TSTPID1"))
+        await session.execute(delete(Fpg).where(Fpg.people_id3 == people_id3))
         await session.commit()
 
 
 async def test_facilitation_intake_creates_per_fpg_interests(
     client: TestClient, session: AsyncSession
 ):
-    # U12: facilitators pick FPGs too; intake resolves people_id3 -> rop3 and
-    # stores the per-FPG facilitation/network services on adopter_interest.
-    fpg = Fpg(
-        rop3="TSTPID2", people_id3="9990002", name="Facil PID FPG", frontier=True
-    )
-    session.add(fpg)
-    await session.commit()
+    # Facilitators pick FPGs by people_id3; per-FPG services land on adopter_interest.
     email = f"facpid-{uuid.uuid4().hex[:10]}@example.com"
+    people_id3 = "9990002"
+    session.add(
+        Fpg(
+            people_id3=people_id3,
+            name="Facilitation PID group",
+            country_code="US",
+            frontier=True,
+        )
+    )
+    await session.commit()
     body = {
         "email": email,
         "display_name": "Helper Org",
@@ -169,7 +177,7 @@ async def test_facilitation_intake_creates_per_fpg_interests(
         "organization_name": "Helper Org",
         "fpg_selections": [
             {
-                "people_id3": 9990002,
+                "people_id3": int(people_id3),
                 "engagement_status": "ready",
                 "facilitation_services": ["coaching"],
                 "network_services": ["intro"],
@@ -193,11 +201,11 @@ async def test_facilitation_intake_creates_per_fpg_interests(
                 select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
             )
         ).scalar_one()
-        assert interest.rop3 == "TSTPID2"
+        assert interest.people_id3 == people_id3
         assert interest.engagement_status == "ready"
         assert interest.facilitation_services == ["coaching"]
         assert interest.network_services == ["intro"]
     finally:
         await session.execute(delete(Contact).where(Contact.email_normalized == email))
-        await session.execute(delete(Fpg).where(Fpg.rop3 == "TSTPID2"))
+        await session.execute(delete(Fpg).where(Fpg.people_id3 == people_id3))
         await session.commit()

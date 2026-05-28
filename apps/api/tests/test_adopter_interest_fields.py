@@ -55,7 +55,7 @@ async def test_per_fpg_fields_persist(session: AsyncSession, contact: Contact):
         AdopterInterest(
             id=uuid.uuid4(),
             contact_id=contact.id,
-            rop3=None,
+            people_id3=None,
             commitment_types=["prayer", "financial"],
             engagement_status="ready",
             facilitation_services=["prayer_updates", "training"],

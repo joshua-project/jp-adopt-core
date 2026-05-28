@@ -100,10 +100,10 @@ export function FacilitatorPortal() {
                     badge={<StatusBadge status={item.status} kind="match" />}
                     meta={
                       <>
-                        {item.rop3 ? (
+                        {item.people_id3 ? (
                           <span className="inline-flex items-center gap-1">
                             <span className="text-slate-500">FPG:</span>
-                            <CodeChip>{item.rop3}</CodeChip>
+                            <CodeChip>{item.people_id3}</CodeChip>
                           </span>
                         ) : (
                           <span className="text-slate-500">FPG: —</span>

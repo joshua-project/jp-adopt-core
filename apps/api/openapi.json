@@ -3065,7 +3065,7 @@
             "format": "uuid",
             "title": "Adopter Interest Id"
           },
-          "rop3": {
+          "people_id3": {
             "anyOf": [
               {
                 "type": "string"
@@ -3074,9 +3074,9 @@
                 "type": "null"
               }
             ],
-            "title": "Rop3"
+            "title": "People Id3"
           },
-          "rop3_name": {
+          "people_id3_name": {
             "anyOf": [
               {
                 "type": "string"
@@ -3085,9 +3085,9 @@
                 "type": "null"
               }
             ],
-            "title": "Rop3 Name"
+            "title": "People Id3 Name"
           },
-          "rop3_country": {
+          "people_id3_country": {
             "anyOf": [
               {
                 "type": "string"
@@ -3096,7 +3096,7 @@
                 "type": "null"
               }
             ],
-            "title": "Rop3 Country"
+            "title": "People Id3 Country"
           },
           "facilitator_org_id": {
             "type": "string",
@@ -3166,7 +3166,7 @@
         "required": [
           "id",
           "adopter_interest_id",
-          "rop3",
+          "people_id3",
           "facilitator_org_id",
           "facilitator_name",
           "status",
@@ -4972,13 +4972,13 @@
             "title": "Newsletter Opt In",
             "default": false
           },
-          "fpg_rop3s": {
+          "fpg_people_id3s": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "maxItems": 20,
-            "title": "Fpg Rop3S"
+            "title": "Fpg People Id3S"
           },
           "facilitator_org_id": {
             "anyOf": [
@@ -5197,7 +5197,7 @@
             ],
             "title": "Contact Adopter Status"
           },
-          "rop3": {
+          "people_id3": {
             "anyOf": [
               {
                 "type": "string"
@@ -5206,7 +5206,7 @@
                 "type": "null"
               }
             ],
-            "title": "Rop3"
+            "title": "People Id3"
           },
           "facilitator_org_id": {
             "type": "string",
@@ -5253,7 +5253,7 @@
           "contact_id",
           "contact_display_name",
           "contact_adopter_status",
-          "rop3",
+          "people_id3",
           "facilitator_org_id",
           "facilitator_name",
           "status",
