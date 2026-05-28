@@ -63,7 +63,7 @@ async def fixture_contact(session: AsyncSession) -> AsyncIterator[Contact]:
     )
     session.add_all([org, contact])
     await session.flush()
-    interest = AdopterInterest(id=uuid.uuid4(), contact_id=contact.id, rop3=None)
+    interest = AdopterInterest(id=uuid.uuid4(), contact_id=contact.id, people_id3=None)
     session.add(interest)
     await session.flush()
     session.add_all(

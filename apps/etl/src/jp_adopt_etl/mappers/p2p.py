@@ -4,7 +4,7 @@
 DT uses the Posts-to-Posts plugin (wp_p2p table) to model many-to-many
 relations between contacts and people-group posts. We only care about
 the ``contacts_to_peoplegroups`` p2p_type (the FPG relation that
-populates AdopterInterest.rop3) and ``contacts_to_groups`` (assigned
+populates AdopterInterest.people_id3) and ``contacts_to_groups`` (assigned
 facilitator org, which populates the Match table — handled by a separate
 mapper if/when we wire it in).
 
@@ -28,14 +28,14 @@ def map_p2p_interest(
     *,
     p2p_row: dict[str, Any],
     contact_id: uuid.UUID,
-    rop3: str,
+    people_id3: str,
 ) -> dict[str, Any]:
     """Translate one wp_p2p row into AdopterInterest kwargs.
 
     ``contact_id`` is the new Postgres Contact UUID (resolved by the
     orchestrator).
-    ``rop3`` is the people-group rop3 code resolved from the
-    ``p2p_to`` post's wp_postmeta (e.g. ``rop3 = 'AAA01'``). The
+    ``people_id3`` is resolved from the ``p2p_to`` post's wp_postmeta
+    (e.g. ``people_id3 = '10375'``). The
     orchestrator owns that lookup; the mapper just packages the result.
 
     AdopterInterest does not currently carry source_system / source_id
@@ -45,7 +45,7 @@ def map_p2p_interest(
     """
     return {
         "contact_id": contact_id,
-        "rop3": rop3,
+        "people_id3": people_id3,
         # DT does not consistently capture a commitment level on p2p;
         # leave as None unless the orchestrator hydrated it.
         "commitment_level": p2p_row.get("commitment_level"),

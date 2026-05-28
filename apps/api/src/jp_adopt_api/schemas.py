@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 # ── Adoption profile (U9): contact_profile field enums ─────────────────────
 # Option sets mirror dt-adoption-fields/custom-fields.php + migration 0012.
@@ -204,9 +204,9 @@ class ContactMatchRow(BaseModel):
 
     id: uuid.UUID
     adopter_interest_id: uuid.UUID
-    rop3: str | None
-    rop3_name: str | None = None
-    rop3_country: str | None = None
+    people_id3: str | None
+    people_id3_name: str | None = None
+    people_id3_country: str | None = None
     facilitator_org_id: uuid.UUID
     facilitator_name: str
     status: str
@@ -325,31 +325,27 @@ PartyKindIntake = Literal["adopter", "facilitator"]
 class FpgInterestIn(BaseModel):
     """One row of the adopter's FPG selection on Form B.
 
-    `rop3` is the canonical Joshua Project people-group ID. Empty list at the
-    request level → adopter is `potential_adopter` (wants help selecting).
+    ``people_id3`` is the canonical Joshua Project people-group ID in core.
+    Empty list at the request level → adopter is ``potential_adopter``.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    # U12: identify the people group by ROP3 (canonical) OR people_id3 (what the
-    # public forms carry — they have no ROP3). At least one is required; the
-    # intake handler resolves people_id3 → rop3 via the fpg table when rop3 is
-    # absent, falling back to an unresolved (rop3=NULL) interest for triage.
-    rop3: str | None = Field(default=None, max_length=32)
-    people_id3: int | None = None
+    people_id3: str
     commitment_level: str | None = Field(default=None, max_length=64)
+
+    @field_validator("people_id3", mode="before")
+    @classmethod
+    def _coerce_people_id3(cls, value: object) -> str:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValueError("people_id3 is required")
+        return str(value).strip()
     notes: str | None = Field(default=None, max_length=2048)
     # U10: per-FPG answers from the forms → adopter_interest (U7 columns).
     commitment_types: list[str] | None = None
     engagement_status: str | None = Field(default=None, max_length=32)
     facilitation_services: list[str] | None = None
     network_services: list[str] | None = None
-
-    @model_validator(mode="after")
-    def require_identifier(self) -> Self:
-        if not self.rop3 and self.people_id3 is None:
-            raise ValueError("each fpg selection needs rop3 or people_id3")
-        return self
 
 
 class ContactProfileIntake(ContactProfilePatch):

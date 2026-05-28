@@ -43,7 +43,7 @@ export function ManualContactForm() {
     setMsg(null);
     startSubmit(() => {
       void (async () => {
-        const fpg_rop3s = fpgRop3sRaw
+        const fpg_people_id3s = fpgRop3sRaw
           .split(/[,\s]+/)
           .map((s) => s.trim())
           .filter(Boolean);
@@ -53,7 +53,7 @@ export function ManualContactForm() {
           party_kind: partyKind,
           origin: origin || null,
           country_code: countryCode || null,
-          fpg_rop3s,
+          fpg_people_id3s,
           notes: notes || null,
           newsletter_opt_in: newsletterOptIn,
         };

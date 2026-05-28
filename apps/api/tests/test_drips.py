@@ -247,15 +247,14 @@ async def test_suppression_round_trip(session: AsyncSession) -> None:
 async def test_enroll_on_event_creates_enrollment_when_campaign_matches(
     session: AsyncSession,
 ) -> None:
+    event_type = f"jp.adopt.v1.test.enroll-{uuid.uuid4().hex}"
     contact = await _make_contact(session)
-    campaign = await _make_campaign(
-        session, trigger_event_type="jp.adopt.v1.match.accepted_by_facilitator"
-    )
+    campaign = await _make_campaign(session, trigger_event_type=event_type)
     await _make_step(session, campaign, position=0)
     try:
         outcomes = await enroll_on_event(
             session,
-            event_type="jp.adopt.v1.match.accepted_by_facilitator",
+            event_type=event_type,
             contact_id=contact.id,
         )
         await session.commit()
@@ -265,7 +264,7 @@ async def test_enroll_on_event_creates_enrollment_when_campaign_matches(
         # Idempotent re-trigger
         outcomes2 = await enroll_on_event(
             session,
-            event_type="jp.adopt.v1.match.accepted_by_facilitator",
+            event_type=event_type,
             contact_id=contact.id,
         )
         await session.commit()

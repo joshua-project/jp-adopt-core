@@ -54,10 +54,10 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": "Bearer dev-local"}
 
 
-async def _ensure_fpg(session: AsyncSession, rop3: str) -> None:
-    existing = await session.get(Fpg, rop3)
+async def _ensure_fpg(session: AsyncSession, people_id3: str) -> None:
+    existing = await session.get(Fpg, people_id3)
     if existing is None:
-        session.add(Fpg(rop3=rop3, name=f"Test {rop3}", country_code="US"))
+        session.add(Fpg(people_id3=people_id3, name=f"Test {people_id3}", country_code="US"))
         await session.flush()
         await session.commit()
 
@@ -128,7 +128,7 @@ async def test_manual_create_minimal_adopter_with_one_rop3(
                 "display_name": "Alice",
                 "email": email,
                 "party_kind": "adopter",
-                "fpg_rop3s": ["AAA01"],
+                "fpg_people_id3s": ["AAA01"],
             },
             headers=_auth_headers(),
         )
@@ -180,10 +180,10 @@ async def test_manual_create_no_fpg_becomes_potential_adopter(
         )
         assert r.status_code == 201, r.text
         body = r.json()
-        # No fpg_rop3s ⇒ single AdopterInterest with rop3=NULL
+        # No fpg_people_id3s ⇒ single AdopterInterest with people_id3=NULL
         assert len(body["interest_ids"]) == 1
         assert body["contact_status"] == "potential_adopter"
-        # The interest row really has rop3=NULL
+        # The interest row really has people_id3=NULL
         interest = (
             await session.execute(
                 select(AdopterInterest).where(
@@ -191,7 +191,7 @@ async def test_manual_create_no_fpg_becomes_potential_adopter(
                 )
             )
         ).scalar_one()
-        assert interest.rop3 is None
+        assert interest.people_id3 is None
     finally:
         await _cleanup_by_email(session, email)
 
@@ -203,7 +203,7 @@ async def test_manual_create_with_facilitator_creates_match(
     email = f"manual-{uuid.uuid4().hex[:8]}@example.com"
     await _ensure_fpg(session, "AAA02")
     org = await _make_org(session)
-    session.add(FacilitatorFpgCoverage(facilitator_org_id=org.id, rop3="AAA02"))
+    session.add(FacilitatorFpgCoverage(facilitator_org_id=org.id, people_id3="AAA02"))
     await session.commit()
     try:
         r = client.post(
@@ -212,7 +212,7 @@ async def test_manual_create_with_facilitator_creates_match(
                 "display_name": "Pre-matched",
                 "email": email,
                 "party_kind": "adopter",
-                "fpg_rop3s": ["AAA02"],
+                "fpg_people_id3s": ["AAA02"],
                 "facilitator_org_id": str(org.id),
             },
             headers=_auth_headers(),
@@ -282,12 +282,12 @@ async def test_manual_create_unknown_rop3_returns_422(
                 "display_name": "Bad rop3",
                 "email": email,
                 "party_kind": "adopter",
-                "fpg_rop3s": ["DOES_NOT_EXIST"],
+                "fpg_people_id3s": ["DOES_NOT_EXIST"],
             },
             headers=_auth_headers(),
         )
         assert r.status_code == 422, r.text
-        assert r.json()["detail"]["code"] == "unknown_fpg_rop3"
+        assert r.json()["detail"]["code"] == "unknown_fpg_people_id3"
     finally:
         await _cleanup_by_email(session, email)
 

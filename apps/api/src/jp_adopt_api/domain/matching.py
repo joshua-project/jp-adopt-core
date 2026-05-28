@@ -5,7 +5,7 @@ exclude_facilitator_ids=None)``.
 
 For each ``AdopterInterest`` row attached to the contact:
 
-* If the interest has no FPG selected (`rop3 IS NULL`), insert one Match row
+* If the interest has no FPG selected (`people_id3 IS NULL`), insert one Match row
   pointing at the configured triage org with `status='triage'`. No
   MatchAttempt rows are written for the no-FPG case (there's nothing to
   rank). The plan calls for a single triage assignment per no-FPG interest.
@@ -30,8 +30,8 @@ For each ``AdopterInterest`` row attached to the contact:
   strict "0 Match rows" wording in favor of one consistent UI surface — the
   triage queue — that captures every interest needing human routing
   regardless of why it ended up there. The audit trail distinguishes the
-  cases: no-FPG interests have `rop3 IS NULL`; no-coverage interests have a
-  concrete `rop3` plus zero MatchAttempt rows. Documented in
+  cases: no-FPG interests have `people_id3 IS NULL`; no-coverage interests have a
+  concrete `people_id3` plus zero MatchAttempt rows. Documented in
   ``docs/runbooks/matching-algorithm-v1.md``.
 
 The function flushes but does NOT commit. The caller controls the
@@ -151,9 +151,9 @@ class Candidate:
     facilitator: FacilitatingOrg
     score_vector: ScoreVector | None = None
     filter_reason: FilterReason = FilterReason.PASSED
-    # Set of rop3s this facilitator covers — cached on the candidate so each
+    # Set of people_id3s this facilitator covers — cached on the candidate so each
     # interest's hard_filter / score doesn't re-query the coverage table.
-    covered_rop3s: frozenset[str] = field(default_factory=frozenset)
+    covered_people_id3s: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def passed_filter(self) -> bool:
@@ -182,7 +182,7 @@ class MatchOutcome:
 @dataclass
 class InterestOutcome:
     interest_id: uuid.UUID
-    rop3: str | None
+    people_id3: str | None
     triage_match_id: uuid.UUID | None = None
     recommended_match_ids: list[uuid.UUID] = field(default_factory=list)
     attempt_ids: list[uuid.UUID] = field(default_factory=list)
@@ -197,19 +197,19 @@ class InterestOutcome:
 def hard_filter(
     *,
     facilitator: FacilitatingOrg,
-    rop3: str,
-    covered_rop3s: frozenset[str],
+    people_id3: str,
+    covered_people_id3s: frozenset[str],
     excluded_facilitator_ids: frozenset[uuid.UUID],
 ) -> FilterReason:
-    """Return PASSED if this facilitator is a candidate for this rop3, else
+    """Return PASSED if this facilitator is a candidate for this people_id3, else
     a specific FilterReason describing what bounced them. Pure function —
     has no DB access; the caller pre-loads coverage.
 
-    N6: F36 added a ``contact_has_no_rop3`` parameter that gated on
+    N6: F36 added a ``contact_has_no_fpg`` parameter that gated on
     ``facilitator.accepting_potential_adopters``. Reverted because the
     production caller in ``_process_interest`` short-circuits to triage
-    when ``rop3 IS None`` BEFORE this filter ever runs, and the only call
-    site passed ``contact_has_no_rop3=False`` unconditionally — making
+    when ``people_id3 IS None`` BEFORE this filter ever runs, and the only call
+    site passed ``contact_has_no_fpg=False`` unconditionally — making
     the branch unreachable. The ``accepting_potential_adopters`` column
     on ``FacilitatingOrg`` is intentionally retained: it will be wired
     in once ``match_or_route`` gains an explicit no-FPG branch that
@@ -223,7 +223,7 @@ def hard_filter(
     # means "we accept zero adopters right now" so it fails closed.
     if facilitator.capacity_committed >= facilitator.capacity_total:
         return FilterReason.NO_CAPACITY
-    if rop3 not in covered_rop3s:
+    if people_id3 not in covered_people_id3s:
         return FilterReason.NO_COVERAGE
     return FilterReason.PASSED
 
@@ -265,14 +265,16 @@ def _language_score(contact: Contact, facilitator: FacilitatingOrg) -> float:
     return len(contact_langs & fac_langs) / len(union)
 
 
-def _fpg_affinity_score(rop3: str, covered_rop3s: frozenset[str]) -> float:
-    """1.0 if this rop3 is in the facilitator's coverage set (else 0).
+def _fpg_affinity_score(
+    people_id3: str, covered_people_id3s: frozenset[str]
+) -> float:
+    """1.0 if this people_id3 is in the facilitator's coverage set (else 0).
 
-    Single-rop3 scoring is binary in v1 — the multi-FPG case is handled at
+    Single-FPG scoring is binary in v1 — the multi-FPG case is handled at
     the loop level by scoring each interest separately. A v2 refinement
     could weight by how many *other* contact interests this facilitator
     also covers (i.e., one-stop-shop bonus)."""
-    return 1.0 if rop3 in covered_rop3s else 0.0
+    return 1.0 if people_id3 in covered_people_id3s else 0.0
 
 
 def _theological_score(contact: Contact, facilitator: FacilitatingOrg) -> float:
@@ -287,16 +289,16 @@ def score(
     *,
     contact: Contact,
     facilitator: FacilitatingOrg,
-    rop3: str,
-    covered_rop3s: frozenset[str],
+    people_id3: str,
+    covered_people_id3s: frozenset[str],
 ) -> ScoreVector:
-    """Compute the full score vector for one (contact, facilitator, rop3)
+    """Compute the full score vector for one (contact, facilitator, people_id3)
     pairing. Caller multiplies by weights via ``ScoreVector.weighted_total``."""
     return ScoreVector(
         capacity_headroom=_capacity_headroom_score(facilitator),
         geography=_geography_score(contact, facilitator),
         language=_language_score(contact, facilitator),
-        fpg_affinity=_fpg_affinity_score(rop3, covered_rop3s),
+        fpg_affinity=_fpg_affinity_score(people_id3, covered_people_id3s),
         theological=_theological_score(contact, facilitator),
     )
 
@@ -326,17 +328,17 @@ async def _load_facilitators_with_coverage(
         await session.execute(
             select(
                 FacilitatorFpgCoverage.facilitator_org_id,
-                FacilitatorFpgCoverage.rop3,
+                FacilitatorFpgCoverage.people_id3,
             )
         )
     ).all()
     coverage: dict[uuid.UUID, set[str]] = {}
-    for org_id, rop3 in coverage_rows:
-        coverage.setdefault(org_id, set()).add(rop3)
+    for org_id, people_id3 in coverage_rows:
+        coverage.setdefault(org_id, set()).add(people_id3)
     return [
         Candidate(
             facilitator=org,
-            covered_rop3s=frozenset(coverage.get(org.id, set())),
+            covered_people_id3s=frozenset(coverage.get(org.id, set())),
         )
         for org in orgs
     ]
@@ -411,7 +413,7 @@ def _sort_candidates_for_ranking(
 def _outbox_payload_for_attempt(
     *,
     candidate: Candidate,
-    rop3: str,
+    people_id3: str,
     score_vector: ScoreVector | None,
     weighted_total: float | None,
 ) -> dict[str, Any]:
@@ -419,12 +421,12 @@ def _outbox_payload_for_attempt(
     return {
         "facilitator_org_id": str(candidate.facilitator.id),
         "facilitator_name": candidate.facilitator.name,
-        "rop3": rop3,
+        "people_id3": people_id3,
         "filter_reason": candidate.filter_reason.value,
         "facilitator_active": candidate.facilitator.active,
         "facilitator_capacity_committed": candidate.facilitator.capacity_committed,
         "facilitator_capacity_total": candidate.facilitator.capacity_total,
-        "covered_rop3s": sorted(candidate.covered_rop3s),
+        "covered_people_id3s": sorted(candidate.covered_people_id3s),
         "weighted_total": weighted_total,
         # score_breakdown is also stored separately in match_attempt.score_breakdown;
         # repeated here so filter_results is self-contained for log inspection.
@@ -508,10 +510,12 @@ async def _process_interest(
     weights: MatchingWeights,
     run_id: uuid.UUID,
 ) -> InterestOutcome:
-    outcome = InterestOutcome(interest_id=interest.id, rop3=interest.rop3)
+    outcome = InterestOutcome(
+        interest_id=interest.id, people_id3=interest.people_id3
+    )
 
     # --- No-FPG path ---------------------------------------------------
-    if interest.rop3 is None:
+    if interest.people_id3 is None:
         # CORR-1: flush ANY pending objects to the outer transaction
         # BEFORE opening the savepoint. Autoflush inside ``begin_nested``
         # would flush them within the savepoint, so a savepoint rollback
@@ -545,7 +549,7 @@ async def _process_interest(
         )
         return outcome
 
-    rop3 = interest.rop3
+    people_id3 = interest.people_id3
 
     # --- Score every candidate -----------------------------------------
     scored: list[tuple[Candidate, float]] = []
@@ -558,11 +562,11 @@ async def _process_interest(
         # don't leak across interests within the run.
         cand = Candidate(
             facilitator=cand_template.facilitator,
-            covered_rop3s=cand_template.covered_rop3s,
+            covered_people_id3s=cand_template.covered_people_id3s,
             filter_reason=hard_filter(
                 facilitator=cand_template.facilitator,
-                rop3=rop3,
-                covered_rop3s=cand_template.covered_rop3s,
+                people_id3=people_id3,
+                covered_people_id3s=cand_template.covered_people_id3s,
                 excluded_facilitator_ids=excluded,
             ),
         )
@@ -570,8 +574,8 @@ async def _process_interest(
             cand.score_vector = score(
                 contact=contact,
                 facilitator=cand.facilitator,
-                rop3=rop3,
-                covered_rop3s=cand.covered_rop3s,
+                people_id3=people_id3,
+                covered_people_id3s=cand.covered_people_id3s,
             )
             # F43: round once at the source. Both the rank ordering AND the
             # persisted ``score`` column read this same value, so floating-
@@ -598,7 +602,7 @@ async def _process_interest(
             else None,
             filter_results=_outbox_payload_for_attempt(
                 candidate=cand,
-                rop3=rop3,
+                people_id3=people_id3,
                 score_vector=cand.score_vector,
                 weighted_total=weighted,
             ),
@@ -628,16 +632,16 @@ async def _process_interest(
         if match_row is None:
             logger.warning(
                 "match.concurrent_conflict_unrecoverable interest=%s "
-                "contact=%s rop3=%s",
-                interest.id, contact.id, rop3,
+                "contact=%s people_id3=%s",
+                interest.id, contact.id, people_id3,
             )
             outcome.reason = "concurrent_conflict_unrecoverable"
             return outcome
         outcome.triage_match_id = match_row.id
         outcome.reason = "no_coverage"
         logger.info(
-            "matching: no_coverage interest=%s contact=%s rop3=%s → triage match=%s",
-            interest.id, contact.id, rop3, match_row.id,
+            "matching: no_coverage interest=%s contact=%s people_id3=%s → triage match=%s",
+            interest.id, contact.id, people_id3, match_row.id,
         )
         return outcome
 
@@ -683,8 +687,8 @@ async def _process_interest(
         if match_row is None:
             logger.warning(
                 "match.concurrent_conflict_unrecoverable interest=%s "
-                "contact=%s rop3=%s",
-                interest.id, contact.id, rop3,
+                "contact=%s people_id3=%s",
+                interest.id, contact.id, people_id3,
             )
             outcome.reason = "concurrent_conflict_unrecoverable"
             return outcome
@@ -693,9 +697,9 @@ async def _process_interest(
         await session.flush()
     outcome.reason = "scored"
     logger.info(
-        "matching: scored interest=%s contact=%s rop3=%s candidates=%d "
+        "matching: scored interest=%s contact=%s people_id3=%s candidates=%d "
         "ranked=%d promoted_top=%s top_score=%.3f",
-        interest.id, contact.id, rop3, len(scored), len(promoted),
+        interest.id, contact.id, people_id3, len(scored), len(promoted),
         promoted[0][0].facilitator.id if promoted else None,
         ranked[0][1] if ranked else 0.0,
     )

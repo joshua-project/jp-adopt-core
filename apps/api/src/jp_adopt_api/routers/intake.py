@@ -49,7 +49,6 @@ from jp_adopt_api.models import (
     Consent,
     Contact,
     ContactProfile,
-    Fpg,
     SubmissionBlocked,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
@@ -377,21 +376,6 @@ async def _write_consents(
         )
 
 
-async def _resolve_rop3(session: AsyncSession, sel: FpgInterestIn) -> str | None:
-    """U12: forms carry people_id3, not rop3 — resolve via the fpg table.
-    Returns None (unresolved, for triage) when neither rop3 nor a matching
-    fpg row is found."""
-    if sel.rop3 is not None:
-        return sel.rop3
-    if sel.people_id3 is None:
-        return None
-    return (
-        await session.execute(
-            select(Fpg.rop3).where(Fpg.people_id3 == str(sel.people_id3))
-        )
-    ).scalar_one_or_none()
-
-
 async def _create_interests(
     session: AsyncSession,
     contact: Contact,
@@ -406,7 +390,7 @@ async def _create_interests(
         interest = AdopterInterest(
             id=uuid.uuid4(),
             contact_id=contact.id,
-            rop3=await _resolve_rop3(session, sel),
+            people_id3=str(sel.people_id3),
             commitment_level=sel.commitment_level,
             notes=sel.notes,
             commitment_types=sel.commitment_types,
@@ -501,14 +485,14 @@ async def _process_adoption(
 
     # Multi-FPG: one Contact + N AdopterInterest rows. Empty list → mark
     # contact as `potential_adopter` (R2: wants help selecting), insert ONE
-    # interest with rop3=NULL so downstream matching has a record to triage.
+    # interest with people_id3=NULL so downstream matching has a record to triage.
     interest_ids: list[uuid.UUID] = []
     if not payload.fpg_selections:
         contact.adopter_status = "potential_adopter"
         no_fpg = AdopterInterest(
             id=uuid.uuid4(),
             contact_id=contact.id,
-            rop3=None,
+            people_id3=None,
             commitment_level=None,
             notes=None,
         )
@@ -527,7 +511,7 @@ async def _process_adoption(
     submission_id = uuid.uuid4()
     outbox_payload = {
         "event": EVENT_SUBMISSION_RECEIVED,
-        "schema_version": "jp.adopt.v1",
+        "schema_version": "jp.adopt.v2",
         "submission_id": str(submission_id),
         "request_id": request_id,
         "contact_id": str(contact.id),
@@ -628,7 +612,7 @@ async def _process_facilitation(
     submission_id = uuid.uuid4()
     outbox_payload = {
         "event": EVENT_SUBMISSION_RECEIVED,
-        "schema_version": "jp.adopt.v1",
+        "schema_version": "jp.adopt.v2",
         "submission_id": str(submission_id),
         "request_id": request_id,
         "contact_id": str(contact.id),

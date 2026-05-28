@@ -131,7 +131,7 @@ class MatchSummary(BaseModel):
     contact_id: uuid.UUID
     contact_display_name: str
     contact_adopter_status: str | None
-    rop3: str | None
+    people_id3: str | None
     facilitator_org_id: uuid.UUID
     facilitator_name: str
     status: str
@@ -249,7 +249,7 @@ def _pick_actor_role(roles: frozenset[str], allowed: frozenset[str]) -> str:
 async def _load_interest_meta(
     db: AsyncSession, interest_id: uuid.UUID
 ) -> tuple[uuid.UUID, str | None]:
-    """Return ``(contact_id, rop3)`` for an interest, raising 404 if missing.
+    """Return ``(contact_id, people_id3)`` for an interest, raising 404 if missing.
 
     F23: ``scalar_one()`` raised ``NoResultFound`` and bubbled as a 500 when
     the interest row had been deleted between two requests. Promote that to
@@ -257,7 +257,7 @@ async def _load_interest_meta(
     """
     row = (
         await db.execute(
-            select(AdopterInterest.contact_id, AdopterInterest.rop3).where(
+            select(AdopterInterest.contact_id, AdopterInterest.people_id3).where(
                 AdopterInterest.id == interest_id
             )
         )
@@ -337,7 +337,7 @@ async def _build_match_summary(
     The queue endpoint avoids this per-match path entirely and uses
     :func:`_build_queue_summaries` so the N+1 stays out of the hot path.
     """
-    contact_id, rop3 = await _load_interest_meta(db, m.adopter_interest_id)
+    contact_id, people_id3 = await _load_interest_meta(db, m.adopter_interest_id)
     contact = await db.get(Contact, contact_id)
     facilitator = await db.get(FacilitatingOrg, m.facilitator_org_id)
     candidates: list[MatchCandidate] = []
@@ -358,7 +358,7 @@ async def _build_match_summary(
         contact_id=contact.id,
         contact_display_name=contact.display_name,
         contact_adopter_status=contact.adopter_status,
-        rop3=rop3,
+        people_id3=people_id3,
         facilitator_org_id=m.facilitator_org_id,
         facilitator_name=facilitator.name,
         status=m.status,
@@ -374,7 +374,7 @@ async def _build_queue_summaries(
     """F5: build N ``MatchSummary`` rows in at most two DB roundtrips:
 
     1. One JOIN to fetch ``(Match, AdopterInterest.contact_id,
-       AdopterInterest.rop3, Contact, FacilitatingOrg)`` for every Match.
+       AdopterInterest.people_id3, Contact, FacilitatingOrg)`` for every Match.
     2. One batched ``IN (...)`` query over ``MatchAttempt`` keyed by
        ``adopter_interest_id``.
 
@@ -389,7 +389,7 @@ async def _build_queue_summaries(
             select(
                 Match,
                 AdopterInterest.contact_id,
-                AdopterInterest.rop3,
+                AdopterInterest.people_id3,
                 Contact,
                 FacilitatingOrg,
             )
@@ -413,7 +413,7 @@ async def _build_queue_summaries(
         if row is None:
             # FK guarantees the join finds the row; defensively skip if not.
             continue
-        _, contact_id, rop3, contact, facilitator = row
+        _, contact_id, people_id3, contact, facilitator = row
         out.append(
             MatchSummary(
                 id=m.id,
@@ -421,7 +421,7 @@ async def _build_queue_summaries(
                 contact_id=contact_id,
                 contact_display_name=contact.display_name,
                 contact_adopter_status=contact.adopter_status,
-                rop3=rop3,
+                people_id3=people_id3,
                 facilitator_org_id=m.facilitator_org_id,
                 facilitator_name=facilitator.name,
                 status=m.status,

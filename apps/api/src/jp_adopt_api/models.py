@@ -509,9 +509,9 @@ class FacilitatingOrg(Base):
     capacity_committed: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0", default=0
     )
-    # N6: currently informational only. F36 added a ``contact_has_no_rop3``
+    # N6: currently informational only. F36 added a ``contact_has_no_fpg``
     # parameter to ``hard_filter`` that consulted this column, but the
-    # only production caller short-circuits no-rop3 interests to triage
+    # only production caller short-circuits no-FPG interests to triage
     # before ``hard_filter`` runs, so the wiring was reverted as dead
     # code. The column stays because the planned U7+ triage-reassignment
     # path will read it: when an adopter arrives without an FPG selection,
@@ -553,15 +553,9 @@ class Fpg(Base):
             "frontier",
             postgresql_where="frontier = TRUE",
         ),
-        Index(
-            "ix_fpg_people_id3",
-            "people_id3",
-            postgresql_where="people_id3 IS NOT NULL",
-        ),
     )
 
-    rop3: Mapped[str] = mapped_column(Text, primary_key=True)
-    people_id3: Mapped[str | None] = mapped_column(Text, nullable=True)
+    people_id3: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     country_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     language_codes: Mapped[list[str] | None] = mapped_column(
@@ -579,9 +573,11 @@ class FacilitatorFpgCoverage(Base):
     __tablename__ = "facilitator_fpg_coverage"
     __table_args__ = (
         PrimaryKeyConstraint(
-            "facilitator_org_id", "rop3", name="pk_facilitator_fpg_coverage"
+            "facilitator_org_id",
+            "people_id3",
+            name="pk_facilitator_fpg_coverage",
         ),
-        Index("ix_facilitator_fpg_coverage_rop3", "rop3"),
+        Index("ix_facilitator_fpg_coverage_people_id3", "people_id3"),
     )
 
     facilitator_org_id: Mapped[uuid.UUID] = mapped_column(
@@ -589,9 +585,9 @@ class FacilitatorFpgCoverage(Base):
         ForeignKey("facilitating_org.id", ondelete="CASCADE"),
         nullable=False,
     )
-    rop3: Mapped[str] = mapped_column(
+    people_id3: Mapped[str] = mapped_column(
         Text,
-        ForeignKey("fpg.rop3", ondelete="CASCADE"),
+        ForeignKey("fpg.people_id3", ondelete="CASCADE"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -603,7 +599,7 @@ class AdopterInterest(Base):
     __tablename__ = "adopter_interest"
     __table_args__ = (
         Index("ix_adopter_interest_contact_id", "contact_id"),
-        Index("ix_adopter_interest_rop3", "rop3"),
+        Index("ix_adopter_interest_people_id3", "people_id3"),
         CheckConstraint(
             "engagement_status IS NULL OR engagement_status IN "
             "('ready', 'potential', 'none')",
@@ -619,8 +615,8 @@ class AdopterInterest(Base):
         ForeignKey("contacts.id", ondelete="CASCADE"),
         nullable=False,
     )
-    rop3: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("fpg.rop3"), nullable=True
+    people_id3: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("fpg.people_id3"), nullable=True
     )
     commitment_level: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
