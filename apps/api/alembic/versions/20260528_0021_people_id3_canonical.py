@@ -118,6 +118,7 @@ def upgrade() -> None:
                  ARRAY['fr','bm']::text[], TRUE),
                 ('AAA05', 'Demo FPG Southeast Asia', 'ID',
                  ARRAY['id']::text[], TRUE)
+            ON CONFLICT (people_id3) DO NOTHING
             """
         )
     )
@@ -132,6 +133,7 @@ def upgrade() -> None:
                 ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA01'),
                 ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA03'),
                 ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA04')
+            ON CONFLICT (facilitator_org_id, people_id3) DO NOTHING
             """
         )
     )
@@ -211,4 +213,40 @@ def downgrade() -> None:
         ["people_id3"],
         unique=False,
         postgresql_where=sa.text("people_id3 IS NOT NULL"),
+    )
+
+    # Re-seed demo rows for downgrade→upgrade round-trips (rop3-era schema).
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO fpg (rop3, name, country_code, language_codes, frontier)
+            VALUES
+                ('AAA01', 'Demo FPG North Africa', 'MA',
+                 ARRAY['ar']::text[], TRUE),
+                ('AAA02', 'Demo FPG Central Asia', 'KZ',
+                 ARRAY['kk','ru']::text[], TRUE),
+                ('AAA03', 'Demo FPG South Asia', 'IN',
+                 ARRAY['hi','en']::text[], TRUE),
+                ('AAA04', 'Demo FPG Sub-Saharan Africa', 'ML',
+                 ARRAY['fr','bm']::text[], TRUE),
+                ('AAA05', 'Demo FPG Southeast Asia', 'ID',
+                 ARRAY['id']::text[], TRUE)
+            ON CONFLICT (rop3) DO NOTHING
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO facilitator_fpg_coverage (facilitator_org_id, rop3)
+            VALUES
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2', 'AAA02'),
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2', 'AAA03'),
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2', 'AAA05'),
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA01'),
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA03'),
+                ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3', 'AAA04')
+            ON CONFLICT (facilitator_org_id, rop3) DO NOTHING
+            """
+        )
     )

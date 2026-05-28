@@ -312,6 +312,38 @@ def test_intake_rejects_oversized_fpg_selections(client: TestClient) -> None:
     assert any("fpg_selections" in k for k in fields), fields
 
 
+def test_intake_unknown_people_id3_returns_validation_failed(
+    client: TestClient,
+) -> None:
+    """Unknown people_id3 must fail as validation_failed, not FK 500."""
+    email = f"unknown-pg-{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(
+            email=email, fpg_selections=[{"people_id3": "DOES_NOT_EXIST"}]
+        ),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 400, r.text
+    body = r.json()
+    assert body["error"]["code"] == "validation_failed"
+    assert "DOES_NOT_EXIST" in str(body["error"].get("fields", {}))
+
+
+def test_intake_legacy_rop3_without_people_id3_rejected(
+    client: TestClient,
+) -> None:
+    """Legacy ``rop3`` alone is not accepted after the people_id3 cutover."""
+    email = f"legacy-rop3-{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(email=email, fpg_selections=[{"rop3": "100425"}]),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "validation_failed"
+
+
 # ─── intake: happy paths ────────────────────────────────────────────────────
 
 

@@ -49,6 +49,7 @@ from jp_adopt_api.models import (
     Consent,
     Contact,
     ContactProfile,
+    Fpg,
     SubmissionBlocked,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
@@ -376,6 +377,23 @@ async def _write_consents(
         )
 
 
+async def _unknown_people_id3s(
+    session: AsyncSession, selections: list[FpgInterestIn]
+) -> list[str]:
+    """Return people_id3 codes not present in ``fpg`` (empty when all known)."""
+    codes = sorted({str(sel.people_id3).strip() for sel in selections})
+    if not codes:
+        return []
+    found = set(
+        (
+            await session.execute(
+                select(Fpg.people_id3).where(Fpg.people_id3.in_(codes))
+            )
+        ).scalars().all()
+    )
+    return sorted(set(codes) - found)
+
+
 async def _create_interests(
     session: AsyncSession,
     contact: Contact,
@@ -500,6 +518,19 @@ async def _process_adoption(
         await session.flush()
         interest_ids.append(no_fpg.id)
     else:
+        missing = await _unknown_people_id3s(session, payload.fpg_selections)
+        if missing:
+            return _error_response(
+                status.HTTP_400_BAD_REQUEST,
+                code="validation_failed",
+                request_id=request_id,
+                message=f"Unknown people_id3 codes: {missing}",
+                fields={
+                    "fpg_selections": [
+                        f"Unknown people_id3: {code}" for code in missing
+                    ]
+                },
+            )
         interest_ids = await _create_interests(
             session, contact, payload.fpg_selections
         )
@@ -603,6 +634,19 @@ async def _process_facilitation(
     # U12: facilitators select FPGs too — one AdopterInterest row per pick,
     # with the facilitation_services / network_services / engagement_status
     # columns carrying the per-FPG answers.
+    missing = await _unknown_people_id3s(session, payload.fpg_selections)
+    if missing:
+        return _error_response(
+            status.HTTP_400_BAD_REQUEST,
+            code="validation_failed",
+            request_id=request_id,
+            message=f"Unknown people_id3 codes: {missing}",
+            fields={
+                "fpg_selections": [
+                    f"Unknown people_id3: {code}" for code in missing
+                ]
+            },
+        )
     interest_ids = await _create_interests(session, contact, payload.fpg_selections)
 
     # U10: persist the submitted profile + consent records (facilitation).

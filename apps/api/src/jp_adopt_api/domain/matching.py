@@ -31,8 +31,8 @@ For each ``AdopterInterest`` row attached to the contact:
   triage queue — that captures every interest needing human routing
   regardless of why it ended up there. The audit trail distinguishes the
   cases: no-FPG interests have `people_id3 IS NULL`; no-coverage interests have a
-  concrete `people_id3` plus zero MatchAttempt rows. Documented in
-  ``docs/runbooks/matching-algorithm-v1.md``.
+  concrete `people_id3` and MatchAttempt rows where every candidate failed
+  ``hard_filter``. Documented in ``docs/runbooks/matching-algorithm-v1.md``.
 
 The function flushes but does NOT commit. The caller controls the
 transaction boundary, matching the state-machine module's pattern.
