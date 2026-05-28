@@ -396,8 +396,8 @@ export function ContactRecord({ contactId }: { contactId: string }) {
 
   const interestMap = new Map<string, { name: string | null; country: string | null }>();
   for (const m of matches?.items ?? []) {
-    if (m.rop3 && !interestMap.has(m.rop3)) {
-      interestMap.set(m.rop3, { name: m.rop3_name ?? null, country: m.rop3_country ?? null });
+    if (m.people_id3 && !interestMap.has(m.people_id3)) {
+      interestMap.set(m.people_id3, { name: m.people_id3_name ?? null, country: m.people_id3_country ?? null });
     }
   }
   const interests = [...interestMap.entries()];
@@ -523,11 +523,11 @@ export function ContactRecord({ contactId }: { contactId: string }) {
           <Tile title="People-group interests" count={interests.length}>
             {interests.length ? (
               <ul className="space-y-1.5 text-sm">
-                {interests.map(([rop3, info]) => (
-                  <li key={rop3} className="flex items-center gap-2">
+                {interests.map(([peopleId3, info]) => (
+                  <li key={peopleId3} className="flex items-center gap-2">
                     <span className="text-slate-800">{info.name ?? "Unknown people group"}</span>
                     {info.country ? <CodeChip>{info.country}</CodeChip> : null}
-                    <CodeChip>{rop3}</CodeChip>
+                    <CodeChip>{peopleId3}</CodeChip>
                   </li>
                 ))}
               </ul>
@@ -545,9 +545,9 @@ export function ContactRecord({ contactId }: { contactId: string }) {
                   <span className="flex flex-wrap items-center gap-1.5">
                     <StatusBadge status={m.status} kind="match" />
                     <span className="text-slate-700">{m.facilitator_name}</span>
-                    {m.rop3_name ? <span className="text-slate-500">· {m.rop3_name}</span> : null}
-                    {m.rop3_country ? <CodeChip>{m.rop3_country}</CodeChip> : null}
-                    {m.rop3 ? <CodeChip>{m.rop3}</CodeChip> : null}
+                    {m.people_id3_name ? <span className="text-slate-500">· {m.people_id3_name}</span> : null}
+                    {m.people_id3_country ? <CodeChip>{m.people_id3_country}</CodeChip> : null}
+                    {m.people_id3 ? <CodeChip>{m.people_id3}</CodeChip> : null}
                   </span>
                   <span className="shrink-0 text-xs text-slate-400">
                     {formatTimestamp(m.recommended_at)}

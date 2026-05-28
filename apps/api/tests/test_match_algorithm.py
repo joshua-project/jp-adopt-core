@@ -93,12 +93,12 @@ async def _make_contact(
 
 
 async def _make_interest(
-    session: AsyncSession, contact: Contact, rop3: str | None
+    session: AsyncSession, contact: Contact, people_id3: str | None
 ) -> AdopterInterest:
     interest = AdopterInterest(
         id=uuid.uuid4(),
         contact_id=contact.id,
-        rop3=rop3,
+        people_id3=people_id3,
     )
     session.add(interest)
     await session.flush()
@@ -108,23 +108,23 @@ async def _make_interest(
 async def _seed_three_covering_orgs(
     session: AsyncSession,
     *,
-    rop3: str = "ZZZ01",
+    people_id3: str = "ZZZ01",
 ) -> tuple[FacilitatingOrg, FacilitatingOrg, FacilitatingOrg]:
     """Insert three NEW facilitating orgs (distinct from the seeded
     EXAMPLE/FRONTIER ones) that all cover ``rop3``. Returns them in
     deterministic order for the ranking assertions."""
-    # Ensure the rop3 row exists in fpg (FK target).
-    existing_fpg = await session.get(Fpg, rop3)
+    # Ensure the people_id3 row exists in fpg (FK target).
+    existing_fpg = await session.get(Fpg, people_id3)
     if existing_fpg is None:
         session.add(
-            Fpg(rop3=rop3, name=f"Test FPG {rop3}", country_code="US", frontier=True)
+            Fpg(people_id3=people_id3, name=f"Test FPG {people_id3}", country_code="US", frontier=True)
         )
         await session.flush()
     orgs: list[FacilitatingOrg] = []
     for i in range(3):
         org = FacilitatingOrg(
             id=uuid.uuid4(),
-            name=f"Test Org {rop3}-{i}",
+            name=f"Test Org {people_id3}-{i}",
             country_code="US",
             language_codes=["en"],
             capacity_total=10,
@@ -134,7 +134,7 @@ async def _seed_three_covering_orgs(
         )
         session.add(org)
         session.add(
-            FacilitatorFpgCoverage(facilitator_org_id=org.id, rop3=rop3)
+            FacilitatorFpgCoverage(facilitator_org_id=org.id, people_id3=people_id3)
         )
         orgs.append(org)
     await session.flush()
@@ -166,9 +166,9 @@ async def _cleanup_contact(session: AsyncSession, contact: Contact) -> None:
 async def _cleanup_orgs(
     session: AsyncSession,
     *org_ids: uuid.UUID,
-    rop3s: Iterable[str] = (),
+    people_id3s: Iterable[str] = (),
 ) -> None:
-    if not org_ids and not rop3s:
+    if not org_ids and not people_id3s:
         return
     # Match rows pointing at these orgs must go first.
     if org_ids:
@@ -188,15 +188,15 @@ async def _cleanup_orgs(
         await session.execute(
             delete(FacilitatingOrg).where(FacilitatingOrg.id.in_(org_ids))
         )
-    for rop3 in rop3s:
-        # Drop coverage+fpg only if nothing else still references this rop3
-        # (defensive; in this suite each test owns its own rop3 string).
+    for people_id3 in people_id3s:
+        # Drop coverage+fpg only if nothing else still references this people_id3
+        # (defensive; in this suite each test owns its own people_id3 string).
         await session.execute(
             delete(FacilitatorFpgCoverage).where(
-                FacilitatorFpgCoverage.rop3 == rop3
+                FacilitatorFpgCoverage.people_id3 == people_id3
             )
         )
-        await session.execute(delete(Fpg).where(Fpg.rop3 == rop3))
+        await session.execute(delete(Fpg).where(Fpg.people_id3 == people_id3))
     await session.commit()
 
 
@@ -215,8 +215,8 @@ def test_hard_filter_passes_active_with_capacity_and_coverage() -> None:
     )
     result = hard_filter(
         facilitator=org,
-        rop3="AAA01",
-        covered_rop3s=frozenset({"AAA01"}),
+        people_id3="AAA01",
+        covered_people_id3s=frozenset({"AAA01"}),
         excluded_facilitator_ids=frozenset(),
     )
     assert result == FilterReason.PASSED
@@ -234,8 +234,8 @@ def test_hard_filter_rejects_inactive() -> None:
     assert (
         hard_filter(
             facilitator=org,
-            rop3="AAA01",
-            covered_rop3s=frozenset({"AAA01"}),
+            people_id3="AAA01",
+            covered_people_id3s=frozenset({"AAA01"}),
             excluded_facilitator_ids=frozenset(),
         )
         == FilterReason.INACTIVE
@@ -254,8 +254,8 @@ def test_hard_filter_rejects_no_capacity() -> None:
     assert (
         hard_filter(
             facilitator=org,
-            rop3="AAA01",
-            covered_rop3s=frozenset({"AAA01"}),
+            people_id3="AAA01",
+            covered_people_id3s=frozenset({"AAA01"}),
             excluded_facilitator_ids=frozenset(),
         )
         == FilterReason.NO_CAPACITY
@@ -274,8 +274,8 @@ def test_hard_filter_rejects_no_coverage() -> None:
     assert (
         hard_filter(
             facilitator=org,
-            rop3="AAA01",
-            covered_rop3s=frozenset({"AAA02"}),
+            people_id3="AAA01",
+            covered_people_id3s=frozenset({"AAA02"}),
             excluded_facilitator_ids=frozenset(),
         )
         == FilterReason.NO_COVERAGE
@@ -295,8 +295,8 @@ def test_hard_filter_rejects_excluded() -> None:
     assert (
         hard_filter(
             facilitator=org,
-            rop3="AAA01",
-            covered_rop3s=frozenset({"AAA01"}),
+            people_id3="AAA01",
+            covered_people_id3s=frozenset({"AAA01"}),
             excluded_facilitator_ids=frozenset({excluded_id}),
         )
         == FilterReason.EXCLUDED
@@ -324,8 +324,8 @@ def test_score_weighted_total_sums_to_one_for_perfect_match() -> None:
     sv = score(
         contact=contact,
         facilitator=org,
-        rop3="AAA01",
-        covered_rop3s=frozenset({"AAA01"}),
+        people_id3="AAA01",
+        covered_people_id3s=frozenset({"AAA01"}),
     )
     # Capacity headroom = 10/10 = 1.0; geography 1.0; language Jaccard 1.0;
     # fpg_affinity 1.0; theological 0.0 (stub).
@@ -393,7 +393,7 @@ async def test_no_fpg_adopter_routes_to_triage(session: AsyncSession) -> None:
     """Plan happy path: adopter with no FPG → one Match row at triage, no
     MatchAttempt rows."""
     contact = await _make_contact(session)
-    interest = await _make_interest(session, contact, rop3=None)
+    interest = await _make_interest(session, contact, people_id3=None)
     await session.commit()
 
     outcome = await match_or_route(session, contact)
@@ -430,14 +430,14 @@ async def test_three_covering_facilitators_rank_in_attempt_one_recommended(
 ) -> None:
     """3 candidates pass filter → 3 ranked MatchAttempts + 1 Match row
     pointing at rank-1 (per uq_match_open_per_interest)."""
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
     org_low, org_mid, org_high = await _seed_three_covering_orgs(
-        session, rop3=rop3
+        session, people_id3=people_id3
     )
     contact = await _make_contact(
         session, country="US", languages=["en"]
     )
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     await session.commit()
 
     outcome = await match_or_route(session, contact)
@@ -448,7 +448,7 @@ async def test_three_covering_facilitators_rank_in_attempt_one_recommended(
     assert outcome.interest_outcomes[0].reason == "scored"
 
     # The algorithm scores every non-triage facilitator in the DB (the 3 we
-    # seeded for this rop3 + every other org → filter_reason=no_coverage for
+    # seeded for this people_id3 + every other org → filter_reason=no_coverage for
     # those). We assert on the 3 that pass: they get rank 1..3.
     attempts = (
         await session.execute(
@@ -484,21 +484,21 @@ async def test_three_covering_facilitators_rank_in_attempt_one_recommended(
 
     await _cleanup_contact(session, contact)
     await _cleanup_orgs(
-        session, org_low.id, org_mid.id, org_high.id, rop3s=[rop3]
+        session, org_low.id, org_mid.id, org_high.id, people_id3s=[people_id3]
     )
 
 
 @pytest.mark.asyncio
 async def test_no_coverage_routes_to_triage(session: AsyncSession) -> None:
     """Plan edge case: FPG selected but no facilitator covers it → triage."""
-    # Pick a rop3 that no seeded org covers AND we don't create coverage for.
-    orphan_rop3 = f"NONE{uuid.uuid4().hex[:2].upper()}"
-    # The fpg FK requires the rop3 row to exist.
-    session.add(Fpg(rop3=orphan_rop3, name="Orphan FPG", frontier=True))
+    # Pick a people_id3 that no seeded org covers AND we don't create coverage for.
+    orphan_people_id3 = f"NONE{uuid.uuid4().hex[:2].upper()}"
+    # The fpg FK requires the people_id3 row to exist.
+    session.add(Fpg(people_id3=orphan_people_id3, name="Orphan FPG", frontier=True))
     await session.flush()
 
     contact = await _make_contact(session)
-    interest = await _make_interest(session, contact, rop3=orphan_rop3)
+    interest = await _make_interest(session, contact, people_id3=orphan_people_id3)
     await session.commit()
 
     outcome = await match_or_route(session, contact)
@@ -533,20 +533,20 @@ async def test_no_coverage_routes_to_triage(session: AsyncSession) -> None:
 
     await _cleanup_contact(session, contact)
     # The MatchAttempt rows the algorithm wrote for every seeded org (all of
-    # which fail no_coverage for this rop3) still reference orphan_rop3 via
+    # which fail no_coverage for this people_id3) still reference orphan_people_id3 via
     # the FK on adopter_interest. Cleaning the contact removed the interest +
     # cascaded the attempts, so we can drop the orphan Fpg row now.
-    await session.execute(delete(Fpg).where(Fpg.rop3 == orphan_rop3))
+    await session.execute(delete(Fpg).where(Fpg.people_id3 == orphan_people_id3))
     await session.commit()
 
 
 @pytest.mark.asyncio
 async def test_exclusion_after_send_back(session: AsyncSession) -> None:
     """Plan edge case: re-match after send-back excludes prior facilitator."""
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
-    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, people_id3=people_id3)
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     # Manually insert a prior send_back Match for org_a.
     sent_back = Match(
         id=uuid.uuid4(),
@@ -597,7 +597,7 @@ async def test_exclusion_after_send_back(session: AsyncSession) -> None:
 
     await _cleanup_contact(session, contact)
     await _cleanup_orgs(
-        session, org_a.id, org_b.id, org_c.id, rop3s=[rop3]
+        session, org_a.id, org_b.id, org_c.id, people_id3s=[people_id3]
     )
 
 
@@ -606,9 +606,9 @@ async def test_tied_scores_break_by_last_assigned_at(
     session: AsyncSession,
 ) -> None:
     """Plan edge case: equal scores → deterministic order via last_assigned_at."""
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
     # Make all three orgs identical so weighted_total ties exactly.
-    session.add(Fpg(rop3=rop3, name=f"FPG {rop3}", country_code="US", frontier=True))
+    session.add(Fpg(people_id3=people_id3, name=f"FPG {people_id3}", country_code="US", frontier=True))
     await session.flush()
     now = datetime.now(UTC)
     orgs: list[FacilitatingOrg] = []
@@ -627,13 +627,13 @@ async def test_tied_scores_break_by_last_assigned_at(
         )
         session.add(org)
         session.add(
-            FacilitatorFpgCoverage(facilitator_org_id=org.id, rop3=rop3)
+            FacilitatorFpgCoverage(facilitator_org_id=org.id, people_id3=people_id3)
         )
         orgs.append(org)
     await session.flush()
 
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     await session.commit()
 
     outcome = await match_or_route(session, contact)
@@ -656,7 +656,7 @@ async def test_tied_scores_break_by_last_assigned_at(
     assert rank_to_org[3] == orgs[2].id  # last=1d ago → third
 
     await _cleanup_contact(session, contact)
-    await _cleanup_orgs(session, *(o.id for o in orgs), rop3s=[rop3])
+    await _cleanup_orgs(session, *(o.id for o in orgs), people_id3s=[people_id3])
 
 
 @pytest.mark.asyncio
@@ -664,10 +664,10 @@ async def test_score_breakdown_round_trips_into_match_attempt(
     session: AsyncSession,
 ) -> None:
     """Plan integration: persisted JSONB should equal the in-memory ScoreVector."""
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
-    orgs = await _seed_three_covering_orgs(session, rop3=rop3)
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    orgs = await _seed_three_covering_orgs(session, people_id3=people_id3)
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     await session.commit()
 
     outcome = await match_or_route(session, contact)
@@ -695,7 +695,7 @@ async def test_score_breakdown_round_trips_into_match_attempt(
         assert 0.0 <= v <= 1.0
 
     await _cleanup_contact(session, contact)
-    await _cleanup_orgs(session, *(o.id for o in orgs), rop3s=[rop3])
+    await _cleanup_orgs(session, *(o.id for o in orgs), people_id3s=[people_id3])
 
 
 @pytest.mark.asyncio
@@ -709,7 +709,7 @@ async def test_missing_triage_org_raises(session: AsyncSession) -> None:
     await session.flush()
     try:
         contact = await _make_contact(session)
-        await _make_interest(session, contact, rop3=None)
+        await _make_interest(session, contact, people_id3=None)
         await session.commit()
         with pytest.raises(TriageOrgMissingError):
             await match_or_route(session, contact)
@@ -740,11 +740,11 @@ async def test_concurrent_conflict_does_not_abort_run(
     """
     import logging
 
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
-    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, people_id3=people_id3)
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest_conflict = await _make_interest(session, contact, rop3=rop3)
-    interest_ok = await _make_interest(session, contact, rop3=rop3)
+    interest_conflict = await _make_interest(session, contact, people_id3=people_id3)
+    interest_ok = await _make_interest(session, contact, people_id3=people_id3)
     # Pre-seed an open Match for the first interest. The matcher will try to
     # insert a recommended Match → uq_match_open_per_interest conflict.
     pre_seeded = Match(
@@ -793,7 +793,7 @@ async def test_concurrent_conflict_does_not_abort_run(
     assert len(conflict_logs) >= 1
 
     await _cleanup_contact(session, contact)
-    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, people_id3s=[people_id3])
 
 
 @pytest.mark.asyncio
@@ -808,10 +808,10 @@ async def test_match_attempt_audit_survives_conflict_rollback(
     Verify by seeding an open Match (forces conflict) and checking that the
     MatchAttempt rows for the conflicted interest still landed in the DB.
     """
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
-    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, people_id3=people_id3)
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     pre_seeded = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -839,7 +839,7 @@ async def test_match_attempt_audit_survives_conflict_rollback(
     )
 
     await _cleanup_contact(session, contact)
-    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, people_id3s=[people_id3])
 
 
 @pytest.mark.asyncio
@@ -851,10 +851,10 @@ async def test_conflict_refetch_finds_accepted_status_match(
     is the conflict winner, the refetch must find it — otherwise the guard
     returns (None, False) and the interest is incorrectly skipped.
     """
-    rop3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
-    org_a, org_b, org_c = await _seed_three_covering_orgs(session, rop3=rop3)
+    people_id3 = f"ZZZ{uuid.uuid4().hex[:3].upper()}"
+    org_a, org_b, org_c = await _seed_three_covering_orgs(session, people_id3=people_id3)
     contact = await _make_contact(session, country="US", languages=["en"])
-    interest = await _make_interest(session, contact, rop3=rop3)
+    interest = await _make_interest(session, contact, people_id3=people_id3)
     pre_seeded = Match(
         id=uuid.uuid4(),
         adopter_interest_id=interest.id,
@@ -875,4 +875,4 @@ async def test_conflict_refetch_finds_accepted_status_match(
     )
 
     await _cleanup_contact(session, contact)
-    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, rop3s=[rop3])
+    await _cleanup_orgs(session, org_a.id, org_b.id, org_c.id, people_id3s=[people_id3])

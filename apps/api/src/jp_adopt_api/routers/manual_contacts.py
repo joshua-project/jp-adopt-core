@@ -9,8 +9,8 @@ and skip the Idempotency-Key bookkeeping.
 Endpoint:
   * ``POST /v1/contacts/manual`` body:
     {display_name, email, party_kind, origin?, country_code?,
-     language_codes?, fpg_rop3s?, facilitator_org_id?}
-  → creates Contact + N AdopterInterest rows (one per fpg_rop3) +
+     language_codes?, fpg_people_id3s?, facilitator_org_id?}
+  → creates Contact + N AdopterInterest rows (one per people_id3) +
     optional Match row when facilitator_org_id is provided.
 """
 
@@ -70,10 +70,10 @@ class ManualContactCreate(BaseModel):
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     language_codes: list[str] | None = None
     newsletter_opt_in: bool = False
-    # FPG selections (rop3 codes) — used to create AdopterInterest rows.
+    # FPG selections (people_id3 codes) — used to create AdopterInterest rows.
     # Empty list ⇒ contact lands as 'potential_adopter' (no FPG yet),
     # mirroring the intake endpoint's behavior.
-    fpg_rop3s: list[str] = Field(default_factory=list, max_length=20)
+    fpg_people_id3s: list[str] = Field(default_factory=list, max_length=20)
     # Optional facilitator assignment — when provided, creates an
     # initial Match row in 'recommended' status pointing to the org.
     # The matching algorithm in U6 doesn't run for manual creates;
@@ -97,16 +97,16 @@ class ManualContactCreate(BaseModel):
                 "language_codes",
                 [c.strip().lower() for c in self.language_codes if c.strip()],
             )
-        # Dedup rop3s (staff might paste the same code twice)
-        if self.fpg_rop3s:
+        # Dedup people_id3s (staff might paste the same code twice)
+        if self.fpg_people_id3s:
             seen: set[str] = set()
             cleaned: list[str] = []
-            for r in self.fpg_rop3s:
+            for r in self.fpg_people_id3s:
                 r2 = r.strip()
                 if r2 and r2 not in seen:
                     cleaned.append(r2)
                     seen.add(r2)
-            object.__setattr__(self, "fpg_rop3s", cleaned)
+            object.__setattr__(self, "fpg_people_id3s", cleaned)
         return self
 
 
@@ -144,22 +144,22 @@ async def create_manual_contact(
     actor, _roles = user_with_roles
     email_normalized = normalize_email(body.email)
 
-    # Validate every fpg_rop3 exists before any inserts so partial
+    # Validate every fpg people_id3 exists before any inserts so partial
     # success doesn't leave an orphan AdopterInterest behind.
-    if body.fpg_rop3s:
+    if body.fpg_people_id3s:
         found = (
             await db.execute(
-                select(Fpg.rop3).where(Fpg.rop3.in_(body.fpg_rop3s))
+                select(Fpg.people_id3).where(Fpg.people_id3.in_(body.fpg_people_id3s))
             )
         ).scalars().all()
-        missing = sorted(set(body.fpg_rop3s) - set(found))
+        missing = sorted(set(body.fpg_people_id3s) - set(found))
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    "code": "unknown_fpg_rop3",
-                    "message": f"Unknown rop3 codes: {missing}",
-                    "fields": {"fpg_rop3s": missing},
+                    "code": "unknown_fpg_people_id3",
+                    "message": f"Unknown people_id3 codes: {missing}",
+                    "fields": {"fpg_people_id3s": missing},
                 },
             )
 
@@ -197,7 +197,7 @@ async def create_manual_contact(
     else:
         initial_adopter = "new" if body.party_kind == "adopter" else None
         initial_fac = "new" if body.party_kind == "facilitator" else None
-        if body.party_kind == "adopter" and not body.fpg_rop3s:
+        if body.party_kind == "adopter" and not body.fpg_people_id3s:
             initial_adopter = "potential_adopter"
         contact = Contact(
             id=uuid.uuid4(),
@@ -215,16 +215,16 @@ async def create_manual_contact(
         await db.flush()
         created = True
 
-    # Create AdopterInterest rows. Multi-FPG ⇒ one per rop3. Zero ⇒
-    # single rop3=NULL row so the matcher's no-FPG triage path fires.
+    # Create AdopterInterest rows. Multi-FPG ⇒ one per people_id3. Zero ⇒
+    # single people_id3=NULL row so the matcher's no-FPG triage path fires.
     interest_ids: list[uuid.UUID] = []
     if body.party_kind == "adopter":
-        rop3s = body.fpg_rop3s or [None]  # type: ignore[list-item]
-        for rop3 in rop3s:
+        people_id3s = body.fpg_people_id3s or [None]  # type: ignore[list-item]
+        for people_id3 in people_id3s:
             interest = AdopterInterest(
                 id=uuid.uuid4(),
                 contact_id=contact.id,
-                rop3=rop3,
+                people_id3=people_id3,
                 notes=body.notes,
             )
             db.add(interest)

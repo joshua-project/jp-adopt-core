@@ -241,7 +241,7 @@ seed_adopter() {
             \"party_kind\": \"adopter\",
             \"origin\": \"manual_entry\",
             \"country_code\": \"US\",
-            \"fpg_rop3s\": ${rop3s_json},
+            \"fpg_people_id3s\": ${rop3s_json},
             \"newsletter_opt_in\": false
         }" \
         -o /dev/null \

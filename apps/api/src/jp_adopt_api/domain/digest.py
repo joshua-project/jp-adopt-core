@@ -67,7 +67,7 @@ class DigestMatch:
     contact_id: uuid.UUID
     contact_display_name: str
     contact_email_normalized: str | None
-    rop3: str | None
+    people_id3: str | None
     facilitator_org_id: uuid.UUID
     facilitator_name: str
     status: str
@@ -99,7 +99,7 @@ async def _load_matches_in_window(
     contact + facilitator org so the renderer has everything it needs
     without a second query per row."""
     rows = await session.execute(
-        select(Match, Contact, FacilitatingOrg, AdopterInterest.rop3)
+        select(Match, Contact, FacilitatingOrg, AdopterInterest.people_id3)
         .join(
             AdopterInterest, AdopterInterest.id == Match.adopter_interest_id
         )
@@ -115,14 +115,14 @@ async def _load_matches_in_window(
         .order_by(Match.recommended_at.asc())
     )
     out: list[DigestMatch] = []
-    for match, contact, org, rop3 in rows.all():
+    for match, contact, org, people_id3 in rows.all():
         out.append(
             DigestMatch(
                 match_id=match.id,
                 contact_id=contact.id,
                 contact_display_name=contact.display_name,
                 contact_email_normalized=contact.email_normalized,
-                rop3=rop3,
+                people_id3=people_id3,
                 facilitator_org_id=org.id,
                 facilitator_name=org.name,
                 status=match.status,
@@ -289,7 +289,7 @@ def render_digest_html(
         "matches": [
             {
                 "contact_display_name": m.contact_display_name,
-                "rop3": m.rop3 or "",
+                "people_id3": m.people_id3 or "",
                 "facilitator_name": m.facilitator_name,
                 "status": m.status,
                 "recommended_at": m.recommended_at.isoformat(),

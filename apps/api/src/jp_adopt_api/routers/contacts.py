@@ -303,14 +303,14 @@ async def get_contact_matches(
         await db.execute(
             select(
                 Match,
-                AdopterInterest.rop3,
+                AdopterInterest.people_id3,
                 FacilitatingOrg.name,
                 Fpg.name,
                 Fpg.country_code,
             )
             .join(AdopterInterest, interest_join)
             .join(FacilitatingOrg, FacilitatingOrg.id == Match.facilitator_org_id)
-            .outerjoin(Fpg, Fpg.rop3 == AdopterInterest.rop3)
+            .outerjoin(Fpg, Fpg.people_id3 == AdopterInterest.people_id3)
             .where(AdopterInterest.contact_id == contact_id)
             .order_by(Match.recommended_at.desc())
             .offset(offset)
@@ -321,9 +321,9 @@ async def get_contact_matches(
         ContactMatchRow(
             id=m.id,
             adopter_interest_id=m.adopter_interest_id,
-            rop3=rop3,
-            rop3_name=fpg_name,
-            rop3_country=fpg_country,
+            people_id3=people_id3,
+            people_id3_name=fpg_name,
+            people_id3_country=fpg_country,
             facilitator_org_id=m.facilitator_org_id,
             facilitator_name=name,
             status=m.status,
@@ -333,7 +333,7 @@ async def get_contact_matches(
             decision_reason_code=m.decision_reason_code,
             decision_reason_text=m.decision_reason_text,
         )
-        for (m, rop3, name, fpg_name, fpg_country) in rows
+        for (m, people_id3, name, fpg_name, fpg_country) in rows
     ]
     return ContactMatchesResponse(items=items, total=total)
 
