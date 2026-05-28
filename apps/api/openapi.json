@@ -5740,6 +5740,7 @@
             "type": "string",
             "maxLength": 256,
             "minLength": 1,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "title": "User Subject Id"
           },
           "role_id": {
