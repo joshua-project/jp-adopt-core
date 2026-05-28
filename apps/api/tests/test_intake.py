@@ -296,7 +296,7 @@ def test_intake_rejects_oversized_fpg_selections(client: TestClient) -> None:
     the A1 fabrication path allocates a UUID for, opening an enumeration /
     amplification vector."""
     email = f"bigfpg-{uuid.uuid4().hex[:6]}@example.com"
-    fpg_selections = [{"rop3": f"R{i:04d}"} for i in range(21)]
+    fpg_selections = [{"people_id3": f"R{i:04d}"} for i in range(21)]
     r = client.post(
         "/v1/intake/adoption",
         json=_adoption_body(email=email, fpg_selections=fpg_selections),
@@ -312,6 +312,38 @@ def test_intake_rejects_oversized_fpg_selections(client: TestClient) -> None:
     assert any("fpg_selections" in k for k in fields), fields
 
 
+def test_intake_unknown_people_id3_returns_validation_failed(
+    client: TestClient,
+) -> None:
+    """Unknown people_id3 must fail as validation_failed, not FK 500."""
+    email = f"unknown-pg-{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(
+            email=email, fpg_selections=[{"people_id3": "DOES_NOT_EXIST"}]
+        ),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 400, r.text
+    body = r.json()
+    assert body["error"]["code"] == "validation_failed"
+    assert "DOES_NOT_EXIST" in str(body["error"].get("fields", {}))
+
+
+def test_intake_legacy_rop3_without_people_id3_rejected(
+    client: TestClient,
+) -> None:
+    """Legacy ``rop3`` alone is not accepted after the people_id3 cutover."""
+    email = f"legacy-rop3-{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post(
+        "/v1/intake/adoption",
+        json=_adoption_body(email=email, fpg_selections=[{"rop3": "100425"}]),
+        headers=_auth_headers(idem=str(uuid.uuid4())),
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "validation_failed"
+
+
 # ─── intake: happy paths ────────────────────────────────────────────────────
 
 
@@ -324,8 +356,8 @@ async def test_first_adoption_submission_creates_contact_and_interest(
     body = _adoption_body(
         email=email,
         fpg_selections=[
-            {"rop3": "AAA01"},
-            {"rop3": "AAA02", "commitment_level": "prayer"},
+            {"people_id3": "AAA01"},
+            {"people_id3": "AAA02", "commitment_level": "prayer"},
         ],
     )
     r = client.post(
@@ -350,7 +382,7 @@ async def test_first_adoption_submission_creates_contact_and_interest(
             select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
         )
     ).scalars().all()
-    assert {i.rop3 for i in interests} == {"AAA01", "AAA02"}
+    assert {i.people_id3 for i in interests} == {"AAA01", "AAA02"}
 
     # Outbox event emitted with the right payload.
     out = (
@@ -369,7 +401,7 @@ async def test_first_adoption_submission_creates_contact_and_interest(
     # downstream as a "where did key X go?" defect in a webhook subscriber).
     payload = out_for_contact[0].payload_json
     assert payload["event"] == "jp.adopt.v1.submission.received"
-    assert payload["schema_version"] == "jp.adopt.v1"
+    assert payload["schema_version"] == "jp.adopt.v2"
     assert payload["party_kind"] == "adopter"
     assert payload["contact_created"] is True
     assert payload["contact_id"] == str(contact_id)
@@ -401,14 +433,14 @@ async def test_no_fpg_marks_contact_potential_adopter(
     assert contact is not None
     assert contact.adopter_status == "potential_adopter"
 
-    # One "no FPG" AdopterInterest row exists with rop3=NULL.
+    # One "no FPG" AdopterInterest row exists with people_id3=NULL.
     interests = (
         await session.execute(
             select(AdopterInterest).where(AdopterInterest.contact_id == contact_id)
         )
     ).scalars().all()
     assert len(interests) == 1
-    assert interests[0].rop3 is None
+    assert interests[0].people_id3 is None
 
     # cleanup
     out = (
@@ -430,7 +462,7 @@ async def test_second_submission_same_email_appends_interest(
     email = f"second-adopt-{uuid.uuid4().hex[:8]}@example.com"
     r1 = client.post(
         "/v1/intake/adoption",
-        json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA01"}]),
+        json=_adoption_body(email=email, fpg_selections=[{"people_id3": "AAA01"}]),
         headers=_auth_headers(idem=str(uuid.uuid4())),
     )
     assert r1.status_code == 201
@@ -438,7 +470,7 @@ async def test_second_submission_same_email_appends_interest(
 
     r2 = client.post(
         "/v1/intake/adoption",
-        json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA03"}]),
+        json=_adoption_body(email=email, fpg_selections=[{"people_id3": "AAA03"}]),
         headers=_auth_headers(idem=str(uuid.uuid4())),
     )
     assert r2.status_code == 201
@@ -450,7 +482,7 @@ async def test_second_submission_same_email_appends_interest(
             select(AdopterInterest).where(AdopterInterest.contact_id == contact_id_1)
         )
     ).scalars().all()
-    assert {i.rop3 for i in interests} == {"AAA01", "AAA03"}
+    assert {i.people_id3 for i in interests} == {"AAA01", "AAA03"}
 
     # cleanup events + contact
     out = (
@@ -619,7 +651,7 @@ async def test_idempotency_replay_returns_cached_response(
 ) -> None:
     email = f"idemp-{uuid.uuid4().hex[:8]}@example.com"
     idem = str(uuid.uuid4())
-    body = _adoption_body(email=email, fpg_selections=[{"rop3": "AAA01"}])
+    body = _adoption_body(email=email, fpg_selections=[{"people_id3": "AAA01"}])
     r1 = client.post(
         "/v1/intake/adoption", json=body, headers=_auth_headers(idem=idem)
     )
@@ -681,7 +713,7 @@ async def test_idempotency_conflict_on_different_body(
     idem = str(uuid.uuid4())
     r1 = client.post(
         "/v1/intake/adoption",
-        json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA01"}]),
+        json=_adoption_body(email=email, fpg_selections=[{"people_id3": "AAA01"}]),
         headers=_auth_headers(idem=idem),
     )
     assert r1.status_code == 201
@@ -689,7 +721,7 @@ async def test_idempotency_conflict_on_different_body(
     # Same idem key, different body → 422 conflict.
     r2 = client.post(
         "/v1/intake/adoption",
-        json=_adoption_body(email=email, fpg_selections=[{"rop3": "AAA02"}]),
+        json=_adoption_body(email=email, fpg_selections=[{"people_id3": "AAA02"}]),
         headers=_auth_headers(idem=idem),
     )
     assert r2.status_code == 422
@@ -738,7 +770,7 @@ async def test_do_not_engage_contact_returns_201_and_logs_block(
     session.add(blocked)
     await session.commit()
 
-    fpg_selections = [{"rop3": "AAA01"}]
+    fpg_selections = [{"people_id3": "AAA01"}]
     r = client.post(
         "/v1/intake/adoption",
         json=_adoption_body(email=email, fpg_selections=fpg_selections),
@@ -796,7 +828,7 @@ async def test_adoption_blocked_and_accepted_responses_have_identical_body_shape
     await session.commit()
 
     # Same fpg_selections shape on both calls.
-    fpg = [{"rop3": "AAA01"}, {"rop3": "AAA02"}]
+    fpg = [{"people_id3": "AAA01"}, {"people_id3": "AAA02"}]
     r_blocked = client.post(
         "/v1/intake/adoption",
         json=_adoption_body(email=blocked_email, fpg_selections=fpg),
@@ -861,7 +893,7 @@ async def test_facilitation_intake_creates_facilitator_contact(
     # always has the org name to display alongside the facilitator contact.
     payload = matching[0].payload_json
     assert payload["event"] == "jp.adopt.v1.submission.received"
-    assert payload["schema_version"] == "jp.adopt.v1"
+    assert payload["schema_version"] == "jp.adopt.v2"
     assert payload["party_kind"] == "facilitator"
     assert payload["contact_id"] == str(contact_id)
     assert "submission_id" in payload

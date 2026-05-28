@@ -93,11 +93,11 @@ async def _make_match_in_window(
     contact: Contact,
     org: FacilitatingOrg,
     recommended_at: datetime,
-    rop3: str | None = None,
+    people_id3: str | None = None,
     match_status: str = "recommended",
 ) -> Match:
     interest = AdopterInterest(
-        id=uuid.uuid4(), contact_id=contact.id, rop3=rop3
+        id=uuid.uuid4(), contact_id=contact.id, people_id3=people_id3
     )
     session.add(interest)
     await session.flush()
@@ -215,7 +215,7 @@ async def test_build_digest_groups_staff_and_facilitator(
         contact=adopter,
         org=org_a,
         recommended_at=now - timedelta(hours=1),
-        rop3="AAA01",
+        people_id3="AAA01",
     )
 
     try:
@@ -330,7 +330,7 @@ def test_render_digest_html_substitutes_recipient_kind() -> None:
                 contact_id=uuid.uuid4(),
                 contact_display_name="Alice",
                 contact_email_normalized="alice@example.com",
-                rop3="AAA01",
+                people_id3="AAA01",
                 facilitator_org_id=uuid.uuid4(),
                 facilitator_name="Org A",
                 status="recommended",

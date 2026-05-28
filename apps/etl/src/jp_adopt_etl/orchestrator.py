@@ -396,27 +396,14 @@ def import_p2p_interests(
         )
         return counts
     # p2p_from is the contact post_id; p2p_to is the people-group post_id.
-    # Resolving people-group post_id → rop3 requires another wp_postmeta
-    # lookup. For now we only import the relation when the orchestrator
-    # caller pre-resolves rop3 via a separate lookup. v1 ships the
-    # mapper + reader plumbing; the rop3 resolution lives in a follow-up
-    # cutover pass (U13) that handles the FPG dimension explicitly.
+    # people_id3 is read from DT's fpg_submission_data in the U13 cutover pass;
+    # this loop only counts rows until that resolver is wired.
     for p2p_row in rows:
         counts["rows_in"] += 1
         contact_id = post_to_contact.get(str(p2p_row.get("p2p_from")))
         if contact_id is None:
             counts["rows_out_skipped"] += 1
             continue
-        # Without a rop3 resolution we can't write an AdopterInterest
-        # row that satisfies the FK; record as a conflict for U13 to pick up.
-        _record_conflict(
-            pg_session,
-            source_system="dt",
-            source_id=str(p2p_row.get("p2p_id")),
-            table_name="adopter_interest",
-            conflict_type="p2p_rop3_resolution_deferred",
-            source_value={"p2p_to": p2p_row.get("p2p_to")},
-        )
         counts["rows_out_skipped"] += 1
     return counts
 
