@@ -252,6 +252,32 @@ async def test_list_user_roles_returns_grants_ordered(
 
 
 @pytest.mark.asyncio
+async def test_list_roles_returns_seeded_roles(
+    client: TestClient,
+) -> None:
+    r = client.get("/v1/admin/roles", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    names = {item["name"] for item in r.json()["items"]}
+    assert "staff_admin" in names
+    assert "facilitator" in names
+
+
+@pytest.mark.asyncio
+async def test_list_roles_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.get("/v1/admin/roles", headers=_auth_headers())
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "role_required"
+
+
+@pytest.mark.asyncio
 async def test_list_user_roles_requires_staff_admin(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -270,7 +296,7 @@ async def test_list_user_roles_requires_staff_admin(
 async def test_grant_user_role_happy_path(
     client: TestClient, session: AsyncSession
 ) -> None:
-    user_sub = f"user-{uuid.uuid4().hex[:8]}"
+    user_sub = str(uuid.uuid4())
     r = client.post(
         "/v1/admin/user-roles",
         json={
@@ -308,7 +334,7 @@ async def test_grant_user_role_happy_path(
 async def test_grant_user_role_idempotent_emits_two_outbox_rows(
     client: TestClient, session: AsyncSession
 ) -> None:
-    user_sub = f"user-{uuid.uuid4().hex[:8]}"
+    user_sub = str(uuid.uuid4())
     payload = {
         "user_subject_id": user_sub,
         "role_id": str(FACILITATOR_ROLE_ID),
@@ -347,13 +373,35 @@ async def test_grant_user_role_idempotent_emits_two_outbox_rows(
 
 
 @pytest.mark.asyncio
+async def test_grant_user_role_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.post(
+        "/v1/admin/user-roles",
+        json={
+            "user_subject_id": str(uuid.uuid4()),
+            "role_id": str(FACILITATOR_ROLE_ID),
+        },
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "role_required"
+
+
+@pytest.mark.asyncio
 async def test_grant_user_role_unknown_role_returns_404(
     client: TestClient,
 ) -> None:
     r = client.post(
         "/v1/admin/user-roles",
         json={
-            "user_subject_id": f"user-{uuid.uuid4().hex[:8]}",
+            "user_subject_id": str(uuid.uuid4()),
             "role_id": str(uuid.uuid4()),
         },
         headers=_auth_headers(),
@@ -375,10 +423,56 @@ async def test_grant_user_role_empty_subject_returns_422(
 
 
 @pytest.mark.asyncio
+async def test_grant_user_role_invalid_oid_returns_422(
+    client: TestClient,
+) -> None:
+    r = client.post(
+        "/v1/admin/user-roles",
+        json={
+            "user_subject_id": "not-a-uuid",
+            "role_id": str(FACILITATOR_ROLE_ID),
+        },
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_revoke_own_staff_admin_missing_grant_returns_404(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jp_adopt_api import deps as deps_module
+    from jp_adopt_api.auth import AuthUser
+
+    admin_sub = str(uuid.uuid4())
+
+    async def _fake_auth(
+        db: object, token: str, settings: object
+    ) -> AuthUser:
+        if token == "dev-local":
+            return AuthUser(sub=admin_sub)
+        raise AssertionError("unexpected token in test")
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"staff_admin"})
+
+    monkeypatch.setattr(deps_module, "authenticate_bearer_async", _fake_auth)
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+
+    r = client.delete(
+        f"/v1/admin/user-roles/{admin_sub}/{STAFF_ADMIN_ROLE_ID}",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "user_role_not_found"
+
+
+@pytest.mark.asyncio
 async def test_revoke_user_role_happy_path(
     client: TestClient, session: AsyncSession
 ) -> None:
-    user_sub = f"user-{uuid.uuid4().hex[:8]}"
+    user_sub = str(uuid.uuid4())
     session.add(
         UserRole(user_subject_id=user_sub, role_id=FACILITATOR_ROLE_ID)
     )
@@ -405,6 +499,24 @@ async def test_revoke_user_role_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_revoke_user_role_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.delete(
+        f"/v1/admin/user-roles/missing-user/{FACILITATOR_ROLE_ID}",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "role_required"
+
+
+@pytest.mark.asyncio
 async def test_revoke_user_role_not_found_returns_404(
     client: TestClient,
 ) -> None:
@@ -417,6 +529,18 @@ async def test_revoke_user_role_not_found_returns_404(
 
 
 @pytest.mark.asyncio
+async def test_revoke_user_role_unknown_role_returns_404(
+    client: TestClient,
+) -> None:
+    r = client.delete(
+        f"/v1/admin/user-roles/missing-user/{uuid.uuid4()}",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "role_not_found"
+
+
+@pytest.mark.asyncio
 async def test_revoke_own_staff_admin_forbidden(
     client: TestClient,
     session: AsyncSession,
@@ -425,7 +549,7 @@ async def test_revoke_own_staff_admin_forbidden(
     from jp_adopt_api import deps as deps_module
     from jp_adopt_api.auth import AuthUser
 
-    admin_sub = f"admin-{uuid.uuid4().hex[:8]}"
+    admin_sub = str(uuid.uuid4())
     session.add(
         UserRole(user_subject_id=admin_sub, role_id=STAFF_ADMIN_ROLE_ID)
     )

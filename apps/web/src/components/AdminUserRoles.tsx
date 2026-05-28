@@ -41,6 +41,7 @@ export function AdminUserRoles() {
   const [userSubjectId, setUserSubjectId] = useState("");
   const [roleId, setRoleId] = useState("");
   const [isSubmitting, startSubmit] = useTransition();
+  const [revokingKey, setRevokingKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +80,15 @@ export function AdminUserRoles() {
       setErr("Enter an Entra user OID and select a role.");
       return;
     }
+    const selectedRole = roles.find((r) => r.id === roleId);
+    if (
+      selectedRole?.name === "staff_admin" &&
+      !window.confirm(
+        `Grant staff_admin to ${oid}? This grants full platform admin access.`,
+      )
+    ) {
+      return;
+    }
     startSubmit(() => {
       void (async () => {
         try {
@@ -98,10 +108,14 @@ export function AdminUserRoles() {
         }
       })();
     });
-  }, [ctx, load, roleId, userSubjectId]);
+  }, [ctx, load, roleId, roles, userSubjectId]);
 
   const revoke = useCallback(
     (row: UserRoleListResponse["items"][number]) => {
+      const rowKey = `${row.user_subject_id}-${row.role_id}`;
+      if (revokingKey !== null) {
+        return;
+      }
       if (
         !window.confirm(
           `Revoke ${row.role_name} from ${row.user_subject_id}?`,
@@ -111,19 +125,38 @@ export function AdminUserRoles() {
       }
       setErr(null);
       setMsg(null);
+      setRevokingKey(rowKey);
       void (async () => {
         try {
-          await apiFetch(ctx, `/v1/admin/user-roles/${encodeURIComponent(row.user_subject_id)}/${row.role_id}`, {
-            method: "DELETE",
-          });
+          await apiFetch(
+            ctx,
+            `/v1/admin/user-roles/${encodeURIComponent(row.user_subject_id)}/${row.role_id}`,
+            { method: "DELETE" },
+          );
           setMsg(`Revoked ${row.role_name} from ${row.user_subject_id}.`);
           await load();
         } catch (e) {
+          if (
+            e instanceof ApiError &&
+            e.status === 404 &&
+            typeof e.body === "object" &&
+            e.body !== null &&
+            "detail" in e.body &&
+            typeof (e.body as { detail: unknown }).detail === "object" &&
+            (e.body as { detail: { code?: string } }).detail?.code ===
+              "user_role_not_found"
+          ) {
+            setMsg(`Role already revoked for ${row.user_subject_id}.`);
+            await load();
+            return;
+          }
           setErr(formatApiError(e));
+        } finally {
+          setRevokingKey(null);
         }
       })();
     },
-    [ctx, load],
+    [ctx, load, revokingKey],
   );
 
   if (forbidden) {
@@ -225,9 +258,17 @@ export function AdminUserRoles() {
                       <button
                         type="button"
                         onClick={() => revoke(row)}
-                        className="text-sm font-medium text-red-700 hover:text-red-900"
+                        disabled={
+                          revokingKey !== null ||
+                          isSubmitting ||
+                          loading
+                        }
+                        className="text-sm font-medium text-red-700 hover:text-red-900 disabled:opacity-50"
                       >
-                        Revoke
+                        {revokingKey ===
+                        `${row.user_subject_id}-${row.role_id}`
+                          ? "Revoking…"
+                          : "Revoke"}
                       </button>
                     </td>
                   </tr>

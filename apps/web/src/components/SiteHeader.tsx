@@ -30,14 +30,17 @@ const AUTH_EXEMPT_PATHS = new Set(["/signin", "/auth/callback"]);
 export function SiteHeader() {
   const pathname = usePathname() ?? "/";
   const { instance, accounts } = useMsal();
-  const account = accounts[0];
+  const account = instance.getActiveAccount() ?? accounts[0] ?? null;
   const showSessionChrome = !AUTH_EXEMPT_PATHS.has(pathname);
   const displayName =
     account?.name?.trim() || account?.username?.trim() || null;
 
   const onSignOut = () => {
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "";
     void instance.logoutRedirect({
-      postLogoutRedirectUri: window.location.origin,
+      account: account ?? undefined,
+      postLogoutRedirectUri: origin ? `${origin}/signin` : undefined,
     });
   };
 

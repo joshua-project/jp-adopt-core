@@ -98,10 +98,19 @@ class UserRoleListResponse(BaseModel):
     total: int
 
 
+_ENTRA_OID_PATTERN = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 class UserRoleGrantRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    user_subject_id: str = Field(min_length=1, max_length=256)
+    user_subject_id: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=_ENTRA_OID_PATTERN,
+    )
     role_id: uuid.UUID
 
 
@@ -345,15 +354,6 @@ async def revoke_user_role(
             },
         )
 
-    if user_subject_id == user.sub and role.name == "staff_admin":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "self_revoke_forbidden",
-                "message": "Cannot revoke your own staff_admin role",
-            },
-        )
-
     existing = (
         await db.execute(
             select(UserRole).where(
@@ -368,6 +368,15 @@ async def revoke_user_role(
             detail={
                 "code": "user_role_not_found",
                 "message": "No grant for this user and role",
+            },
+        )
+
+    if user_subject_id == user.sub and role.name == "staff_admin":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "self_revoke_forbidden",
+                "message": "Cannot revoke your own staff_admin role",
             },
         )
 
