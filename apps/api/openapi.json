@@ -1844,6 +1844,226 @@
         }
       }
     },
+    "/v1/admin/roles": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Roles",
+        "description": "List platform roles for the admin grant dropdown.",
+        "operationId": "list_roles_v1_admin_roles_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/user-roles": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List User Roles",
+        "description": "List all ``user_roles`` grants joined with role names.",
+        "operationId": "list_user_roles_v1_admin_user_roles_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRoleListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Grant User Role",
+        "description": "Grant a platform role to an Entra OID. Idempotent on the composite PK:\nre-granting an existing (subject, role) pair returns 201 with the existing\nrow and does NOT emit a second outbox event (the outbox represents real\nstate changes, not request attempts).",
+        "operationId": "grant_user_role_v1_admin_user_roles_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRoleGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRoleRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/user-roles/{user_subject_id}/{role_id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke User Role",
+        "description": "Revoke a platform role grant. Refuses self-revoke of ``staff_admin``.",
+        "operationId": "revoke_user_role_v1_admin_user_roles__user_subject_id___role_id__delete",
+        "parameters": [
+          {
+            "name": "user_subject_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Subject Id"
+            }
+          },
+          {
+            "name": "role_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Role Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns": {
       "get": {
         "tags": [
@@ -5296,6 +5516,57 @@
         ],
         "title": "ReasonCode"
       },
+      "RoleListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "RoleListResponse"
+      },
+      "RoleRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "RoleRead"
+      },
       "RunMatchRequest": {
         "properties": {
           "force": {
@@ -5462,6 +5733,80 @@
           "transitioned_to"
         ],
         "title": "TransitionResponse"
+      },
+      "UserRoleGrantRequest": {
+        "properties": {
+          "user_subject_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "User Subject Id"
+          },
+          "role_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Role Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_subject_id",
+          "role_id"
+        ],
+        "title": "UserRoleGrantRequest"
+      },
+      "UserRoleListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserRoleRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "UserRoleListResponse"
+      },
+      "UserRoleRead": {
+        "properties": {
+          "user_subject_id": {
+            "type": "string",
+            "title": "User Subject Id"
+          },
+          "role_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Role Id"
+          },
+          "role_name": {
+            "type": "string",
+            "title": "Role Name"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Granted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_subject_id",
+          "role_id",
+          "role_name",
+          "granted_at"
+        ],
+        "title": "UserRoleRead"
       },
       "ValidationError": {
         "properties": {
