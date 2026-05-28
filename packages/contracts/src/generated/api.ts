@@ -114,6 +114,133 @@ export interface paths {
         patch: operations["patch_contact_v1_contacts__contact_id__patch"];
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Matches
+         * @description All Matches across this contact's AdopterInterests (newest first).
+         *
+         *     The matches API is otherwise keyed on AdopterInterest; the record page
+         *     needs the whole-contact view, so we join through interests here.
+         */
+        get: operations["get_contact_matches_v1_contacts__contact_id__matches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Contact Transitions */
+        get: operations["get_contact_transitions_v1_contacts__contact_id__transitions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Contact Activity */
+        get: operations["get_contact_activity_v1_contacts__contact_id__activity_get"];
+        put?: never;
+        /**
+         * Add Contact Note
+         * @description Write a staff note into ``activity_log`` (kind defaults to ``note``).
+         *     No outbox event — an internal note is not a domain state change.
+         */
+        post: operations["add_contact_note_v1_contacts__contact_id__activity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Enrollments
+         * @description Drip-campaign enrollments for the contact (the #55 read slice).
+         */
+        get: operations["get_contact_enrollments_v1_contacts__contact_id__enrollments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Timeline
+         * @description Merged newest-first feed of transitions + matches + activity. Fetches
+         *     up to ``limit`` of each source, merges in memory, and returns the top
+         *     ``limit``. A future optimization can push the merge into SQL.
+         */
+        get: operations["get_contact_timeline_v1_contacts__contact_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Assign Contact
+         * @description Assign the contact to a staff user (1:1; re-assigning replaces). Omitting
+         *     ``user_subject_id`` assigns to the caller. Off the contacts row → no version
+         *     bump.
+         */
+        put: operations["assign_contact_v1_contacts__contact_id__assignment_put"];
+        post?: never;
+        /** Unassign Contact */
+        delete: operations["unassign_contact_v1_contacts__contact_id__assignment_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/magic-link/request": {
         parameters: {
             query?: never;
@@ -618,6 +745,84 @@ export interface components {
              */
             created_at: string;
         };
+        /** ContactActivityResponse */
+        ContactActivityResponse: {
+            /** Items */
+            items: components["schemas"]["ContactActivityRow"][];
+            /** Total */
+            total: number;
+        };
+        /** ContactActivityRow */
+        ContactActivityRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Author Id */
+            author_id: string;
+            /** Body */
+            body: string;
+            /** Kind */
+            kind: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * ContactAssignmentRequest
+         * @description Assign a contact to a staff user. ``user_subject_id`` omitted → assign to
+         *     the calling user (the common 'assign to me' case).
+         */
+        ContactAssignmentRequest: {
+            /** User Subject Id */
+            user_subject_id?: string | null;
+        };
+        /**
+         * ContactEnrollmentRow
+         * @description One drip-campaign enrollment for the contact (the #55 read slice).
+         */
+        ContactEnrollmentRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Campaign Id
+             * Format: uuid
+             */
+            campaign_id: string;
+            /** Campaign Name */
+            campaign_name: string;
+            /** State */
+            state: string;
+            /** Current Step Position */
+            current_step_position: number;
+            /**
+             * Enrolled At
+             * Format: date-time
+             */
+            enrolled_at: string;
+            /** Last Step Sent At */
+            last_step_sent_at: string | null;
+            /** Exit Reason */
+            exit_reason: string | null;
+        };
+        /** ContactEnrollmentsResponse */
+        ContactEnrollmentsResponse: {
+            /** Items */
+            items: components["schemas"]["ContactEnrollmentRow"][];
+            /** Total */
+            total: number;
+        };
         /** ContactListResponse */
         ContactListResponse: {
             /** Items */
@@ -629,12 +834,224 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** ContactMatchRow */
+        ContactMatchRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Adopter Interest Id
+             * Format: uuid
+             */
+            adopter_interest_id: string;
+            /** Rop3 */
+            rop3: string | null;
+            /** Rop3 Name */
+            rop3_name?: string | null;
+            /** Rop3 Country */
+            rop3_country?: string | null;
+            /**
+             * Facilitator Org Id
+             * Format: uuid
+             */
+            facilitator_org_id: string;
+            /** Facilitator Name */
+            facilitator_name: string;
+            /** Status */
+            status: string;
+            /**
+             * Recommended At
+             * Format: date-time
+             */
+            recommended_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decision Reason Code */
+            decision_reason_code: string | null;
+            /** Decision Reason Text */
+            decision_reason_text: string | null;
+        };
+        /** ContactMatchesResponse */
+        ContactMatchesResponse: {
+            /** Items */
+            items: components["schemas"]["ContactMatchRow"][];
+            /** Total */
+            total: number;
+        };
+        /** ContactNoteCreate */
+        ContactNoteCreate: {
+            /** Body */
+            body: string;
+            /**
+             * Kind
+             * @default note
+             */
+            kind: string | null;
+        };
         /** ContactPatch */
         ContactPatch: {
             /** Party Kind */
             party_kind?: string | null;
             /** Display Name */
             display_name?: string | null;
+            profile?: components["schemas"]["ContactProfilePatch"] | null;
+        };
+        /**
+         * ContactProfilePatch
+         * @description Editable subset of the profile. Enum fields are validated here so a bad
+         *     value is a 422, not a DB CHECK 500. ``referral_source`` / ``campaign`` /
+         *     ``partner`` / ``file_download_url`` are set at intake and intentionally
+         *     NOT patchable. Status stays transition-only (never here).
+         */
+        ContactProfilePatch: {
+            /** Ministry Areas */
+            ministry_areas?: string[] | null;
+            /** Entity Size */
+            entity_size?: ("1" | "lt_30" | "31_100" | "101_500" | "501_2000" | "2001_plus") | null;
+            /** Primary Contact Name */
+            primary_contact_name?: string | null;
+            /** Secondary Contact Name */
+            secondary_contact_name?: string | null;
+            /** Secondary Contact Email */
+            secondary_contact_email?: string | null;
+            /** Secondary Contact Phone */
+            secondary_contact_phone?: string | null;
+            /** Website */
+            website?: string | null;
+            /** Preferred Communication */
+            preferred_communication?: ("email" | "phone") | null;
+            /** Form Country */
+            form_country?: string | null;
+            /** Form State Region */
+            form_state_region?: string | null;
+            /** Adopter Type */
+            adopter_type?: ("individual" | "small_group" | "church" | "organization" | "network") | null;
+            /** Commitment Types */
+            commitment_types?: string[] | null;
+            /** Commitment Date */
+            commitment_date?: string | null;
+            /** Works With Fpgs */
+            works_with_fpgs?: boolean | null;
+            /** Willing To Facilitate */
+            willing_to_facilitate?: boolean | null;
+            /** Facilitation Entity Types */
+            facilitation_entity_types?: string[] | null;
+            /** Facilitation Entity Sizes */
+            facilitation_entity_sizes?: string[] | null;
+            /** Mou Status */
+            mou_status?: ("signed" | "not_required" | "not_sent") | null;
+            /** Mou Signature Name */
+            mou_signature_name?: string | null;
+            /** Want Facilitator Connection */
+            want_facilitator_connection?: boolean | null;
+            /** Facilitator Entity Types */
+            facilitator_entity_types?: string[] | null;
+            /** Desired Facilitator Info */
+            desired_facilitator_info?: string[] | null;
+            /** Want Network Connection */
+            want_network_connection?: boolean | null;
+            /** Network Partner Info */
+            network_partner_info?: string[] | null;
+            /** Has Doctrinal Distinctives */
+            has_doctrinal_distinctives?: boolean | null;
+            /** Doctrinal Distinctives */
+            doctrinal_distinctives?: string | null;
+            /** Has Accountability Membership */
+            has_accountability_membership?: boolean | null;
+            /** Accountability Memberships */
+            accountability_memberships?: string | null;
+            /** Last Contact Date */
+            last_contact_date?: string | null;
+            /** Engagement Score */
+            engagement_score?: number | null;
+            /** Next Followup Date */
+            next_followup_date?: string | null;
+            /** Additional Notes */
+            additional_notes?: string | null;
+        };
+        /**
+         * ContactProfileRead
+         * @description Read view of the 1:1 contact_profile (the JP-custom adoption fields).
+         *     Enum-shaped fields are typed ``str`` here so stored values always
+         *     round-trip even if the option set later changes.
+         */
+        ContactProfileRead: {
+            /** Ministry Areas */
+            ministry_areas?: string[] | null;
+            /** Entity Size */
+            entity_size?: string | null;
+            /** Primary Contact Name */
+            primary_contact_name?: string | null;
+            /** Secondary Contact Name */
+            secondary_contact_name?: string | null;
+            /** Secondary Contact Email */
+            secondary_contact_email?: string | null;
+            /** Secondary Contact Phone */
+            secondary_contact_phone?: string | null;
+            /** Website */
+            website?: string | null;
+            /** Preferred Communication */
+            preferred_communication?: string | null;
+            /** Form Country */
+            form_country?: string | null;
+            /** Form State Region */
+            form_state_region?: string | null;
+            /** Adopter Type */
+            adopter_type?: string | null;
+            /** Commitment Types */
+            commitment_types?: string[] | null;
+            /** Commitment Date */
+            commitment_date?: string | null;
+            /** Works With Fpgs */
+            works_with_fpgs?: boolean | null;
+            /** Willing To Facilitate */
+            willing_to_facilitate?: boolean | null;
+            /** Facilitation Entity Types */
+            facilitation_entity_types?: string[] | null;
+            /** Facilitation Entity Sizes */
+            facilitation_entity_sizes?: string[] | null;
+            /** Mou Status */
+            mou_status?: string | null;
+            /** Mou Signature Name */
+            mou_signature_name?: string | null;
+            /** Want Facilitator Connection */
+            want_facilitator_connection?: boolean | null;
+            /** Facilitator Entity Types */
+            facilitator_entity_types?: string[] | null;
+            /** Desired Facilitator Info */
+            desired_facilitator_info?: string[] | null;
+            /** Want Network Connection */
+            want_network_connection?: boolean | null;
+            /** Network Partner Info */
+            network_partner_info?: string[] | null;
+            /** Has Doctrinal Distinctives */
+            has_doctrinal_distinctives?: boolean | null;
+            /** Doctrinal Distinctives */
+            doctrinal_distinctives?: string | null;
+            /** Has Accountability Membership */
+            has_accountability_membership?: boolean | null;
+            /** Accountability Memberships */
+            accountability_memberships?: string | null;
+            /** Last Contact Date */
+            last_contact_date?: string | null;
+            /** Engagement Score */
+            engagement_score?: number | null;
+            /** Next Followup Date */
+            next_followup_date?: string | null;
+            /** Referral Source */
+            referral_source?: string | null;
+            /** Campaign */
+            campaign?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /** Additional Notes */
+            additional_notes?: string | null;
+            /** File Download Url */
+            file_download_url?: string | null;
         };
         /** ContactRead */
         ContactRead: {
@@ -673,6 +1090,9 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            profile?: components["schemas"]["ContactProfileRead"] | null;
+            /** Assigned To */
+            assigned_to?: string | null;
         };
         /** ContactStatusCounts */
         ContactStatusCounts: {
@@ -685,6 +1105,66 @@ export interface components {
             counts: {
                 [key: string]: number;
             };
+            /** Total */
+            total: number;
+        };
+        /**
+         * ContactTimelineEntry
+         * @description One merged feed entry. ``type`` discriminates the source table so the
+         *     UI can pick an icon; ``ref_id`` is the source row id as a string.
+         */
+        ContactTimelineEntry: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "transition" | "match" | "activity";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Title */
+            title: string;
+            /** Detail */
+            detail?: string | null;
+            /** Ref Id */
+            ref_id: string;
+        };
+        /** ContactTimelineResponse */
+        ContactTimelineResponse: {
+            /** Items */
+            items: components["schemas"]["ContactTimelineEntry"][];
+        };
+        /** ContactTransitionRow */
+        ContactTransitionRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** From State */
+            from_state: string | null;
+            /** To State */
+            to_state: string;
+            /** Actor Id */
+            actor_id: string | null;
+            /** Actor Role */
+            actor_role: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Reason Text */
+            reason_text: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+        };
+        /** ContactTransitionsResponse */
+        ContactTransitionsResponse: {
+            /** Items */
+            items: components["schemas"]["ContactTransitionRow"][];
             /** Total */
             total: number;
         };
@@ -1274,6 +1754,290 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContactRead"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_matches_v1_contacts__contact_id__matches_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactMatchesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_transitions_v1_contacts__contact_id__transitions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactTransitionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_activity_v1_contacts__contact_id__activity_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_contact_note_v1_contacts__contact_id__activity_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactNoteCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactActivityRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_enrollments_v1_contacts__contact_id__enrollments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactEnrollmentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_timeline_v1_contacts__contact_id__timeline_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactTimelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_contact_v1_contacts__contact_id__assignment_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactAssignmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unassign_contact_v1_contacts__contact_id__assignment_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Identity,
@@ -95,6 +96,180 @@ class Contact(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class ContactProfile(Base):
+    """U6: 1:1 adoption-field profile for a Contact. Holds the JP-custom
+    ``dt-adoption-fields`` plugin fields (docs/dt-parity-inventory.md §2.6 A).
+    Separate from ``contacts`` so profile edits don't churn ``Contact.version``
+    (the optimistic-lock column the match/transition flows gate on). All
+    columns nullable; enum CHECKs mirror migration 0012 + the plugin option sets.
+    """
+
+    __tablename__ = "contact_profile"
+    __table_args__ = (
+        UniqueConstraint("contact_id", name="uq_contact_profile_contact_id"),
+        CheckConstraint(
+            "entity_size IS NULL OR entity_size IN "
+            "('1', 'lt_30', '31_100', '101_500', '501_2000', '2001_plus')",
+            name="ck_contact_profile_entity_size",
+        ),
+        CheckConstraint(
+            "preferred_communication IS NULL OR preferred_communication IN "
+            "('email', 'phone')",
+            name="ck_contact_profile_preferred_communication",
+        ),
+        CheckConstraint(
+            "adopter_type IS NULL OR adopter_type IN "
+            "('individual', 'small_group', 'church', 'organization', 'network')",
+            name="ck_contact_profile_adopter_type",
+        ),
+        CheckConstraint(
+            "mou_status IS NULL OR mou_status IN "
+            "('signed', 'not_required', 'not_sent')",
+            name="ck_contact_profile_mou_status",
+        ),
+        CheckConstraint(
+            "engagement_score IS NULL OR "
+            "(engagement_score >= 0 AND engagement_score <= 100)",
+            name="ck_contact_profile_engagement_score_range",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # contact_info tile
+    ministry_areas: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    entity_size: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_contact_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secondary_contact_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secondary_contact_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secondary_contact_phone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_communication: Mapped[str | None] = mapped_column(Text, nullable=True)
+    form_country: Mapped[str | None] = mapped_column(Text, nullable=True)
+    form_state_region: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # adoption_profile tile
+    adopter_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commitment_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    commitment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # facilitation_profile tile
+    works_with_fpgs: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    willing_to_facilitate: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    facilitation_entity_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    facilitation_entity_sizes: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    mou_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mou_signature_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # connection_prefs tile
+    want_facilitator_connection: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    facilitator_entity_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    desired_facilitator_info: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    # network_prefs tile
+    want_network_connection: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    network_partner_info: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    # vetting tile
+    has_doctrinal_distinctives: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    doctrinal_distinctives: Mapped[str | None] = mapped_column(Text, nullable=True)
+    has_accountability_membership: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    accountability_memberships: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # engagement tile
+    last_contact_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    engagement_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_followup_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # form_submission tile
+    referral_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    campaign: Mapped[str | None] = mapped_column(Text, nullable=True)
+    partner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    additional_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_download_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class Consent(Base):
+    """U8: MOU (or future) consent acceptance record for a contact. 1:N audit
+    rows; ``content_hash`` is the sha-256 hex of the consent text the user saw.
+    """
+
+    __tablename__ = "consent"
+    __table_args__ = (
+        Index("ix_consent_contact_type", "contact_id", "consent_type"),
+        CheckConstraint(
+            "content_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_consent_content_hash_sha256",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    consent_type: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContactAssignment(Base):
+    """U13: 1:1 staff owner for a contact (DT's ``assigned_to``). ``contact_id``
+    is the PK, so re-assigning replaces. Kept off the contacts row to avoid
+    bumping ``Contact.version``."""
+
+    __tablename__ = "contact_assignment"
+    __table_args__ = (Index("ix_contact_assignment_user", "user_subject_id"),)
+
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    assigned_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Outbox(Base):
@@ -378,6 +553,11 @@ class Fpg(Base):
             "frontier",
             postgresql_where="frontier = TRUE",
         ),
+        Index(
+            "ix_fpg_people_id3",
+            "people_id3",
+            postgresql_where="people_id3 IS NOT NULL",
+        ),
     )
 
     rop3: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -424,6 +604,11 @@ class AdopterInterest(Base):
     __table_args__ = (
         Index("ix_adopter_interest_contact_id", "contact_id"),
         Index("ix_adopter_interest_rop3", "rop3"),
+        CheckConstraint(
+            "engagement_status IS NULL OR engagement_status IN "
+            "('ready', 'potential', 'none')",
+            name="ck_adopter_interest_engagement_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -439,6 +624,17 @@ class AdopterInterest(Base):
     )
     commitment_level: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # U7: per-FPG intake answers from jp-adopt-forms.
+    commitment_types: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    engagement_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    facilitation_services: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    network_services: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

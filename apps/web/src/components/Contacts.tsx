@@ -242,6 +242,7 @@ export function Contacts() {
                   <DataRow
                     key={c.id}
                     id={c.id}
+                    href={`/contacts/${c.id}`}
                     title={c.display_name}
                     badge={
                       c.party_kind === "facilitator" && c.facilitator_status ? (
@@ -261,6 +262,7 @@ export function Contacts() {
                         </span>
                       </span>
                     }
+                    action="View →"
                   />
                 ))
               : null

@@ -1,10 +1,106 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+
+# ── Adoption profile (U9): contact_profile field enums ─────────────────────
+# Option sets mirror dt-adoption-fields/custom-fields.php + migration 0012.
+EntitySize = Literal["1", "lt_30", "31_100", "101_500", "501_2000", "2001_plus"]
+AdopterType = Literal[
+    "individual", "small_group", "church", "organization", "network"
+]
+MouStatus = Literal["signed", "not_required", "not_sent"]
+PreferredCommunication = Literal["email", "phone"]
+
+
+class ContactProfileRead(BaseModel):
+    """Read view of the 1:1 contact_profile (the JP-custom adoption fields).
+    Enum-shaped fields are typed ``str`` here so stored values always
+    round-trip even if the option set later changes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    ministry_areas: list[str] | None = None
+    entity_size: str | None = None
+    primary_contact_name: str | None = None
+    secondary_contact_name: str | None = None
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = None
+    website: str | None = None
+    preferred_communication: str | None = None
+    form_country: str | None = None
+    form_state_region: str | None = None
+    adopter_type: str | None = None
+    commitment_types: list[str] | None = None
+    commitment_date: date | None = None
+    works_with_fpgs: bool | None = None
+    willing_to_facilitate: bool | None = None
+    facilitation_entity_types: list[str] | None = None
+    facilitation_entity_sizes: list[str] | None = None
+    mou_status: str | None = None
+    mou_signature_name: str | None = None
+    want_facilitator_connection: bool | None = None
+    facilitator_entity_types: list[str] | None = None
+    desired_facilitator_info: list[str] | None = None
+    want_network_connection: bool | None = None
+    network_partner_info: list[str] | None = None
+    has_doctrinal_distinctives: bool | None = None
+    doctrinal_distinctives: str | None = None
+    has_accountability_membership: bool | None = None
+    accountability_memberships: str | None = None
+    last_contact_date: date | None = None
+    engagement_score: int | None = None
+    next_followup_date: date | None = None
+    referral_source: str | None = None
+    campaign: str | None = None
+    partner: str | None = None
+    additional_notes: str | None = None
+    file_download_url: str | None = None
+
+
+class ContactProfilePatch(BaseModel):
+    """Editable subset of the profile. Enum fields are validated here so a bad
+    value is a 422, not a DB CHECK 500. ``referral_source`` / ``campaign`` /
+    ``partner`` / ``file_download_url`` are set at intake and intentionally
+    NOT patchable. Status stays transition-only (never here)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ministry_areas: list[str] | None = None
+    entity_size: EntitySize | None = None
+    primary_contact_name: str | None = Field(default=None, max_length=512)
+    secondary_contact_name: str | None = Field(default=None, max_length=512)
+    secondary_contact_email: str | None = Field(default=None, max_length=512)
+    secondary_contact_phone: str | None = Field(default=None, max_length=128)
+    website: str | None = Field(default=None, max_length=1024)
+    preferred_communication: PreferredCommunication | None = None
+    form_country: str | None = Field(default=None, max_length=128)
+    form_state_region: str | None = Field(default=None, max_length=128)
+    adopter_type: AdopterType | None = None
+    commitment_types: list[str] | None = None
+    commitment_date: date | None = None
+    works_with_fpgs: bool | None = None
+    willing_to_facilitate: bool | None = None
+    facilitation_entity_types: list[str] | None = None
+    facilitation_entity_sizes: list[str] | None = None
+    mou_status: MouStatus | None = None
+    mou_signature_name: str | None = Field(default=None, max_length=512)
+    want_facilitator_connection: bool | None = None
+    facilitator_entity_types: list[str] | None = None
+    desired_facilitator_info: list[str] | None = None
+    want_network_connection: bool | None = None
+    network_partner_info: list[str] | None = None
+    has_doctrinal_distinctives: bool | None = None
+    doctrinal_distinctives: str | None = Field(default=None, max_length=4096)
+    has_accountability_membership: bool | None = None
+    accountability_memberships: str | None = Field(default=None, max_length=4096)
+    last_contact_date: date | None = None
+    engagement_score: int | None = Field(default=None, ge=0, le=100)
+    next_followup_date: date | None = None
+    additional_notes: str | None = Field(default=None, max_length=4096)
 
 
 class ContactRead(BaseModel):
@@ -27,6 +123,20 @@ class ContactRead(BaseModel):
     newsletter_opt_in: bool
     created_at: datetime
     updated_at: datetime
+    # U9: 1:1 adoption profile (null when the contact has no profile row yet).
+    profile: ContactProfileRead | None = None
+    # U13: assigned staff owner's subject (null = unassigned). Populated on the
+    # single-contact read, not the list.
+    assigned_to: str | None = None
+
+
+class ContactAssignmentRequest(BaseModel):
+    """Assign a contact to a staff user. ``user_subject_id`` omitted → assign to
+    the calling user (the common 'assign to me' case)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_subject_id: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class ContactListResponse(BaseModel):
@@ -67,6 +177,10 @@ class ContactPatch(BaseModel):
 
     party_kind: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, min_length=1, max_length=512)
+    # U9: adoption-profile edits upsert the 1:1 contact_profile row. This does
+    # NOT touch Contact.version (the optimistic-lock column the match/transition
+    # flows gate on) — profile churn stays off the hot contact row.
+    profile: ContactProfilePatch | None = None
 
     @model_validator(mode="after")
     def reject_null_for_non_nullable_columns(self) -> Self:
@@ -75,6 +189,116 @@ class ContactPatch(BaseModel):
             if fname in self.model_fields_set and getattr(self, fname) is None:
                 raise ValueError(f"{fname} cannot be null")
         return self
+
+
+# ── Contact record (U1): per-contact aggregates for /contacts/[id] ─────────
+#
+# These power the canonical contact-record page. They surface data already
+# stored (matches, transition_audit, activity_log) that previously had no read
+# surface. Raw enum values are returned as-is; the web client humanizes via
+# apps/web/src/lib/vocab.ts.
+
+
+class ContactMatchRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    adopter_interest_id: uuid.UUID
+    rop3: str | None
+    rop3_name: str | None = None
+    rop3_country: str | None = None
+    facilitator_org_id: uuid.UUID
+    facilitator_name: str
+    status: str
+    recommended_at: datetime
+    decided_at: datetime | None
+    decided_by: str | None
+    decision_reason_code: str | None
+    decision_reason_text: str | None
+
+
+class ContactMatchesResponse(BaseModel):
+    items: list[ContactMatchRow]
+    total: int
+
+
+class ContactTransitionRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    from_state: str | None
+    to_state: str
+    actor_id: str | None
+    actor_role: str | None
+    reason_code: str | None
+    reason_text: str | None
+    occurred_at: datetime
+
+
+class ContactTransitionsResponse(BaseModel):
+    items: list[ContactTransitionRow]
+    total: int
+
+
+class ContactActivityRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    author_id: str
+    body: str
+    kind: str | None
+    occurred_at: datetime
+    created_at: datetime
+
+
+class ContactActivityResponse(BaseModel):
+    items: list[ContactActivityRow]
+    total: int
+
+
+class ContactEnrollmentRow(BaseModel):
+    """One drip-campaign enrollment for the contact (the #55 read slice)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    campaign_id: uuid.UUID
+    campaign_name: str
+    state: str
+    current_step_position: int
+    enrolled_at: datetime
+    last_step_sent_at: datetime | None
+    exit_reason: str | None
+
+
+class ContactEnrollmentsResponse(BaseModel):
+    items: list[ContactEnrollmentRow]
+    total: int
+
+
+class ContactTimelineEntry(BaseModel):
+    """One merged feed entry. ``type`` discriminates the source table so the
+    UI can pick an icon; ``ref_id`` is the source row id as a string."""
+
+    type: Literal["transition", "match", "activity"]
+    at: datetime
+    title: str
+    detail: str | None = None
+    ref_id: str
+
+
+class ContactTimelineResponse(BaseModel):
+    items: list[ContactTimelineEntry]
+
+
+# ── Add-note (U2): write a staff note into activity_log ────────────────────
+
+
+class ContactNoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=8192)
+    kind: str | None = Field(default="note", max_length=64)
 
 
 # ── Intake (U4): Form A facilitation + Form B adoption ─────────────────────
@@ -107,9 +331,52 @@ class FpgInterestIn(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    rop3: str = Field(min_length=1, max_length=32)
+    # U12: identify the people group by ROP3 (canonical) OR people_id3 (what the
+    # public forms carry — they have no ROP3). At least one is required; the
+    # intake handler resolves people_id3 → rop3 via the fpg table when rop3 is
+    # absent, falling back to an unresolved (rop3=NULL) interest for triage.
+    rop3: str | None = Field(default=None, max_length=32)
+    people_id3: int | None = None
     commitment_level: str | None = Field(default=None, max_length=64)
     notes: str | None = Field(default=None, max_length=2048)
+    # U10: per-FPG answers from the forms → adopter_interest (U7 columns).
+    commitment_types: list[str] | None = None
+    engagement_status: str | None = Field(default=None, max_length=32)
+    facilitation_services: list[str] | None = None
+    network_services: list[str] | None = None
+
+    @model_validator(mode="after")
+    def require_identifier(self) -> Self:
+        if not self.rop3 and self.people_id3 is None:
+            raise ValueError("each fpg selection needs rop3 or people_id3")
+        return self
+
+
+class ContactProfileIntake(ContactProfilePatch):
+    """Profile fields accepted at intake. Lenient (ignores unknown form keys)
+    and — unlike the staff PATCH surface — includes the submission-derived
+    fields (referral_source / campaign / partner / file_download_url) that are
+    readonly once set."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    referral_source: str | None = Field(default=None, max_length=512)
+    campaign: str | None = Field(default=None, max_length=512)
+    partner: str | None = Field(default=None, max_length=512)
+    file_download_url: str | None = Field(default=None, max_length=2048)
+
+
+class ConsentIn(BaseModel):
+    """An MOU (or future) consent acceptance sent with a submission."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    consent_type: str = Field(max_length=64)
+    version: str = Field(max_length=64)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    accepted_at: datetime
+    conversation_id: str | None = Field(default=None, max_length=128)
+    evidence: dict[str, Any] | None = None
 
 
 class IntakeBase(BaseModel):
@@ -125,6 +392,9 @@ class IntakeBase(BaseModel):
     # to preserve verbatim in the outbox event payload + (eventually) in a
     # raw_submission audit table.
     extra: dict[str, Any] | None = None
+    # U10: structured adoption profile + consent records the forms now send.
+    profile: ContactProfileIntake | None = None
+    consents: list[ConsentIn] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def normalize_strings(self) -> Self:
@@ -164,6 +434,11 @@ class FacilitationIntake(IntakeBase):
 
     party_kind: Literal["facilitator"] = "facilitator"
     organization_name: str | None = Field(default=None, max_length=512)
+    # U12: facilitators also pick FPGs (which groups they can serve, with
+    # per-FPG engagement_status / facilitation_services / network_services).
+    # Same shape + bound as the adoption side; an empty list is fine (a
+    # facilitator with no specific FPGs yet).
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=20)
 
 
 class IntakeSuccessData(BaseModel):

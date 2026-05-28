@@ -46,13 +46,19 @@ from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     AdopterInterest,
     ApiIdempotencyKey,
+    Consent,
     Contact,
+    ContactProfile,
+    Fpg,
     SubmissionBlocked,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import (
     AdoptionIntake,
+    ConsentIn,
+    ContactProfileIntake,
     FacilitationIntake,
+    FpgInterestIn,
     IntakeError,
     IntakeErrorBody,
     IntakeSuccess,
@@ -326,6 +332,94 @@ async def _resolve_contact(
     return contact, True
 
 
+async def _apply_profile(
+    session: AsyncSession,
+    contact: Contact,
+    profile_in: ContactProfileIntake | None,
+) -> None:
+    """U10: upsert the 1:1 contact_profile from the submitted profile fields.
+    Only fields the form actually sent are written (exclude_unset)."""
+    if profile_in is None:
+        return
+    data = profile_in.model_dump(exclude_unset=True)
+    if not data:
+        return
+    prof = (
+        await session.execute(
+            select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+        )
+    ).scalar_one_or_none()
+    if prof is None:
+        prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
+        session.add(prof)
+    for field_name, value in data.items():
+        setattr(prof, field_name, value)
+
+
+async def _write_consents(
+    session: AsyncSession,
+    contact: Contact,
+    consents: list[ConsentIn],
+) -> None:
+    """U10: persist MOU (or future) consent acceptances sent with the form."""
+    for c in consents:
+        session.add(
+            Consent(
+                id=uuid.uuid4(),
+                contact_id=contact.id,
+                consent_type=c.consent_type,
+                version=c.version,
+                content_hash=c.content_hash,
+                accepted_at=c.accepted_at,
+                conversation_id=c.conversation_id,
+                evidence=c.evidence,
+            )
+        )
+
+
+async def _resolve_rop3(session: AsyncSession, sel: FpgInterestIn) -> str | None:
+    """U12: forms carry people_id3, not rop3 — resolve via the fpg table.
+    Returns None (unresolved, for triage) when neither rop3 nor a matching
+    fpg row is found."""
+    if sel.rop3 is not None:
+        return sel.rop3
+    if sel.people_id3 is None:
+        return None
+    return (
+        await session.execute(
+            select(Fpg.rop3).where(Fpg.people_id3 == str(sel.people_id3))
+        )
+    ).scalar_one_or_none()
+
+
+async def _create_interests(
+    session: AsyncSession,
+    contact: Contact,
+    selections: list[FpgInterestIn],
+) -> list[uuid.UUID]:
+    """Create one AdopterInterest row per FPG selection (shared by the adopter
+    and facilitator intake paths). The per-FPG facilitation_services /
+    network_services / engagement_status columns (U7) carry the facilitator
+    answers; commitment_* carry the adopter answers."""
+    interest_ids: list[uuid.UUID] = []
+    for sel in selections:
+        interest = AdopterInterest(
+            id=uuid.uuid4(),
+            contact_id=contact.id,
+            rop3=await _resolve_rop3(session, sel),
+            commitment_level=sel.commitment_level,
+            notes=sel.notes,
+            commitment_types=sel.commitment_types,
+            engagement_status=sel.engagement_status,
+            facilitation_services=sel.facilitation_services,
+            network_services=sel.network_services,
+        )
+        session.add(interest)
+        await session.flush()
+        interest_ids.append(interest.id)
+    return interest_ids
+
+
 async def _process_adoption(
     session: AsyncSession,
     *,
@@ -422,17 +516,13 @@ async def _process_adoption(
         await session.flush()
         interest_ids.append(no_fpg.id)
     else:
-        for sel in payload.fpg_selections:
-            interest = AdopterInterest(
-                id=uuid.uuid4(),
-                contact_id=contact.id,
-                rop3=sel.rop3,
-                commitment_level=sel.commitment_level,
-                notes=sel.notes,
-            )
-            session.add(interest)
-            await session.flush()
-            interest_ids.append(interest.id)
+        interest_ids = await _create_interests(
+            session, contact, payload.fpg_selections
+        )
+
+    # U10: persist the submitted adoption profile + consent records.
+    await _apply_profile(session, contact, payload.profile)
+    await _write_consents(session, contact, payload.consents)
 
     submission_id = uuid.uuid4()
     outbox_payload = {
@@ -509,13 +599,31 @@ async def _process_facilitation(
                 },
             )
         )
+        # N1 body-shape oracle (U12): now that an accepted facilitation
+        # response carries one interest id per fpg_selection, a blocked
+        # response with interest_ids=[] would leak blocklist membership when
+        # the caller submitted selections. Fabricate ephemeral (never
+        # persisted) ids matching the submitted count to keep the shape
+        # indistinguishable. Empty selections → [] on both paths, so no
+        # forced synthetic row here (unlike the adoption potential_adopter
+        # path, which always writes one).
+        fabricated_interest_ids = [uuid.uuid4() for _ in payload.fpg_selections]
         return _success_response(
             status.HTTP_201_CREATED,
             submission_id=uuid.uuid4(),
             request_id=request_id,
             contact_id=contact.id,
-            interest_ids=[],
+            interest_ids=fabricated_interest_ids,
         )
+
+    # U12: facilitators select FPGs too — one AdopterInterest row per pick,
+    # with the facilitation_services / network_services / engagement_status
+    # columns carrying the per-FPG answers.
+    interest_ids = await _create_interests(session, contact, payload.fpg_selections)
+
+    # U10: persist the submitted profile + consent records (facilitation).
+    await _apply_profile(session, contact, payload.profile)
+    await _write_consents(session, contact, payload.consents)
 
     submission_id = uuid.uuid4()
     outbox_payload = {
@@ -527,6 +635,8 @@ async def _process_facilitation(
         "contact_created": created,
         "party_kind": "facilitator",
         "organization_name": payload.organization_name,
+        "interest_ids": [str(i) for i in interest_ids],
+        "fpg_selections": [s.model_dump() for s in payload.fpg_selections],
         "origin": contact.origin,
         "newsletter_opt_in": contact.newsletter_opt_in,
     }
@@ -541,7 +651,7 @@ async def _process_facilitation(
         submission_id=submission_id,
         request_id=request_id,
         contact_id=contact.id,
-        interest_ids=[],
+        interest_ids=interest_ids,
     )
 
 

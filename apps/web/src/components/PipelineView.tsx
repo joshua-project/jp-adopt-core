@@ -238,7 +238,7 @@ function ContactRowView({
   return (
     <DataRow
       id={contact.id}
-      href={`/workflow/${contact.id}`}
+      href={`/contacts/${contact.id}`}
       title={contact.display_name}
       badge={<StatusBadge status={status ?? undefined} kind={kind} />}
       meta={
@@ -264,12 +264,7 @@ function ContactRowView({
           : undefined
       }
       action={
-        <a
-          href={`/workflow/${contact.id}`}
-          className="text-sm font-medium text-jp-accent hover:underline"
-        >
-          Open →
-        </a>
+        <span className="text-sm font-medium text-jp-accent">Open →</span>
       }
     />
   );
@@ -287,7 +282,7 @@ function ContactCard({
   const status = contact[statusField] as string | null | undefined;
   return (
     <a
-      href={`/workflow/${contact.id}`}
+      href={`/contacts/${contact.id}`}
       className="block rounded border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow"
     >
       <div className="flex items-start justify-between gap-2">

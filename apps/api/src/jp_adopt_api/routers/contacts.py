@@ -1,20 +1,45 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from jp_adopt_api.deps import DbSession, require_role
-from jp_adopt_api.models import Contact
+from jp_adopt_api.models import (
+    ActivityLog,
+    AdopterInterest,
+    Campaign,
+    Contact,
+    ContactAssignment,
+    ContactProfile,
+    Enrollment,
+    FacilitatingOrg,
+    Fpg,
+    Match,
+    TransitionAudit,
+)
 from jp_adopt_api.outbox_suppression import emit_outbox
 from jp_adopt_api.schemas import (
+    ContactActivityResponse,
+    ContactActivityRow,
+    ContactAssignmentRequest,
+    ContactEnrollmentRow,
+    ContactEnrollmentsResponse,
     ContactListResponse,
+    ContactMatchesResponse,
+    ContactMatchRow,
+    ContactNoteCreate,
     ContactPatch,
+    ContactProfileRead,
     ContactRead,
     ContactStatusCounts,
+    ContactTimelineEntry,
+    ContactTimelineResponse,
+    ContactTransitionRow,
+    ContactTransitionsResponse,
 )
 
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
@@ -198,6 +223,30 @@ async def contact_status_counts(
     )
 
 
+async def _contact_read_with_profile(
+    db: DbSession, contact: Contact
+) -> ContactRead:
+    """Build ContactRead and attach the 1:1 contact_profile (U9), if present."""
+    read = ContactRead.model_validate(contact)
+    prof = (
+        await db.execute(
+            select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+        )
+    ).scalar_one_or_none()
+    if prof is not None:
+        read.profile = ContactProfileRead.model_validate(prof)
+    asn = (
+        await db.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact.id
+            )
+        )
+    ).scalar_one_or_none()
+    if asn is not None:
+        read.assigned_to = asn.user_subject_id
+    return read
+
+
 @router.get("/{contact_id}", response_model=ContactRead)
 async def get_contact(
     contact_id: uuid.UUID,
@@ -207,7 +256,354 @@ async def get_contact(
     row = await db.get(Contact, contact_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-    return ContactRead.model_validate(row)
+    return await _contact_read_with_profile(db, row)
+
+
+# ── Contact record (U1/U2): per-contact aggregates + add-note ──────────────
+#
+# Role-gated to staff via _STAFF_DEP, consistent with the sibling contact
+# endpoints after the Entra-direct auth overhaul.
+
+
+async def _require_contact(db: DbSession, contact_id: uuid.UUID) -> Contact:
+    contact = await db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+        )
+    return contact
+
+
+@router.get("/{contact_id}/matches", response_model=ContactMatchesResponse)
+async def get_contact_matches(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ContactMatchesResponse:
+    """All Matches across this contact's AdopterInterests (newest first).
+
+    The matches API is otherwise keyed on AdopterInterest; the record page
+    needs the whole-contact view, so we join through interests here.
+    """
+    await _require_contact(db, contact_id)
+    interest_join = AdopterInterest.id == Match.adopter_interest_id
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Match)
+                .join(AdopterInterest, interest_join)
+                .where(AdopterInterest.contact_id == contact_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await db.execute(
+            select(
+                Match,
+                AdopterInterest.rop3,
+                FacilitatingOrg.name,
+                Fpg.name,
+                Fpg.country_code,
+            )
+            .join(AdopterInterest, interest_join)
+            .join(FacilitatingOrg, FacilitatingOrg.id == Match.facilitator_org_id)
+            .outerjoin(Fpg, Fpg.rop3 == AdopterInterest.rop3)
+            .where(AdopterInterest.contact_id == contact_id)
+            .order_by(Match.recommended_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items = [
+        ContactMatchRow(
+            id=m.id,
+            adopter_interest_id=m.adopter_interest_id,
+            rop3=rop3,
+            rop3_name=fpg_name,
+            rop3_country=fpg_country,
+            facilitator_org_id=m.facilitator_org_id,
+            facilitator_name=name,
+            status=m.status,
+            recommended_at=m.recommended_at,
+            decided_at=m.decided_at,
+            decided_by=m.decided_by,
+            decision_reason_code=m.decision_reason_code,
+            decision_reason_text=m.decision_reason_text,
+        )
+        for (m, rop3, name, fpg_name, fpg_country) in rows
+    ]
+    return ContactMatchesResponse(items=items, total=total)
+
+
+@router.get("/{contact_id}/transitions", response_model=ContactTransitionsResponse)
+async def get_contact_transitions(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ContactTransitionsResponse:
+    await _require_contact(db, contact_id)
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(TransitionAudit)
+                .where(TransitionAudit.contact_id == contact_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await db.execute(
+            select(TransitionAudit)
+            .where(TransitionAudit.contact_id == contact_id)
+            .order_by(TransitionAudit.occurred_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars().all()
+    return ContactTransitionsResponse(
+        items=[ContactTransitionRow.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.get("/{contact_id}/activity", response_model=ContactActivityResponse)
+async def get_contact_activity(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ContactActivityResponse:
+    await _require_contact(db, contact_id)
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(ActivityLog)
+                .where(ActivityLog.contact_id == contact_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await db.execute(
+            select(ActivityLog)
+            .where(ActivityLog.contact_id == contact_id)
+            .order_by(ActivityLog.occurred_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars().all()
+    return ContactActivityResponse(
+        items=[ContactActivityRow.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.get("/{contact_id}/enrollments", response_model=ContactEnrollmentsResponse)
+async def get_contact_enrollments(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ContactEnrollmentsResponse:
+    """Drip-campaign enrollments for the contact (the #55 read slice)."""
+    await _require_contact(db, contact_id)
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Enrollment)
+                .where(Enrollment.contact_id == contact_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        await db.execute(
+            select(Enrollment, Campaign.name)
+            .join(Campaign, Campaign.id == Enrollment.campaign_id)
+            .where(Enrollment.contact_id == contact_id)
+            .order_by(Enrollment.enrolled_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items = [
+        ContactEnrollmentRow(
+            id=e.id,
+            campaign_id=e.campaign_id,
+            campaign_name=name,
+            state=e.state,
+            current_step_position=e.current_step_position,
+            enrolled_at=e.enrolled_at,
+            last_step_sent_at=e.last_step_sent_at,
+            exit_reason=e.exit_reason,
+        )
+        for (e, name) in rows
+    ]
+    return ContactEnrollmentsResponse(items=items, total=total)
+
+
+@router.get("/{contact_id}/timeline", response_model=ContactTimelineResponse)
+async def get_contact_timeline(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+    limit: int = Query(50, ge=1, le=200),
+) -> ContactTimelineResponse:
+    """Merged newest-first feed of transitions + matches + activity. Fetches
+    up to ``limit`` of each source, merges in memory, and returns the top
+    ``limit``. A future optimization can push the merge into SQL."""
+    await _require_contact(db, contact_id)
+    transitions = (
+        await db.execute(
+            select(TransitionAudit)
+            .where(TransitionAudit.contact_id == contact_id)
+            .order_by(TransitionAudit.occurred_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    activity = (
+        await db.execute(
+            select(ActivityLog)
+            .where(ActivityLog.contact_id == contact_id)
+            .order_by(ActivityLog.occurred_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    matches = (
+        await db.execute(
+            select(Match, FacilitatingOrg.name)
+            .join(AdopterInterest, AdopterInterest.id == Match.adopter_interest_id)
+            .join(FacilitatingOrg, FacilitatingOrg.id == Match.facilitator_org_id)
+            .where(AdopterInterest.contact_id == contact_id)
+            .order_by(Match.recommended_at.desc())
+            .limit(limit)
+        )
+    ).all()
+
+    entries: list[ContactTimelineEntry] = []
+    for t in transitions:
+        entries.append(
+            ContactTimelineEntry(
+                type="transition",
+                at=t.occurred_at,
+                title=f"{t.from_state or '—'} → {t.to_state}",
+                detail=t.reason_text,
+                ref_id=str(t.id),
+            )
+        )
+    for a in activity:
+        entries.append(
+            ContactTimelineEntry(
+                type="activity",
+                at=a.occurred_at,
+                title=a.kind or "note",
+                detail=a.body[:280],
+                ref_id=str(a.id),
+            )
+        )
+    for m, name in matches:
+        entries.append(
+            ContactTimelineEntry(
+                type="match",
+                at=m.recommended_at,
+                title=f"Match → {name} ({m.status})",
+                detail=m.decision_reason_text,
+                ref_id=str(m.id),
+            )
+        )
+    entries.sort(key=lambda e: e.at, reverse=True)
+    return ContactTimelineResponse(items=entries[:limit])
+
+
+@router.post(
+    "/{contact_id}/activity",
+    response_model=ContactActivityRow,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_contact_note(
+    contact_id: uuid.UUID,
+    body: ContactNoteCreate,
+    db: DbSession,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactActivityRow:
+    """Write a staff note into ``activity_log`` (kind defaults to ``note``).
+    No outbox event — an internal note is not a domain state change."""
+    await _require_contact(db, contact_id)
+    user, _roles = user_with_roles
+    note = ActivityLog(
+        id=uuid.uuid4(),
+        contact_id=contact_id,
+        author_id=user.sub,
+        body=body.body,
+        kind=body.kind,
+        source_system="local",
+        occurred_at=datetime.now(UTC),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return ContactActivityRow.model_validate(note)
+
+
+@router.put("/{contact_id}/assignment", response_model=ContactRead)
+async def assign_contact(
+    contact_id: uuid.UUID,
+    body: ContactAssignmentRequest,
+    db: DbSession,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactRead:
+    """Assign the contact to a staff user (1:1; re-assigning replaces). Omitting
+    ``user_subject_id`` assigns to the caller. Off the contacts row → no version
+    bump."""
+    contact = await _require_contact(db, contact_id)
+    user, _roles = user_with_roles
+    assignee = body.user_subject_id or user.sub
+    asn = (
+        await db.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact_id
+            )
+        )
+    ).scalar_one_or_none()
+    if asn is None:
+        db.add(
+            ContactAssignment(
+                contact_id=contact.id,
+                user_subject_id=assignee,
+                assigned_by=user.sub,
+            )
+        )
+    else:
+        asn.user_subject_id = assignee
+        asn.assigned_by = user.sub
+        asn.assigned_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(contact)
+    return await _contact_read_with_profile(db, contact)
+
+
+@router.delete(
+    "/{contact_id}/assignment", status_code=status.HTTP_204_NO_CONTENT
+)
+async def unassign_contact(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> None:
+    await _require_contact(db, contact_id)
+    await db.execute(
+        delete(ContactAssignment).where(
+            ContactAssignment.contact_id == contact_id
+        )
+    )
+    await db.commit()
 
 
 @router.patch("/{contact_id}", response_model=ContactRead)
@@ -227,40 +623,59 @@ async def patch_contact(
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
+    contact_changed = False
     if "party_kind" in updates:
         contact.party_kind = updates["party_kind"]
+        contact_changed = True
     if "display_name" in updates:
         contact.display_name = updates["display_name"]
-    # NOTE: adopter_status / facilitator_status were intentionally removed
-    # from ContactPatch in F5: status mutations must flow through the
-    # state-machine entrypoints (transition_adopter / transition_facilitator)
-    # to enforce role checks, reason-code validation, and the audit row.
-    # A follow-up unit (U7) will add ``POST /v1/contacts/{id}/transition``;
-    # until then, this PATCH endpoint covers display_name / party_kind only.
-    contact.updated_at = now
+        contact_changed = True
+    # adopter_status / facilitator_status are intentionally NOT patchable here
+    # (F5): status mutations flow through POST /v1/contacts/{id}/transition so
+    # role checks, reason codes, and the audit row are enforced.
 
-    payload = {
-        "event": EVENT_CONTACT_UPDATED,
-        "schema_version": "jp.adopt.v1",
-        "timestamp": now.isoformat(),
-        "contact_id": str(contact.id),
-        "data": {
-            "display_name": contact.display_name,
-            "party_kind": contact.party_kind,
-            "adopter_status": contact.adopter_status,
-            "facilitator_status": contact.facilitator_status,
-        },
-    }
-    # Route via emit_outbox so bulk-import paths can suppress this event
-    # under their summary; outside suppression, this writes a normal Outbox
-    # row (preserving the previous behavior).
-    emit_outbox(
-        db,
-        event_type=EVENT_CONTACT_UPDATED,
-        payload=payload,
-    )
+    # U9: adoption-profile edits upsert the 1:1 contact_profile row. Kept off
+    # the Contact row so they don't bump Contact.version (the optimistic-lock
+    # column the match/transition flows gate on).
+    if body.profile is not None:
+        profile_updates = body.profile.model_dump(exclude_unset=True)
+        # Don't materialize an empty contact_profile row on a no-op PATCH —
+        # that would make a profile look "present" with no data behind it.
+        if profile_updates:
+            prof = (
+                await db.execute(
+                    select(ContactProfile).where(
+                        ContactProfile.contact_id == contact.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if prof is None:
+                prof = ContactProfile(id=uuid.uuid4(), contact_id=contact.id)
+                db.add(prof)
+            for field_name, value in profile_updates.items():
+                setattr(prof, field_name, value)
+
+    # Only stamp + emit a contact.updated event when contact-level fields moved.
+    if contact_changed:
+        contact.updated_at = now
+        emit_outbox(
+            db,
+            event_type=EVENT_CONTACT_UPDATED,
+            payload={
+                "event": EVENT_CONTACT_UPDATED,
+                "schema_version": "jp.adopt.v1",
+                "timestamp": now.isoformat(),
+                "contact_id": str(contact.id),
+                "data": {
+                    "display_name": contact.display_name,
+                    "party_kind": contact.party_kind,
+                    "adopter_status": contact.adopter_status,
+                    "facilitator_status": contact.facilitator_status,
+                },
+            },
+        )
 
     await db.commit()
     await db.refresh(contact)
-    return ContactRead.model_validate(contact)
+    return await _contact_read_with_profile(db, contact)
