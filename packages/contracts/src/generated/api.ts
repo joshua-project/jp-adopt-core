@@ -498,7 +498,10 @@ export interface paths {
         put?: never;
         /**
          * Grant User Role
-         * @description Grant a platform role to an Entra OID. Idempotent on the composite PK.
+         * @description Grant a platform role to an Entra OID. Idempotent on the composite PK:
+         *     re-granting an existing (subject, role) pair returns 201 with the existing
+         *     row and does NOT emit a second outbox event (the outbox represents real
+         *     state changes, not request attempts).
          */
         post: operations["grant_user_role_v1_admin_user_roles_post"];
         delete?: never;
@@ -2792,7 +2795,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -285,13 +285,17 @@ async def list_user_roles(
 @router.post(
     "/v1/admin/user-roles",
     response_model=UserRoleRead,
+    status_code=status.HTTP_201_CREATED,
 )
 async def grant_user_role(
     body: UserRoleGrantRequest,
     db: DbSession,
     actor: Annotated[tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)],
 ) -> UserRoleRead:
-    """Grant a platform role to an Entra OID. Idempotent on the composite PK."""
+    """Grant a platform role to an Entra OID. Idempotent on the composite PK:
+    re-granting an existing (subject, role) pair returns 201 with the existing
+    row and does NOT emit a second outbox event (the outbox represents real
+    state changes, not request attempts)."""
     user, _roles = actor
     role = await db.get(Role, body.role_id)
     if role is None:
@@ -303,7 +307,7 @@ async def grant_user_role(
             },
         )
 
-    await db.execute(
+    insert_result = await db.execute(
         pg_insert(UserRole)
         .values(
             user_subject_id=body.user_subject_id,
@@ -313,16 +317,21 @@ async def grant_user_role(
             index_elements=["user_subject_id", "role_id"],
         )
     )
-    emit_outbox(
-        db,
-        event_type="admin.role.granted",
-        payload={
-            "actor_subject_id": user.sub,
-            "target_subject_id": body.user_subject_id,
-            "role_id": str(role.id),
-            "role_name": role.name,
-        },
-    )
+    # rowcount is 0 when the (subject, role) row already existed and ON CONFLICT
+    # absorbed the insert. Only emit when we actually changed state, so the
+    # audit log reflects real grants — not duplicate POSTs from a refresh or
+    # a retry.
+    if insert_result.rowcount > 0:
+        emit_outbox(
+            db,
+            event_type="admin.role.granted",
+            payload={
+                "actor_subject_id": user.sub,
+                "target_subject_id": body.user_subject_id,
+                "role_id": str(role.id),
+                "role_name": role.name,
+            },
+        )
     await db.commit()
 
     read = await _user_role_read(

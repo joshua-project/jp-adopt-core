@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 
 import type { paths } from "@jp-adopt/contracts";
 
-import { ApiError, apiFetch } from "../lib/api-client";
+import { ApiError, apiFetch, formatApiError } from "../lib/api-client";
 import { useApiContext } from "../lib/useApiContext";
 
 type UserRoleListResponse =
@@ -12,23 +12,7 @@ type UserRoleListResponse =
 type RoleListResponse =
   paths["/v1/admin/roles"]["get"]["responses"]["200"]["content"]["application/json"];
 type UserRoleRead =
-  paths["/v1/admin/user-roles"]["post"]["responses"]["200"]["content"]["application/json"];
-
-function formatApiError(e: unknown): string {
-  if (e instanceof ApiError) {
-    const body =
-      typeof e.body === "object" && e.body !== null && "detail" in e.body
-        ? (e.body as { detail: unknown }).detail
-        : null;
-    if (typeof body === "object" && body !== null && "code" in body) {
-      return `${(body as { code: string }).code}: ${
-        (body as { message?: string }).message ?? e.message
-      }`;
-    }
-    return e.message;
-  }
-  return e instanceof Error ? e.message : "Request failed";
-}
+  paths["/v1/admin/user-roles"]["post"]["responses"]["201"]["content"]["application/json"];
 
 export function AdminUserRoles() {
   const ctx = useApiContext();

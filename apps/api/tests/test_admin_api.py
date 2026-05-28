@@ -305,7 +305,7 @@ async def test_grant_user_role_happy_path(
         },
         headers=_auth_headers(),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     body = r.json()
     assert body["user_subject_id"] == user_sub
     assert body["role_name"] == "facilitator"
@@ -331,9 +331,12 @@ async def test_grant_user_role_happy_path(
 
 
 @pytest.mark.asyncio
-async def test_grant_user_role_idempotent_emits_two_outbox_rows(
+async def test_grant_user_role_idempotent_emits_single_outbox_row(
     client: TestClient, session: AsyncSession
 ) -> None:
+    """Re-granting an existing (subject, role) pair returns 201 with the
+    existing row but does NOT emit a second outbox event — the audit log
+    represents real state changes, not request attempts."""
     user_sub = str(uuid.uuid4())
     payload = {
         "user_subject_id": user_sub,
@@ -345,8 +348,8 @@ async def test_grant_user_role_idempotent_emits_two_outbox_rows(
     r2 = client.post(
         "/v1/admin/user-roles", json=payload, headers=_auth_headers()
     )
-    assert r1.status_code == 200, r1.text
-    assert r2.status_code == 200, r2.text
+    assert r1.status_code == 201, r1.text
+    assert r2.status_code == 201, r2.text
     rows = (
         await session.execute(
             select(UserRole).where(UserRole.user_subject_id == user_sub)
@@ -362,7 +365,7 @@ async def test_grant_user_role_idempotent_emits_two_outbox_rows(
         ).scalars().all()
         if o.payload_json.get("target_subject_id") == user_sub
     ]
-    assert len(granted_events) >= 2
+    assert len(granted_events) == 1
     await session.execute(
         delete(UserRole).where(UserRole.user_subject_id == user_sub)
     )

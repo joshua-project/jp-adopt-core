@@ -1948,7 +1948,7 @@
           "admin"
         ],
         "summary": "Grant User Role",
-        "description": "Grant a platform role to an Entra OID. Idempotent on the composite PK.",
+        "description": "Grant a platform role to an Entra OID. Idempotent on the composite PK:\nre-granting an existing (subject, role) pair returns 201 with the existing\nrow and does NOT emit a second outbox event (the outbox represents real\nstate changes, not request attempts).",
         "operationId": "grant_user_role_v1_admin_user_roles_post",
         "parameters": [
           {
@@ -1979,7 +1979,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
