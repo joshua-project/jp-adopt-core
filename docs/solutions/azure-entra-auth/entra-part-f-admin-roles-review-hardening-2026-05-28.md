@@ -138,4 +138,4 @@ Accepted by design (not changed in the review pass):
 - `docs/solutions/azure-entra-auth/v2-token-aud-is-appid-not-uri-2026-05-26.md` — API token `aud` after sign-in
 - `docs/solutions/architecture-patterns/two-app-reg-pattern-spa-plus-api-entra-2026-05-28.md` — SPA + API app registration pattern
 - GitHub: [#76](https://github.com/joshua-project/jp-adopt-core/issues/76), PR #83
-- **Stale runbook:** `docs/runbooks/multi-idp-b2c.md` still says staff add is deferred Part F / Alembic-only — consider `/ce-compound-refresh multi-idp-b2c` to point at `/admin/users`
+- `docs/runbooks/multi-idp-b2c.md` — multi-IdP architecture; staff role ops via `/admin/users`
