@@ -132,7 +132,7 @@ function extractErrorMessage(body: unknown, status: number): string {
 }
 
 export interface ApiRequestInit {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Will be JSON.stringify'd if not already a string. */
   body?: unknown;
   /** Additional headers merged on top of the default Authorization + Content-Type. */
