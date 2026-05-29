@@ -31,6 +31,7 @@ import logging
 import re
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -73,6 +74,38 @@ router = APIRouter(prefix="/v1/intake", tags=["intake"])
 INTAKE_MAX_BODY_BYTES = 64 * 1024
 
 EVENT_SUBMISSION_RECEIVED = "jp.adopt.v1.submission.received"
+
+SOURCE_SYSTEM_FORMS = "jp-adopt-forms"
+
+
+@dataclass
+class IntakeOutcome:
+    """Plain result from :func:`process_adoption_payload` /
+    :func:`process_facilitation_payload`. HTTP wrappers JSON-encode this;
+    batch importers (forms-etl) consume it directly."""
+
+    contact_id: uuid.UUID
+    created: bool
+    interest_ids: list[uuid.UUID]
+    was_blocked: bool
+    submission_id: uuid.UUID
+
+
+class IntakeValidationError(Exception):
+    """Raised when intake payload fails validation (mirrors HTTP 400 paths)."""
+
+    def __init__(
+        self,
+        *,
+        code: str = "validation_failed",
+        message: str | None = None,
+        fields: dict[str, list[str]] | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.fields = fields
+        super().__init__(message or code)
+
 
 # Loose email shape gate before we hand off to email-validator (which is
 # strict but slow on garbage input). RFC 5321 caps local-part at 64 + 1 +
@@ -296,11 +329,23 @@ async def _resolve_contact(
     newsletter_opt_in: bool,
     country_code: str | None,
     language_codes: list[str] | None,
+    override_created_at: datetime | None = None,
+    source_system: str | None = None,
+    source_id: str | None = None,
 ) -> tuple[Contact, bool]:
     """Find an existing contact by normalized email, or create one. Returns
     (contact, created). Existing contacts are touched (display_name update
     intentionally NOT applied — the form is owner of canonical display_name
-    only on first sight; preserve any staff edits made post-creation)."""
+    only on first sight; preserve any staff edits made post-creation).
+
+    ``override_created_at`` is import-only: when supplied on the insert branch,
+    it becomes the new contact's ``created_at`` so historical rows don't appear
+    as if they arrived today. Existing contacts keep their original timestamp.
+
+    ``source_system`` / ``source_id`` are set only on insert (forms-etl uses
+    ``jp-adopt-forms`` + the forms DB UUID for idempotency via the partial
+    unique index). Live HTTP intake leaves both ``None``.
+    """
     existing = (
         await session.execute(
             select(Contact).where(Contact.email_normalized == email_normalized)
@@ -315,18 +360,25 @@ async def _resolve_contact(
 
     initial_status = "new" if party_kind == "adopter" else None
     initial_fac_status = "new" if party_kind == "facilitator" else None
-    contact = Contact(
-        id=uuid.uuid4(),
-        party_kind=party_kind,
-        display_name=display_name,
-        adopter_status=initial_status,
-        facilitator_status=initial_fac_status,
-        email_normalized=email_normalized,
-        origin=origin,
-        newsletter_opt_in=newsletter_opt_in,
-        country_code=country_code,
-        language_codes=language_codes,
-    )
+    contact_kwargs: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "party_kind": party_kind,
+        "display_name": display_name,
+        "adopter_status": initial_status,
+        "facilitator_status": initial_fac_status,
+        "email_normalized": email_normalized,
+        "origin": origin,
+        "newsletter_opt_in": newsletter_opt_in,
+        "country_code": country_code,
+        "language_codes": language_codes,
+    }
+    if override_created_at is not None:
+        contact_kwargs["created_at"] = override_created_at
+    if source_system is not None:
+        contact_kwargs["source_system"] = source_system
+    if source_id is not None:
+        contact_kwargs["source_id"] = source_id
+    contact = Contact(**contact_kwargs)
     session.add(contact)
     await session.flush()
     return contact, True
@@ -422,19 +474,22 @@ async def _create_interests(
     return interest_ids
 
 
-async def _process_adoption(
+async def process_adoption_payload(
     session: AsyncSession,
     *,
     payload: AdoptionIntake,
     settings: Settings,
-    request_id: str,
-) -> JSONResponse:
+    request_id: str | None = None,
+    override_created_at: datetime | None = None,
+    source_system: str | None = None,
+    source_id: str | None = None,
+) -> IntakeOutcome:
+    """Canonical adoption intake logic. Raises :class:`IntakeValidationError`
+    on validation failures; returns :class:`IntakeOutcome` on success or when
+    the contact is blocked (anti-enumeration)."""
     email_normalized = normalize_email(payload.email)
     if not _EMAIL_SANITY.match(email_normalized):
-        return _error_response(
-            status.HTTP_400_BAD_REQUEST,
-            code="validation_failed",
-            request_id=request_id,
+        raise IntakeValidationError(
             fields={"email": ["Email failed sanity check"]},
         )
 
@@ -447,6 +502,9 @@ async def _process_adoption(
         newsletter_opt_in=payload.newsletter_opt_in,
         country_code=payload.country_code,
         language_codes=payload.language_codes,
+        override_created_at=override_created_at,
+        source_system=source_system,
+        source_id=source_id,
     )
 
     if contact.adopter_status == "do_not_engage":
@@ -493,12 +551,12 @@ async def _process_adoption(
         fabricated_interest_ids = [
             uuid.uuid4() for _ in (payload.fpg_selections or [None])
         ]
-        return _success_response(
-            status.HTTP_201_CREATED,
-            submission_id=uuid.uuid4(),
-            request_id=request_id,
+        return IntakeOutcome(
             contact_id=contact.id,
+            created=created,
             interest_ids=fabricated_interest_ids,
+            was_blocked=True,
+            submission_id=uuid.uuid4(),
         )
 
     # Multi-FPG: one Contact + N AdopterInterest rows. Empty list → mark
@@ -520,10 +578,7 @@ async def _process_adoption(
     else:
         missing = await _unknown_people_id3s(session, payload.fpg_selections)
         if missing:
-            return _error_response(
-                status.HTTP_400_BAD_REQUEST,
-                code="validation_failed",
-                request_id=request_id,
+            raise IntakeValidationError(
                 message=f"Unknown people_id3 codes: {missing}",
                 fields={
                     "fpg_selections": [
@@ -559,28 +614,57 @@ async def _process_adoption(
         payload=outbox_payload,
     )
 
-    return _success_response(
-        status.HTTP_201_CREATED,
-        submission_id=submission_id,
-        request_id=request_id,
+    return IntakeOutcome(
         contact_id=contact.id,
+        created=created,
         interest_ids=interest_ids,
+        was_blocked=False,
+        submission_id=submission_id,
     )
 
 
-async def _process_facilitation(
+async def _process_adoption(
+    session: AsyncSession,
+    *,
+    payload: AdoptionIntake,
+    settings: Settings,
+    request_id: str,
+) -> JSONResponse:
+    try:
+        outcome = await process_adoption_payload(
+            session, payload=payload, settings=settings, request_id=request_id
+        )
+    except IntakeValidationError as exc:
+        return _error_response(
+            status.HTTP_400_BAD_REQUEST,
+            code=exc.code,
+            request_id=request_id,
+            message=exc.message,
+            fields=exc.fields,
+        )
+    return _success_response(
+        status.HTTP_201_CREATED,
+        submission_id=outcome.submission_id,
+        request_id=request_id,
+        contact_id=outcome.contact_id,
+        interest_ids=outcome.interest_ids,
+    )
+
+
+async def process_facilitation_payload(
     session: AsyncSession,
     *,
     payload: FacilitationIntake,
     settings: Settings,
-    request_id: str,
-) -> JSONResponse:
+    request_id: str | None = None,
+    override_created_at: datetime | None = None,
+    source_system: str | None = None,
+    source_id: str | None = None,
+) -> IntakeOutcome:
+    """Canonical facilitation intake logic. See :func:`process_adoption_payload`."""
     email_normalized = normalize_email(payload.email)
     if not _EMAIL_SANITY.match(email_normalized):
-        return _error_response(
-            status.HTTP_400_BAD_REQUEST,
-            code="validation_failed",
-            request_id=request_id,
+        raise IntakeValidationError(
             fields={"email": ["Email failed sanity check"]},
         )
 
@@ -593,6 +677,9 @@ async def _process_facilitation(
         newsletter_opt_in=payload.newsletter_opt_in,
         country_code=payload.country_code,
         language_codes=payload.language_codes,
+        override_created_at=override_created_at,
+        source_system=source_system,
+        source_id=source_id,
     )
 
     if contact.facilitator_status == "do_not_engage":
@@ -623,12 +710,12 @@ async def _process_facilitation(
         # forced synthetic row here (unlike the adoption potential_adopter
         # path, which always writes one).
         fabricated_interest_ids = [uuid.uuid4() for _ in payload.fpg_selections]
-        return _success_response(
-            status.HTTP_201_CREATED,
-            submission_id=uuid.uuid4(),
-            request_id=request_id,
+        return IntakeOutcome(
             contact_id=contact.id,
+            created=created,
             interest_ids=fabricated_interest_ids,
+            was_blocked=True,
+            submission_id=uuid.uuid4(),
         )
 
     # U12: facilitators select FPGs too — one AdopterInterest row per pick,
@@ -636,10 +723,7 @@ async def _process_facilitation(
     # columns carrying the per-FPG answers.
     missing = await _unknown_people_id3s(session, payload.fpg_selections)
     if missing:
-        return _error_response(
-            status.HTTP_400_BAD_REQUEST,
-            code="validation_failed",
-            request_id=request_id,
+        raise IntakeValidationError(
             message=f"Unknown people_id3 codes: {missing}",
             fields={
                 "fpg_selections": [
@@ -674,12 +758,40 @@ async def _process_facilitation(
         payload=outbox_payload,
     )
 
+    return IntakeOutcome(
+        contact_id=contact.id,
+        created=created,
+        interest_ids=interest_ids,
+        was_blocked=False,
+        submission_id=submission_id,
+    )
+
+
+async def _process_facilitation(
+    session: AsyncSession,
+    *,
+    payload: FacilitationIntake,
+    settings: Settings,
+    request_id: str,
+) -> JSONResponse:
+    try:
+        outcome = await process_facilitation_payload(
+            session, payload=payload, settings=settings, request_id=request_id
+        )
+    except IntakeValidationError as exc:
+        return _error_response(
+            status.HTTP_400_BAD_REQUEST,
+            code=exc.code,
+            request_id=request_id,
+            message=exc.message,
+            fields=exc.fields,
+        )
     return _success_response(
         status.HTTP_201_CREATED,
-        submission_id=submission_id,
+        submission_id=outcome.submission_id,
         request_id=request_id,
-        contact_id=contact.id,
-        interest_ids=interest_ids,
+        contact_id=outcome.contact_id,
+        interest_ids=outcome.interest_ids,
     )
 
 
