@@ -19,20 +19,20 @@ Production Postgres currently holds only:
 
 The match queue, contacts list, and pipeline kanban are essentially empty in production. Amy can't meaningfully test the staff UI without real records to triage.
 
-Meanwhile, jp-adopt-forms (separate repo, separate ACA env, separate Postgres) has been accepting public adoption + facilitation submissions into its own `submissions` table (JSONB payloads). Two failure modes leave rows there but not in adopt-core:
+Meanwhile, jp-adopt-forms (separate repo, separate ACA env, separate Postgres) has been accepting public adoption + facilitation submissions into its own normalized tables — `adoption_submissions` + `adoption_fpg_selections`, and `facilitation_submissions` + `facilitation_fpg_selections` (per `jp-adopt-forms/prisma/schema.prisma`; the deviation note at the bottom of this plan captures the discovery — the plan originally assumed a single JSONB `submissions` table). Two failure modes leave rows there but not in adopt-core:
 
 1. Submissions made before adopt-core's `/v1/intake/*` endpoints were wired into the forms client.
 2. Submissions where the live POST to adopt-core failed (network, schema mismatch, transient API error) and the forms-side row was preserved without a successful round-trip.
 
-The fix is the same in both cases: a re-runnable batch importer that drains the forms `submissions` table into adopt-core via the existing intake processing path, idempotently, with no drips or webhooks firing for historical rows.
+The fix is the same in both cases: a re-runnable batch importer that drains these forms tables into adopt-core via the existing intake processing path, idempotently, with no drips or webhooks firing for historical rows.
 
 ## Scope
 
 ### In scope
 
 - A new `forms-etl` CLI under `apps/etl/`, parallel to the existing `dt-etl`. Shares the `EtlRun`, `MigrationConflict`, and `outbox_suppressed()` infrastructure.
-- Read-only source connection to jp-adopt-forms' Postgres `submissions` table (and `submission_audit` if needed for created_at provenance).
-- Translation from a forms submission JSONB row to the existing `AdoptionIntake` / `FacilitationIntake` Pydantic schemas.
+- Read-only source connection to jp-adopt-forms' Postgres — reads both `adoption_submissions` (joined to `adoption_fpg_selections`) and `facilitation_submissions` (joined to `facilitation_fpg_selections`), merged by `created_at`.
+- Translation from a forms submission row to the existing `AdoptionIntake` / `FacilitationIntake` Pydantic schemas — field mapping mirrors `jp-adopt-forms/src/lib/core-client.ts`.
 - In-process call to the canonical intake processing logic (`_process_adoption` / `_process_facilitation`) wrapped in `outbox_suppressed()`. Reuse, do not reimplement, per the issue's mandate.
 - Preserve forms' `created_at` on the resulting `Contact` row so historical adopters don't flood the match queue as if they arrived today and drip eligibility windows compute correctly.
 - Idempotency via the existing `uq_contacts_source_system_source_id` partial unique index — re-running the importer is safe.

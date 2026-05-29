@@ -508,6 +508,30 @@ async def process_adoption_payload(
     )
 
     if contact.adopter_status == "do_not_engage":
+        # Anti-enumeration: log, return success-shaped response with NO
+        # submission written so the caller can't probe blocklist membership.
+        #
+        # N1: must return 201 (matching the accepted-first-call status) so the
+        # status code itself doesn't reveal that the contact is blocked. F14
+        # introduced 201 for first-successful processing; if we return 200 here
+        # the blocked path becomes a deterministic do_not_engage oracle
+        # (201 = real, 200 = blocked).
+        #
+        # N1 body-shape oracle: accepted submissions always return
+        # ``len(interestIds) >= 1`` (one row per fpg_selection, or one synthetic
+        # row when fpg_selections is empty per the potential_adopter path).
+        # A blocked response that returned ``interestIds=[]`` would therefore
+        # leak blocklist membership through the response body even after the
+        # status-code parity fix. Fabricate ephemeral UUIDs to mirror the
+        # accepted-shape — they are NEVER persisted (no AdopterInterest row is
+        # written for blocked contacts) and used only to defeat the body-shape
+        # oracle.
+        #
+        # F15: persist only a PII-light fingerprint of the submission rather
+        # than the raw form payload. Storing the full body indefinitely is a
+        # GDPR/retention liability — the operator-visible audit only needs
+        # enough to recognize the blocked attempt. A future cleanup task
+        # should also apply a TTL purge (~90d) to this table.
         session.add(
             SubmissionBlocked(
                 contact_id=contact.id,
@@ -521,6 +545,9 @@ async def process_adoption_payload(
                 },
             )
         )
+        # Mirror the accepted-path interest_ids LENGTH so body shape is
+        # indistinguishable: one synthetic id per fpg_selection, or one when the
+        # caller submitted no selections (matching the no_fpg branch below).
         fabricated_interest_ids = [
             uuid.uuid4() for _ in (payload.fpg_selections or [None])
         ]
@@ -532,6 +559,9 @@ async def process_adoption_payload(
             submission_id=uuid.uuid4(),
         )
 
+    # Multi-FPG: one Contact + N AdopterInterest rows. Empty list → mark
+    # contact as `potential_adopter` (R2: wants help selecting), insert ONE
+    # interest with people_id3=NULL so downstream matching has a record to triage.
     interest_ids: list[uuid.UUID] = []
     if not payload.fpg_selections:
         contact.adopter_status = "potential_adopter"
@@ -560,6 +590,7 @@ async def process_adoption_payload(
             session, contact, payload.fpg_selections
         )
 
+    # U10: persist the submitted adoption profile + consent records.
     await _apply_profile(session, contact, payload.profile)
     await _write_consents(session, contact, payload.consents)
 
@@ -652,6 +683,11 @@ async def process_facilitation_payload(
     )
 
     if contact.facilitator_status == "do_not_engage":
+        # N1: return 201 (not 200) so status code doesn't act as a
+        # do_not_engage oracle. See the adoption side for the full
+        # anti-enumeration rationale.
+        # See F15 note above on the adoption side: only the minimal
+        # fingerprint is persisted (not the raw payload).
         session.add(
             SubmissionBlocked(
                 contact_id=contact.id,
@@ -665,6 +701,14 @@ async def process_facilitation_payload(
                 },
             )
         )
+        # N1 body-shape oracle (U12): now that an accepted facilitation
+        # response carries one interest id per fpg_selection, a blocked
+        # response with interest_ids=[] would leak blocklist membership when
+        # the caller submitted selections. Fabricate ephemeral (never
+        # persisted) ids matching the submitted count to keep the shape
+        # indistinguishable. Empty selections → [] on both paths, so no
+        # forced synthetic row here (unlike the adoption potential_adopter
+        # path, which always writes one).
         fabricated_interest_ids = [uuid.uuid4() for _ in payload.fpg_selections]
         return IntakeOutcome(
             contact_id=contact.id,
@@ -674,6 +718,9 @@ async def process_facilitation_payload(
             submission_id=uuid.uuid4(),
         )
 
+    # U12: facilitators select FPGs too — one AdopterInterest row per pick,
+    # with the facilitation_services / network_services / engagement_status
+    # columns carrying the per-FPG answers.
     missing = await _unknown_people_id3s(session, payload.fpg_selections)
     if missing:
         raise IntakeValidationError(
@@ -686,6 +733,7 @@ async def process_facilitation_payload(
         )
     interest_ids = await _create_interests(session, contact, payload.fpg_selections)
 
+    # U10: persist the submitted profile + consent records (facilitation).
     await _apply_profile(session, contact, payload.profile)
     await _write_consents(session, contact, payload.consents)
 

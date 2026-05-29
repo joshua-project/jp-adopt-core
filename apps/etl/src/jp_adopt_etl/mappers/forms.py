@@ -1,8 +1,10 @@
 """Map jp-adopt-forms DB rows → adopt-core intake payloads.
 
 Field mapping mirrors ``jp-adopt-forms/src/lib/core-client.ts`` (the live
-dual-write path). The forms schema uses ``adoption_submissions`` and
-``facilitation_submissions`` — not a single JSONB ``submissions`` table.
+POST path from forms to adopt-core; forms also persists each submission
+locally, which is the source this importer reads). The forms schema uses
+``adoption_submissions`` and ``facilitation_submissions`` — not a single
+JSONB ``submissions`` table.
 """
 
 from __future__ import annotations
