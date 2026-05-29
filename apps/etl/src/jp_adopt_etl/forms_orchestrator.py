@@ -22,7 +22,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from jp_adopt_api.config import Settings, get_settings
-from jp_adopt_api.models import EtlRun, MigrationConflict
+from jp_adopt_api.models import Contact, EtlRun, MigrationConflict
+from sqlalchemy import select
 from jp_adopt_api.outbox_suppression import outbox_suppressed
 from jp_adopt_api.routers.intake import (
     SOURCE_SYSTEM_FORMS,
@@ -86,6 +87,19 @@ async def etl_run(
     finally:
         row.ended_at = datetime.now(UTC)
         await session.flush()
+
+
+async def _already_imported(session: AsyncSession, source_id: str) -> bool:
+    """True when this forms submission was imported in a prior run."""
+    row = await session.execute(
+        select(Contact.id)
+        .where(
+            Contact.source_system == SOURCE_SYSTEM,
+            Contact.source_id == source_id,
+        )
+        .limit(1)
+    )
+    return row.scalar_one_or_none() is not None
 
 
 async def _record_conflict(
@@ -171,6 +185,7 @@ async def _process_rows(
         "blocked": 0,
         "mapping_failed": 0,
         "skipped_conflict": 0,
+        "skipped_already_imported": 0,
         "max_created_at": None,
     }
     for row in rows:
@@ -195,6 +210,18 @@ async def _process_rows(
                     "mapping_failed source_id=%s reason=%s",
                     result.source_id,
                     result.reason,
+                )
+            continue
+
+        if await _already_imported(session, result.source_id):
+            counts["skipped_already_imported"] = (
+                int(counts["skipped_already_imported"]) + 1
+            )
+            if verbose:
+                logger.info(
+                    "skipped_already_imported form_type=%s source_id=%s",
+                    result.form_type,
+                    result.source_id,
                 )
             continue
 
@@ -287,13 +314,17 @@ async def run_forms_etl(
 
                 run_row.rows_in = int(counts["rows_in"])
                 run_row.rows_out_inserted = int(counts["imported"])
-                run_row.rows_out_skipped = int(counts["blocked"]) + int(
-                    counts["skipped_conflict"]
+                run_row.rows_out_skipped = (
+                    int(counts["blocked"])
+                    + int(counts["skipped_conflict"])
+                    + int(counts["skipped_already_imported"])
                 )
                 run_row.rows_in_conflict = int(counts["mapping_failed"]) + int(
                     counts["skipped_conflict"]
                 )
-                run_row.errors = int(counts["mapping_failed"])
+                run_row.errors = int(counts["mapping_failed"]) + int(
+                    counts["skipped_conflict"]
+                )
 
                 max_seen = counts["max_created_at"]
                 if isinstance(max_seen, datetime):
@@ -312,6 +343,14 @@ async def run_forms_etl(
     forms_engine.dispose()
     await async_engine.dispose()
     return summary
+
+
+def _parse_watermark(value: str) -> datetime:
+    """Parse CLI watermark to UTC, preserving the instant for offset-aware input."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -337,7 +376,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--watermark",
-        type=lambda s: datetime.fromisoformat(s).replace(tzinfo=UTC),
+        type=_parse_watermark,
         default=None,
         help="ISO 8601 timestamp; only rows with created_at > watermark are imported",
     )

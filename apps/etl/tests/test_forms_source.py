@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from jp_adopt_etl.forms_source import _merge_by_created_at, iter_submissions
+from jp_adopt_etl.forms_source import _merge_by_created_at, _merge_streams, iter_submissions
 
 
 def test_merge_by_created_at_interleaves() -> None:
@@ -17,6 +17,15 @@ def test_merge_by_created_at_interleaves() -> None:
     adoption = [{"form_type": "adoption", "created_at": t2, "id": "a"}]
     facilitation = [{"form_type": "facilitation", "created_at": t1, "id": "f"}]
     merged = _merge_by_created_at(adoption, facilitation)
+    assert [r["id"] for r in merged] == ["f", "a"]
+
+
+def test_merge_streams_interleaves_without_materializing() -> None:
+    t1 = datetime(2024, 1, 1, tzinfo=UTC)
+    t2 = datetime(2024, 1, 2, tzinfo=UTC)
+    adoption = iter([{"form_type": "adoption", "created_at": t2, "id": "a"}])
+    facilitation = iter([{"form_type": "facilitation", "created_at": t1, "id": "f"}])
+    merged = list(_merge_streams(adoption, facilitation))
     assert [r["id"] for r in merged] == ["f", "a"]
 
 

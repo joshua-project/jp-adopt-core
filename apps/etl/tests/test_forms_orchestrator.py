@@ -64,9 +64,7 @@ def mock_forms_rows():
     return rows
 
 
-@pytest.fixture(autouse=True)
-def _cleanup(pg_engine, mock_forms_rows):
-    yield
+def _delete_forms_etl_artifacts(pg_engine, mock_forms_rows) -> None:
     with pg_engine.connect() as conn:
         for row in mock_forms_rows:
             conn.execute(
@@ -83,10 +81,15 @@ def _cleanup(pg_engine, mock_forms_rows):
                 ),
                 {"sid": row["id"]},
             )
-        conn.execute(
-            text("DELETE FROM etl_run WHERE table_name = 'submissions'")
-        )
+        conn.execute(text("DELETE FROM etl_run WHERE table_name = 'submissions'"))
         conn.commit()
+
+
+@pytest.fixture(autouse=True)
+def _cleanup(pg_engine, mock_forms_rows):
+    _delete_forms_etl_artifacts(pg_engine, mock_forms_rows)
+    yield
+    _delete_forms_etl_artifacts(pg_engine, mock_forms_rows)
 
 
 @pytest.fixture
@@ -164,6 +167,57 @@ async def test_forms_etl_production(mock_forms_rows, pg_engine) -> None:
             )
         ).all()
         assert len(bulk) >= 1
+    await async_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_forms_etl_idempotent_rerun(mock_forms_rows, pg_engine) -> None:
+    """Second production run with the same source rows skips already-imported."""
+    with patch(
+        "jp_adopt_etl.forms_orchestrator.iter_submissions",
+        return_value=iter(mock_forms_rows),
+    ):
+        first = await run_forms_etl(
+            forms_postgres_url=ETL_TEST_DATABASE_URL,
+            postgres_url=ETL_TEST_DATABASE_URL,
+            mode="production",
+            watermark=None,
+        )
+    assert first["imported"] == 3
+
+    with patch(
+        "jp_adopt_etl.forms_orchestrator.iter_submissions",
+        return_value=iter(mock_forms_rows),
+    ):
+        second = await run_forms_etl(
+            forms_postgres_url=ETL_TEST_DATABASE_URL,
+            postgres_url=ETL_TEST_DATABASE_URL,
+            mode="production",
+            watermark=None,
+        )
+    assert second["imported"] == 0
+    assert second["skipped_already_imported"] == 3
+
+    async_engine = create_async_engine(
+        ETL_TEST_DATABASE_URL.replace("+psycopg2", "+asyncpg")
+    )
+    async with async_engine.connect() as conn:
+        contacts = (
+            await conn.execute(
+                select(Contact).where(Contact.source_system == "jp-adopt-forms")
+            )
+        ).all()
+        assert len(contacts) == 3
+        interest_count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM adopter_interest ai "
+                    "JOIN contacts c ON c.id = ai.contact_id "
+                    "WHERE c.source_system = 'jp-adopt-forms'"
+                )
+            )
+        ).scalar_one()
+        assert interest_count == 3
     await async_engine.dispose()
 
 

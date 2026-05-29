@@ -113,6 +113,7 @@ def _merge_by_created_at(
     adoption_rows: list[dict[str, Any]],
     facilitation_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Merge pre-materialized rows (used in unit tests)."""
     merged: list[dict[str, Any]] = []
     i = j = 0
     while i < len(adoption_rows) or j < len(facilitation_rows):
@@ -128,6 +129,25 @@ def _merge_by_created_at(
     return merged
 
 
+def _merge_streams(
+    adoption_iter: Iterator[dict[str, Any]],
+    facilitation_iter: Iterator[dict[str, Any]],
+) -> Iterator[dict[str, Any]]:
+    """Merge two sorted submission streams by ``created_at`` without buffering."""
+    adoption_next = next(adoption_iter, None)
+    facilitation_next = next(facilitation_iter, None)
+    while adoption_next is not None or facilitation_next is not None:
+        if facilitation_next is None or (
+            adoption_next is not None
+            and adoption_next["created_at"] <= facilitation_next["created_at"]
+        ):
+            yield adoption_next
+            adoption_next = next(adoption_iter, None)
+        else:
+            yield facilitation_next
+            facilitation_next = next(facilitation_iter, None)
+
+
 def iter_submissions(
     conn: Connection,
     *,
@@ -141,15 +161,13 @@ def iter_submissions(
     key), ``created_at``, ``updated_at``, ``submission`` (full row JSON),
     and ``fpg_selections`` (list of selection dicts).
     """
-    adoption = list(
-        _iter_query_rows(conn, _ADOPTION_SQL, watermark=watermark, batch_size=batch_size)
+    adoption_iter = _iter_query_rows(
+        conn, _ADOPTION_SQL, watermark=watermark, batch_size=batch_size
     )
-    facilitation = list(
-        _iter_query_rows(
-            conn, _FACILITATION_SQL, watermark=watermark, batch_size=batch_size
-        )
+    facilitation_iter = _iter_query_rows(
+        conn, _FACILITATION_SQL, watermark=watermark, batch_size=batch_size
     )
-    yield from _merge_by_created_at(adoption, facilitation)
+    yield from _merge_streams(adoption_iter, facilitation_iter)
 
 
 def fetch_max_created_at(conn: Connection) -> datetime | None:
