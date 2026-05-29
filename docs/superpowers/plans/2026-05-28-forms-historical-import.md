@@ -269,7 +269,7 @@ The fix is the same in both cases: a re-runnable batch importer that drains the 
 
 ## Open questions deferred to implementation
 
-- **Exact forms `submissions` table column names and JSONB shape.** This plan assumes `id`, `form_type`, `payload`, `created_at`, `updated_at`. U3's mapper is where this gets pinned down — read a real row first, then code the mapper. If the columns differ, adjust the mapper and U2's projection list; nothing downstream needs to change.
+- **Exact forms `submissions` table column names and JSONB shape.** ~~This plan assumes `id`, `form_type`, `payload`, `created_at`, `updated_at`.~~ **Implemented deviation (2026-05-28):** the real jp-adopt-forms schema uses separate `adoption_submissions` / `facilitation_submissions` tables with normalized FPG selection child tables (see `jp-adopt-forms/prisma/schema.prisma`). U2 reads both via SQL + `json_agg`; U3 maps using the same field logic as `jp-adopt-forms/src/lib/core-client.ts`.
 - **Discrimination signal for Form A vs Form B.** Could be `form_type` enum, could be presence of a key in the JSONB (e.g., `is_facilitator: true`). Implementer picks based on what's actually in the table.
 - **`form_type` values themselves.** The plan assumes "Form A = adoption, Form B = facilitation"; the actual strings in the column (`"adoption"`, `"facilitation"`, `"a"`, `"b"`, etc.) need to be confirmed at U3 time.
 - **Whether `submission_audit` is needed.** Plan assumes only `submissions` is read. If the real `created_at` lives in `submission_audit` (e.g., as the first `state='received'` event), U2's projection grows to include that table.
