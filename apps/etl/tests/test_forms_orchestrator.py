@@ -257,3 +257,57 @@ async def test_mapping_failure_to_migration_conflicts(pg_engine) -> None:
         ).all()
         assert len(conflicts) == 1
     await async_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_helper_exception_isolated_by_savepoint(
+    mock_forms_rows, pg_engine
+) -> None:
+    """When process_adoption_payload raises mid-row, the row is recorded in
+    migration_conflicts and the rest of the import continues — proving the
+    per-row savepoint isolates the failure from the outer transaction."""
+    target_source_id = mock_forms_rows[0]["id"]
+    real_process_adoption = None
+
+    from jp_adopt_etl import forms_orchestrator as orch_module
+
+    real_process_adoption = orch_module.process_adoption_payload
+
+    async def _flaky_process_adoption(session, **kwargs):
+        if kwargs.get("source_id") == target_source_id:
+            raise RuntimeError("simulated helper failure")
+        return await real_process_adoption(session, **kwargs)
+
+    with patch(
+        "jp_adopt_etl.forms_orchestrator.iter_submissions",
+        return_value=iter(mock_forms_rows),
+    ), patch(
+        "jp_adopt_etl.forms_orchestrator.process_adoption_payload",
+        side_effect=_flaky_process_adoption,
+    ):
+        summary = await run_forms_etl(
+            forms_postgres_url=ETL_TEST_DATABASE_URL,
+            postgres_url=ETL_TEST_DATABASE_URL,
+            mode="production",
+            watermark=None,
+        )
+
+    # The failing row goes to skipped_conflict; the other two import cleanly.
+    assert summary["skipped_conflict"] == 1
+    assert summary["imported"] + summary["blocked"] == 2
+
+    async_engine = create_async_engine(
+        ETL_TEST_DATABASE_URL.replace("+psycopg2", "+asyncpg")
+    )
+    async with async_engine.connect() as conn:
+        conflict_types = (
+            await conn.execute(
+                select(MigrationConflict.conflict_type).where(
+                    MigrationConflict.source_id == target_source_id
+                )
+            )
+        ).scalars().all()
+        assert len(conflict_types) == 1
+        assert "processing_error" in conflict_types[0]
+        assert "simulated helper failure" in conflict_types[0]
+    await async_engine.dispose()

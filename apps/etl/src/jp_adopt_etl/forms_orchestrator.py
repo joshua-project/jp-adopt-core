@@ -127,29 +127,38 @@ async def _import_one(
     mapped: MapSuccess,
     settings: Settings,
 ) -> str:
-    """Returns outcome label: imported | blocked | skipped_conflict."""
+    """Returns outcome label: imported | blocked | skipped_conflict.
+
+    The helper call runs inside ``session.begin_nested()`` (a SAVEPOINT) so
+    any exception — including ``sqlalchemy.exc.IntegrityError`` from a
+    concurrent insert or FK race — rolls back ONLY this row's writes. The
+    outer transaction stays alive, and the follow-up ``_record_conflict``
+    call writes its row against a clean session instead of inheriting the
+    poisoned state that an IntegrityError leaves behind.
+    """
     kwargs = {
         "override_created_at": mapped.created_at,
         "source_system": SOURCE_SYSTEM,
         "source_id": mapped.source_id,
     }
     try:
-        if mapped.form_type == "adoption":
-            assert isinstance(mapped.payload, AdoptionIntake)
-            outcome = await process_adoption_payload(
-                session,
-                payload=mapped.payload,
-                settings=settings,
-                **kwargs,
-            )
-        else:
-            assert isinstance(mapped.payload, FacilitationIntake)
-            outcome = await process_facilitation_payload(
-                session,
-                payload=mapped.payload,
-                settings=settings,
-                **kwargs,
-            )
+        async with session.begin_nested():
+            if mapped.form_type == "adoption":
+                assert isinstance(mapped.payload, AdoptionIntake)
+                outcome = await process_adoption_payload(
+                    session,
+                    payload=mapped.payload,
+                    settings=settings,
+                    **kwargs,
+                )
+            else:
+                assert isinstance(mapped.payload, FacilitationIntake)
+                outcome = await process_facilitation_payload(
+                    session,
+                    payload=mapped.payload,
+                    settings=settings,
+                    **kwargs,
+                )
     except IntakeValidationError as exc:
         await _record_conflict(
             session,
@@ -178,7 +187,17 @@ async def _process_rows(
     rows: Iterator[dict[str, Any]],
     settings: Settings,
     verbose: bool,
+    commit_every: int | None = None,
 ) -> dict[str, int | datetime | None]:
+    """Process all rows.
+
+    When ``commit_every`` is set (production runs only), the orchestrator
+    flushes pending writes to disk every N rows so a crash on row 9,500 of
+    10,000 doesn't lose every prior row's progress, and so the outer
+    transaction stays short enough to avoid blocking autovacuum. Dry-runs
+    leave it ``None`` (the caller's outer ``begin_nested`` + rollback is the
+    only correct shape there — any mid-run commit would defeat the dry-run).
+    """
     counts: dict[str, int | datetime | None] = {
         "rows_in": 0,
         "imported": 0,
@@ -188,6 +207,7 @@ async def _process_rows(
         "skipped_already_imported": 0,
         "max_created_at": None,
     }
+    rows_since_commit = 0
     for row in rows:
         counts["rows_in"] = int(counts["rows_in"]) + 1
         created_at = row.get("created_at")
@@ -211,29 +231,37 @@ async def _process_rows(
                     result.source_id,
                     result.reason,
                 )
-            continue
-
-        if await _already_imported(session, result.source_id):
-            counts["skipped_already_imported"] = (
-                int(counts["skipped_already_imported"]) + 1
-            )
-            if verbose:
-                logger.info(
-                    "skipped_already_imported form_type=%s source_id=%s",
-                    result.form_type,
-                    result.source_id,
+            rows_since_commit += 1
+        else:
+            if await _already_imported(session, result.source_id):
+                counts["skipped_already_imported"] = (
+                    int(counts["skipped_already_imported"]) + 1
                 )
-            continue
+                if verbose:
+                    logger.info(
+                        "skipped_already_imported form_type=%s source_id=%s",
+                        result.form_type,
+                        result.source_id,
+                    )
+                # No write happened; nothing to commit for this row.
+            else:
+                label = await _import_one(session, mapped=result, settings=settings)
+                counts[label] = int(counts[label]) + 1
+                if verbose:
+                    logger.info(
+                        "%s form_type=%s source_id=%s",
+                        label,
+                        result.form_type,
+                        result.source_id,
+                    )
+                rows_since_commit += 1
 
-        label = await _import_one(session, mapped=result, settings=settings)
-        counts[label] = int(counts[label]) + 1
-        if verbose:
-            logger.info(
-                "%s form_type=%s source_id=%s",
-                label,
-                result.form_type,
-                result.source_id,
-            )
+        if commit_every is not None and rows_since_commit >= commit_every:
+            await session.commit()
+            rows_since_commit = 0
+            if verbose:
+                logger.info("batch_commit rows=%d", commit_every)
+
     return counts
 
 
@@ -306,6 +334,11 @@ async def run_forms_etl(
                             rows=rows,
                             settings=settings,
                             verbose=verbose,
+                            # Production: flush every batch_size rows so a
+                            # crash mid-run doesn't lose every prior row's
+                            # work and the outer transaction stays short
+                            # enough to avoid blocking autovacuum.
+                            commit_every=batch_size,
                         )
                         ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
                         ctx.metadata["counts"] = {
