@@ -97,16 +97,15 @@ def _iter_query_rows(
     watermark: datetime | None,
     batch_size: int,
 ) -> Iterator[dict[str, Any]]:
+    """Stream rows from the source query. ``batch_size`` becomes the cursor
+    fetch-buffer hint (via ``max_row_buffer``); the loop itself yields one
+    row at a time, no Python-side accumulation."""
     params: dict[str, Any] = {"watermark": watermark}
-    result = conn.execution_options(stream_results=True).execute(text(sql), params)
-    batch: list[dict[str, Any]] = []
+    result = conn.execution_options(
+        stream_results=True, max_row_buffer=batch_size
+    ).execute(text(sql), params)
     for row in result.mappings():
-        batch.append(dict(row))
-        if len(batch) >= batch_size:
-            yield from batch
-            batch = []
-    if batch:
-        yield from batch
+        yield dict(row)
 
 
 def _merge_by_created_at(

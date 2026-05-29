@@ -89,17 +89,20 @@ async def etl_run(
         await session.flush()
 
 
-async def _already_imported(session: AsyncSession, source_id: str) -> bool:
-    """True when this forms submission was imported in a prior run."""
-    row = await session.execute(
-        select(Contact.id)
-        .where(
-            Contact.source_system == SOURCE_SYSTEM,
-            Contact.source_id == source_id,
-        )
-        .limit(1)
+async def _load_imported_source_ids(session: AsyncSession) -> set[str]:
+    """Pre-fetch every ``source_id`` already imported under ``jp-adopt-forms``.
+
+    Collapses what was an N+1 per-row SELECT in the previous implementation
+    to one query at run start. Stale-set risk is bounded by the per-row
+    SAVEPOINT in ``_import_one``: if a concurrent importer somehow inserts
+    a row mid-run that we then try to re-insert, the conflict surfaces as
+    an ``IntegrityError`` and the savepoint cleanly absorbs it into
+    ``migration_conflicts`` instead of corrupting the outer transaction.
+    """
+    rows = await session.execute(
+        select(Contact.source_id).where(Contact.source_system == SOURCE_SYSTEM)
     )
-    return row.scalar_one_or_none() is not None
+    return {sid for sid in rows.scalars().all() if sid is not None}
 
 
 async def _record_conflict(
@@ -188,6 +191,7 @@ async def _process_rows(
     settings: Settings,
     verbose: bool,
     commit_every: int | None = None,
+    imported_source_ids: set[str] | None = None,
 ) -> dict[str, int | datetime | None]:
     """Process all rows.
 
@@ -207,6 +211,9 @@ async def _process_rows(
         "skipped_already_imported": 0,
         "max_created_at": None,
     }
+    seen_imported: set[str] = (
+        set(imported_source_ids) if imported_source_ids is not None else set()
+    )
     rows_since_commit = 0
     for row in rows:
         counts["rows_in"] = int(counts["rows_in"]) + 1
@@ -233,7 +240,7 @@ async def _process_rows(
                 )
             rows_since_commit += 1
         else:
-            if await _already_imported(session, result.source_id):
+            if result.source_id in seen_imported:
                 counts["skipped_already_imported"] = (
                     int(counts["skipped_already_imported"]) + 1
                 )
@@ -247,6 +254,11 @@ async def _process_rows(
             else:
                 label = await _import_one(session, mapped=result, settings=settings)
                 counts[label] = int(counts[label]) + 1
+                if label == "imported":
+                    # Track in-run so duplicate source_ids inside the same
+                    # batch (rare but possible with concurrent forms writes
+                    # mid-import) don't cascade through the savepoint path.
+                    seen_imported.add(result.source_id)
                 if verbose:
                     logger.info(
                         "%s form_type=%s source_id=%s",
@@ -287,6 +299,10 @@ async def run_forms_etl(
                 forms_conn, watermark=watermark, batch_size=batch_size
             )
 
+            # Pre-fetch the set of already-imported source_ids once at run
+            # start (collapses what was an N+1 SELECT per row to one query).
+            imported_source_ids = await _load_imported_source_ids(session)
+
             async with etl_run(
                 session,
                 table_name=TABLE_NAME,
@@ -310,6 +326,7 @@ async def run_forms_etl(
                                 rows=rows,
                                 settings=settings,
                                 verbose=verbose,
+                                imported_source_ids=imported_source_ids,
                             )
                             ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
                             ctx.metadata["counts"] = {
@@ -339,6 +356,7 @@ async def run_forms_etl(
                             # work and the outer transaction stays short
                             # enough to avoid blocking autovacuum.
                             commit_every=batch_size,
+                            imported_source_ids=imported_source_ids,
                         )
                         ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
                         ctx.metadata["counts"] = {

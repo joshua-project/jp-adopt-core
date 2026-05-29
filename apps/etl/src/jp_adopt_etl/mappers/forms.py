@@ -9,6 +9,7 @@ JSONB ``submissions`` table.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -48,6 +49,28 @@ def _compact(obj: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _camel_to_snake(name: str) -> str:
+    """Convert ``camelCaseField`` → ``camel_case_field``. Already-snake_case
+    inputs round-trip unchanged."""
+    return _CAMEL_BOUNDARY.sub("_", name).lower()
+
+
+def _normalize_keys(obj: dict[str, Any]) -> dict[str, Any]:
+    """Normalize top-level dict keys to snake_case so accessors don't have
+    to hedge between conventions. The forms repo's Prisma schema emits
+    snake_case in the live ``core-client.ts`` POST path, but the on-disk row
+    shape varies (column names vs computed JS-side property names). One
+    normalization pass at the function boundary keeps the rest of the mapper
+    readable; if a future forms-side rename re-introduces camelCase, this
+    helper continues to absorb it without touching every accessor."""
+    if not isinstance(obj, dict):
+        return obj
+    return {_camel_to_snake(k): v for k, v in obj.items()}
+
+
 def _to_core_consents(raw: Any) -> list[dict[str, Any]] | None:
     if not raw or not isinstance(raw, list):
         return None
@@ -55,14 +78,14 @@ def _to_core_consents(raw: Any) -> list[dict[str, Any]] | None:
     for item in raw:
         if not isinstance(item, dict):
             continue
+        item = _normalize_keys(item)
         consents.append(
             {
-                "consent_type": item.get("consentType") or item.get("consent_type"),
+                "consent_type": item.get("consent_type"),
                 "version": item.get("version"),
-                "content_hash": item.get("contentHash") or item.get("content_hash"),
-                "accepted_at": item.get("acceptedAt") or item.get("accepted_at"),
-                "conversation_id": item.get("conversationId")
-                or item.get("conversation_id"),
+                "content_hash": item.get("content_hash"),
+                "accepted_at": item.get("accepted_at"),
+                "conversation_id": item.get("conversation_id"),
                 "evidence": item.get("evidence"),
             }
         )
@@ -76,6 +99,7 @@ def _map_adoption(
     source_id: str,
     created_at: datetime,
 ) -> MapResult:
+    submission = _normalize_keys(submission)
     email = submission.get("email")
     if not email:
         return MapFailure(
@@ -109,10 +133,10 @@ def _map_adoption(
             "doctrinal_distinctives": submission.get("doctrinal_distinctives"),
             "ministry_areas": submission.get("ministry_areas"),
             "commitment_types": all_commitments,
-            "want_facilitator_connection": (
-                submission.get("want_facilitator_connection") or False
-            )
-            or (submission.get("want_partner_connection") or False),
+            "want_facilitator_connection": bool(
+                submission.get("want_facilitator_connection")
+                or submission.get("want_partner_connection")
+            ),
             "facilitator_entity_types": submission.get("partner_entity_types"),
             "desired_facilitator_info": submission.get("desired_partner_info"),
             "additional_notes": submission.get("additional_notes"),
@@ -124,11 +148,9 @@ def _map_adoption(
 
     body: dict[str, Any] = {
         "email": email,
-        "display_name": submission.get("entity_name") or submission.get("entityName"),
+        "display_name": submission.get("entity_name"),
         "origin": "website",
-        "newsletter_opt_in": submission.get("newsletter_opt_in")
-        or submission.get("newsletterOptIn")
-        or False,
+        "newsletter_opt_in": bool(submission.get("newsletter_opt_in")),
         "profile": profile,
         "fpg_selections": [
             {
@@ -167,9 +189,8 @@ def _map_facilitation(
     source_id: str,
     created_at: datetime,
 ) -> MapResult:
-    email = submission.get("primary_contact_email") or submission.get(
-        "primaryContactEmail"
-    )
+    submission = _normalize_keys(submission)
+    email = submission.get("primary_contact_email")
     if not email:
         return MapFailure(
             reason="validation_error: missing email",
@@ -231,14 +252,12 @@ def _map_facilitation(
         }
     )
 
-    org_name = submission.get("org_name") or submission.get("orgName")
+    org_name = submission.get("org_name")
     body: dict[str, Any] = {
         "email": email,
         "display_name": org_name,
         "origin": "website",
-        "newsletter_opt_in": submission.get("newsletter_opt_in")
-        or submission.get("newsletterOptIn")
-        or False,
+        "newsletter_opt_in": bool(submission.get("newsletter_opt_in")),
         "organization_name": org_name,
         "profile": profile,
         "fpg_selections": [
