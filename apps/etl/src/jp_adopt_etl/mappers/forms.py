@@ -49,13 +49,22 @@ def _compact(obj: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+# Two-pass acronym-aware split: first insert a boundary before an
+# initial-cap run that ends with a lowercase letter (``URLPath`` → ``URL_Path``),
+# then between a lowercase-or-digit and a following uppercase
+# (``countryCode`` → ``country_Code``). Single all-caps runs like ``URL`` or
+# ``ID`` collapse to a single lowercased token instead of letter-by-letter
+# (``u_r_l`` was the bug the first-pass single-regex shipped with).
+_ACRONYM_TAIL = re.compile(r"(.)([A-Z][a-z]+)")
+_LOWER_UPPER = re.compile(r"([a-z0-9])([A-Z])")
 
 
 def _camel_to_snake(name: str) -> str:
-    """Convert ``camelCaseField`` → ``camel_case_field``. Already-snake_case
-    inputs round-trip unchanged."""
-    return _CAMEL_BOUNDARY.sub("_", name).lower()
+    """Convert ``camelCaseField`` → ``camel_case_field``. Acronym-aware:
+    ``URL`` → ``url``, ``URLPath`` → ``url_path``, ``IDField`` → ``id_field``.
+    Already-snake_case inputs round-trip unchanged."""
+    intermediate = _ACRONYM_TAIL.sub(r"\1_\2", name)
+    return _LOWER_UPPER.sub(r"\1_\2", intermediate).lower()
 
 
 def _normalize_keys(obj: dict[str, Any]) -> dict[str, Any]:
