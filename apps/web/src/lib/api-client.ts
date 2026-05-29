@@ -131,6 +131,31 @@ function extractErrorMessage(body: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
+/**
+ * Format an unknown thrown value into a user-facing error string. For
+ * ApiError responses carrying an HTTPException-style `{detail: {code,
+ * message}}` body, prefixes the message with the code (e.g.,
+ * `role_not_found: No role with id ...`) so admin surfaces can show the
+ * underlying error class to operators. Falls back to the ApiError message
+ * (already extracted from intake/contacts shapes by extractErrorMessage)
+ * or the bare Error.message otherwise.
+ */
+export function formatApiError(e: unknown): string {
+  if (e instanceof ApiError) {
+    const detail =
+      typeof e.body === "object" && e.body !== null && "detail" in e.body
+        ? (e.body as { detail: unknown }).detail
+        : null;
+    if (typeof detail === "object" && detail !== null && "code" in detail) {
+      const code = (detail as { code: string }).code;
+      const message = (detail as { message?: string }).message ?? e.message;
+      return `${code}: ${message}`;
+    }
+    return e.message;
+  }
+  return e instanceof Error ? e.message : "Request failed";
+}
+
 export interface ApiRequestInit {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Will be JSON.stringify'd if not already a string. */

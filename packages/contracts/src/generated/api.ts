@@ -463,6 +463,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Roles
+         * @description List platform roles for the admin grant dropdown.
+         */
+        get: operations["list_roles_v1_admin_roles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/user-roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List User Roles
+         * @description List all ``user_roles`` grants joined with role names.
+         */
+        get: operations["list_user_roles_v1_admin_user_roles_get"];
+        put?: never;
+        /**
+         * Grant User Role
+         * @description Grant a platform role to an Entra OID. Idempotent on the composite PK:
+         *     re-granting an existing (subject, role) pair returns 201 with the existing
+         *     row and does NOT emit a second outbox event (the outbox represents real
+         *     state changes, not request attempts).
+         */
+        post: operations["grant_user_role_v1_admin_user_roles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/user-roles/{user_subject_id}/{role_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke User Role
+         * @description Revoke a platform role grant. Refuses self-revoke of ``staff_admin``.
+         */
+        delete: operations["revoke_user_role_v1_admin_user_roles__user_subject_id___role_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns": {
         parameters: {
             query?: never;
@@ -1499,6 +1566,25 @@ export interface components {
          * @enum {string}
          */
         ReasonCode: "capacity_full" | "geography_mismatch" | "language" | "theological_concern" | "not_ready" | "other";
+        /** RoleListResponse */
+        RoleListResponse: {
+            /** Items */
+            items: components["schemas"]["RoleRead"][];
+            /** Total */
+            total: number;
+        };
+        /** RoleRead */
+        RoleRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
         /** RunMatchRequest */
         RunMatchRequest: {
             /**
@@ -1555,6 +1641,40 @@ export interface components {
             contact: components["schemas"]["ContactRead"];
             /** Transitioned To */
             transitioned_to: string;
+        };
+        /** UserRoleGrantRequest */
+        UserRoleGrantRequest: {
+            /** User Subject Id */
+            user_subject_id: string;
+            /**
+             * Role Id
+             * Format: uuid
+             */
+            role_id: string;
+        };
+        /** UserRoleListResponse */
+        UserRoleListResponse: {
+            /** Items */
+            items: components["schemas"]["UserRoleRead"][];
+            /** Total */
+            total: number;
+        };
+        /** UserRoleRead */
+        UserRoleRead: {
+            /** User Subject Id */
+            user_subject_id: string;
+            /**
+             * Role Id
+             * Format: uuid
+             */
+            role_id: string;
+            /** Role Name */
+            role_name: string;
+            /**
+             * Granted At
+             * Format: date-time
+             */
+            granted_at: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -2574,6 +2694,135 @@ export interface operations {
             path: {
                 user_subject_id: string;
                 facilitator_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_roles_v1_admin_roles_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_user_roles_v1_admin_user_roles_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRoleListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_user_role_v1_admin_user_roles_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRoleGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRoleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_user_role_v1_admin_user_roles__user_subject_id___role_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                user_subject_id: string;
+                role_id: string;
             };
             cookie?: never;
         };

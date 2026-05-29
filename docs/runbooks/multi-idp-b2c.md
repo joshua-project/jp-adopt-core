@@ -6,9 +6,17 @@
 > exercised. The web-side UI lives at `/signin` and `/auth/callback`
 > (MSAL v5 PKCE, single-tenant). Staff Entra OIDs are seeded in
 > `user_roles` via Alembic — see migration `0014_seed_staff_user_roles`.
-> Adding a new staff member is an `az ad user show` lookup + a new
-> Alembic revision inserting one row; deferred admin UI is in Part F of
-> the Entra direct plan (`docs/superpowers/plans/2026-05-26-entra-direct-staff-auth.md`).
+> **Staff platform roles (day-to-day):** users with `staff_admin` grant or
+> revoke roles at **Admin → Users** (`/admin/users`), backed by
+> `GET /v1/admin/roles`, `GET/POST/DELETE /v1/admin/user-roles`. Sign-out
+> uses MSAL `logoutRedirect` to `/signin` (must match SPA
+> `post_logout_redirect_uris` in the Entra app registration — see
+> `jp-infrastructure/stacks/azure/entra/jp-adopt-core-sso/`). See
+> `docs/solutions/azure-entra-auth/entra-part-f-admin-roles-review-hardening-2026-05-28.md`
+> for review-hardening patterns (OID validation, revoke ordering, tests).
+> **Bootstrap / recovery:** when no `staff_admin` exists yet, look up the
+> Entra OID with `az ad user show` and insert a `user_roles` row via
+> Alembic or SQL (same shape as migration `0014`).
 > `partner_tenants` is seeded with the JP Entra tenant
 > (`761e2c5f-34bd-4872-b86c-3a9f3b29d63a`) by migration `0013`.
 
