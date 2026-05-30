@@ -416,6 +416,13 @@ jobs:
           ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
           ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
           ACA_API_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-api-app-name
+          # U12 cutover: the mirror sync (scripts/sync_fpg.py) pulls people-group
+          # reference data from jp-adopt-forms' /api/v1/people-groups/export
+          # instead of the JP API. Both vars are required by Settings; the API
+          # key is a CONCEALED 1P field that the deploy passes through as a
+          # secret-ref on the container app.
+          FORMS_EXPORT_URL: op://JP Adopt Platform/Adopt Core - Production/forms-export-url
+          FORMS_EXPORT_API_KEY: op://JP Adopt Platform/Adopt Core - Production/forms-export-api-key
         with:
           export-env: true
 
@@ -425,6 +432,17 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Ensure container-app secret for forms-export-api-key
+        # Re-applied each deploy so a token rotation in 1P propagates without
+        # an out-of-band `az containerapp secret set`. Idempotent.
+        run: |
+          set -euo pipefail
+          az containerapp secret set \
+            --name "${{ env.ACA_API_APP_NAME }}" \
+            --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
+            --secrets "forms-export-api-key=${{ env.FORMS_EXPORT_API_KEY }}" \
+            >/dev/null
 
       - name: Update API container app
         id: rollapi
@@ -446,6 +464,8 @@ jobs:
             --set-env-vars \
               "DEPLOY_SHA=${{ github.sha }}" \
               "ENTRA_DIRECT_AUDIENCE=75edd3b3-90c8-4982-a619-d038ebaa50ea" \
+              "FORMS_EXPORT_URL=${{ env.FORMS_EXPORT_URL }}" \
+              "FORMS_EXPORT_API_KEY=secretref:forms-export-api-key" \
             --query properties.latestRevisionName -o tsv)
           if [ -z "$new_rev" ]; then echo "::error::could not determine new API revision name"; exit 1; fi
           echo "Rolled API → $new_rev"
