@@ -24,6 +24,7 @@ dev = [
 [project.scripts]
 # Console entry point exposed as ``uv run --package jp-adopt-etl dt-etl``.
 dt-etl = "jp_adopt_etl.orchestrator:main"
+forms-etl = "jp_adopt_etl.forms_orchestrator:main"
 
 [build-system]
 requires = ["setuptools>=75"]
