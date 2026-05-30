@@ -275,20 +275,35 @@ jobs:
       - name: Resolve API internal FQDN for the build-time proxy target
         id: apifqdn
         # Next bakes rewrites() at build time, so the proxy destination must
-        # be known here. The API has internal-only ingress; resolve its
-        # internal FQDN and bake https://<fqdn> as API_PROXY_TARGET. The API
-        # container app already exists (provisioned by jp-infrastructure);
-        # its internal FQDN is stable across image rolls.
+        # be known here. We bake the INTERNAL FQDN (always — even when API
+        # ingress is external_enabled). Cross-app traffic within the same
+        # ACA managed environment always resolves the `<app>.internal.<env>`
+        # FQDN regardless of the target's external ingress state, and that
+        # internal path bypasses any ip_security_restriction blocks on
+        # external ingress. Reading `properties.configuration.ingress.fqdn`
+        # used to return the external FQDN when external_enabled=true; the
+        # web proxy would then go web → external API → blocked by the IP
+        # allowlist, breaking the smoke test that runs after deploy.
+        # Constructing the FQDN from the env's default domain avoids this
+        # entirely and is identical regardless of the API's current ingress
+        # state.
         run: |
           set -euo pipefail
-          fqdn=$(az containerapp show \
+          env_id=$(az containerapp show \
             --name "${{ env.ACA_API_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
-            --query properties.configuration.ingress.fqdn -o tsv)
-          if [ -z "$fqdn" ]; then
-            echo "::error::Could not resolve API internal FQDN — does ${{ env.ACA_API_APP_NAME }} exist with ingress enabled?"
+            --query properties.environmentId -o tsv)
+          env_name="${env_id##*/}"
+          env_rg=$(az resource show --ids "$env_id" --query resourceGroup -o tsv)
+          env_domain=$(az containerapp env show \
+            --name "$env_name" --resource-group "$env_rg" \
+            --query properties.defaultDomain -o tsv)
+          if [ -z "$env_domain" ]; then
+            echo "::error::Could not resolve ACA env default domain (env_name=$env_name)"
             exit 1
           fi
+          fqdn="${{ env.ACA_API_APP_NAME }}.internal.${env_domain}"
+          echo "Resolved internal proxy target: https://${fqdn}"
           echo "api_proxy_target=https://${fqdn}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
