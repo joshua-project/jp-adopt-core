@@ -136,10 +136,7 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
   const decideOnMatch = useCallback(
     (decision: "accept" | "send_back") => {
       if (!matchId) return;
-      if (decision === "send_back" && !reason) {
-        setErr("send_back requires a reason");
-        return;
-      }
+      // F2: the decline reason is optional — no client-side guard.
       setErr(null);
       setMsg(null);
       startTransition(() => {
@@ -261,28 +258,35 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
               ))}
             </select>
           </label>
-          <label className="text-xs text-slate-600">
-            Reason code
-            <select
-              className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              value={reason}
-              onChange={(e) => setReason(e.target.value as ReasonCode | "")}
-            >
-              {REASON_OPTIONS.map((r) => (
-                <option key={r || "_"} value={r}>
-                  {r ? humanizeReasonCode(r) : "—"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-slate-600">
-            Reason notes
-            <input
-              className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-              value={reasonText}
-              onChange={(e) => setReasonText(e.target.value)}
-            />
-          </label>
+          {/* F2: the reason is only relevant when declining (→ sent_back).
+              Hidden for every other transition so staff aren't prompted for
+              one they don't need; optional even when shown. */}
+          {toState === "sent_back" ? (
+            <>
+              <label className="text-xs text-slate-600">
+                Reason (optional)
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value as ReasonCode | "")}
+                >
+                  {REASON_OPTIONS.map((r) => (
+                    <option key={r || "_"} value={r}>
+                      {r ? humanizeReasonCode(r) : "—"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Reason notes (optional)
+                <input
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+                  value={reasonText}
+                  onChange={(e) => setReasonText(e.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
         </div>
         <button
           type="button"
