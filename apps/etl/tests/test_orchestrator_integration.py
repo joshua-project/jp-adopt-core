@@ -274,17 +274,15 @@ def test_import_contacts_pivots_postmeta_and_writes_one_bulk_outbox_event(
     ]
     postmeta = {
         9101: [
-            {"meta_key": "type", "meta_value": "adopter"},
-            {"meta_key": "contact_email", "meta_value": "alice@example.com"},
+            {"meta_key": "sub_type", "meta_value": "adopter"},
             {"meta_key": "name", "meta_value": "Alice"},
             {"meta_key": "overall_status", "meta_value": "new"},
-            {"meta_key": "country_code", "meta_value": "US"},
+            {"meta_key": "sources", "meta_value": "website"},
         ],
         9102: [
-            {"meta_key": "type", "meta_value": "facilitator"},
-            {"meta_key": "contact_email", "meta_value": "bob@example.com"},
+            {"meta_key": "sub_type", "meta_value": "facilitator"},
             {"meta_key": "name", "meta_value": "Bob"},
-            {"meta_key": "facilitator_status", "meta_value": "matched"},  # → ready
+            {"meta_key": "overall_status", "meta_value": "active"},  # → ready
         ],
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
@@ -317,7 +315,7 @@ def test_import_contacts_pivots_postmeta_and_writes_one_bulk_outbox_event(
     by_source = {r.source_id: r for r in rows}
     assert by_source["9101"].party_kind == "adopter"
     assert by_source["9101"].adopter_status == "new"
-    assert by_source["9101"].country_code == "US"
+    assert by_source["9101"].origin == "website"
     assert by_source["9102"].party_kind == "facilitator"
     assert by_source["9102"].facilitator_status == "ready"
 

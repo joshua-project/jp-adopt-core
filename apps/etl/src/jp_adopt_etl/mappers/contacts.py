@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import phpserialize
-from jp_adopt_api.email_utils import normalize_email
 
 from jp_adopt_etl.mappers.status import (
     Mode,
@@ -27,18 +26,16 @@ from jp_adopt_etl.mappers.status import (
 
 logger = logging.getLogger(__name__)
 
-# Meta keys the DT plugin uses for the fields we care about. Source:
-# dt-adoption-fields/includes/custom-fields.php (the wishlist enumeration
-# referenced in the build plan). When DT installs use a customized field
-# slug, add it to the lookup; do not silently accept arbitrary key names.
-META_KEY_PRIMARY_EMAIL = "contact_email"
-META_KEY_DISPLAY_NAME = "name"
-META_KEY_PARTY_KIND = "type"  # 'adopter' | 'facilitator'
-META_KEY_ADOPTER_STATUS = "overall_status"  # DT's status column
-META_KEY_FACILITATOR_STATUS = "facilitator_status"
-META_KEY_COUNTRY_CODE = "country_code"
-META_KEY_LANGUAGES = "languages"
-META_KEY_ORIGIN = "origin"
+# Meta keys verified against the real DT instance (see
+# .dt-inspection/ASSESSMENT.md) — NOT the build-plan wishlist, which used
+# several keys (`type`, `country_code`, `origin`, `languages`,
+# `contact_email`) that do not exist in the actual data.
+META_KEY_PARTY_KIND = "sub_type"  # 'adopter' | 'facilitator' (DT `type` is access/user)
+META_KEY_DISPLAY_NAME = "name"  # usually absent; falls back to wp_posts.post_title
+# overall_status is the authoritative lifecycle status. The dedicated
+# adopter_status/facilitator_status postmeta are vestigial (always 'new').
+META_KEY_OVERALL_STATUS = "overall_status"
+META_KEY_SOURCES = "sources"  # multi_select; first entry → origin
 
 
 def pivot_postmeta(meta_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -80,10 +77,9 @@ def _maybe_deserialize_php(value: Any) -> Any:
         return value
 
 
-def _normalize_languages(raw: Any) -> list[str] | None:
-    """DT stores language codes as either a comma-separated string or a
-    serialized PHP array depending on the field config. Coerce both to a
-    list of lowercase 2-letter codes.
+def _first_source(raw: Any) -> str | None:
+    """DT ``sources`` is a multi_select (php-serialized array). Take the
+    first non-empty entry, lowercased, as the single-valued ``origin``.
     """
     if raw is None:
         return None
@@ -94,11 +90,14 @@ def _normalize_languages(raw: Any) -> list[str] | None:
     elif isinstance(val, list):
         candidates = val
     elif isinstance(val, str):
-        candidates = [c.strip() for c in val.split(",")]
+        candidates = [val]
     else:
         return None
-    out = [str(c).strip().lower() for c in candidates if str(c).strip()]
-    return out or None
+    for c in candidates:
+        s = str(c).strip().lower()
+        if s:
+            return s
+    return None
 
 
 def _coerce_datetime(raw: Any) -> datetime | None:
@@ -144,7 +143,6 @@ def map_contact(
     else:
         party_kind = party_kind_raw
 
-    email = (meta.get(META_KEY_PRIMARY_EMAIL) or "").strip()
     display_name = (
         meta.get(META_KEY_DISPLAY_NAME)
         or post_row.get("post_title")
@@ -155,27 +153,19 @@ def map_contact(
         # something so downstream UI doesn't render blank cells.
         display_name = f"DT contact {post_id}"
 
+    overall_status = meta.get(META_KEY_OVERALL_STATUS)
     adopter_status = (
-        map_adopter_status(meta.get(META_KEY_ADOPTER_STATUS), mode=mode)
+        map_adopter_status(overall_status, mode=mode)
         if party_kind == "adopter"
         else None
     )
     facilitator_status = (
-        map_facilitator_status(
-            meta.get(META_KEY_FACILITATOR_STATUS), mode=mode
-        )
+        map_facilitator_status(overall_status, mode=mode)
         if party_kind == "facilitator"
         else None
     )
 
-    country_code_raw = meta.get(META_KEY_COUNTRY_CODE)
-    country_code = (
-        str(country_code_raw).strip().upper()[:2] if country_code_raw else None
-    )
-
-    languages = _normalize_languages(meta.get(META_KEY_LANGUAGES))
-
-    origin = (meta.get(META_KEY_ORIGIN) or "").strip().lower() or None
+    origin = _first_source(meta.get(META_KEY_SOURCES))
 
     # post_date_gmt is GMT-zoned per WP convention; coerce to a tz-aware
     # datetime for created_at. updated_at is left to the DB default — the
@@ -187,9 +177,9 @@ def map_contact(
         "display_name": display_name,
         "adopter_status": adopter_status,
         "facilitator_status": facilitator_status,
-        "email_normalized": normalize_email(email) if email else None,
-        "country_code": country_code,
-        "language_codes": languages,
+        # email + phone are multi-value comm channels (contact_email_<hash>);
+        # populated by the orchestrator via mappers/channels.py.
+        "email_normalized": None,
         "origin": origin,
         "source_system": "dt",
         "source_id": post_id,
@@ -203,14 +193,10 @@ def map_contact(
 
 
 __all__ = [
-    "META_KEY_ADOPTER_STATUS",
-    "META_KEY_COUNTRY_CODE",
     "META_KEY_DISPLAY_NAME",
-    "META_KEY_FACILITATOR_STATUS",
-    "META_KEY_LANGUAGES",
-    "META_KEY_ORIGIN",
+    "META_KEY_OVERALL_STATUS",
     "META_KEY_PARTY_KIND",
-    "META_KEY_PRIMARY_EMAIL",
+    "META_KEY_SOURCES",
     "map_contact",
     "pivot_postmeta",
 ]

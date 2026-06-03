@@ -10,14 +10,10 @@ import phpserialize
 import pytest
 
 from jp_adopt_etl.mappers.contacts import (
-    META_KEY_ADOPTER_STATUS,
-    META_KEY_COUNTRY_CODE,
     META_KEY_DISPLAY_NAME,
-    META_KEY_FACILITATOR_STATUS,
-    META_KEY_LANGUAGES,
-    META_KEY_ORIGIN,
+    META_KEY_OVERALL_STATUS,
     META_KEY_PARTY_KIND,
-    META_KEY_PRIMARY_EMAIL,
+    META_KEY_SOURCES,
     map_contact,
     pivot_postmeta,
 )
@@ -76,14 +72,13 @@ def test_pivot_postmeta_skips_empty_key_rows() -> None:
 # ─── happy paths ──────────────────────────────────────────────────────────
 
 
-def test_map_contact_minimal_adopter() -> None:
+def test_party_kind_from_sub_type() -> None:
     post = _post(post_title="Alice")
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_PRIMARY_EMAIL: "Alice@Example.com",
             META_KEY_DISPLAY_NAME: "Alice Smith",
-            META_KEY_ADOPTER_STATUS: "new",
+            META_KEY_OVERALL_STATUS: "new",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
@@ -91,20 +86,41 @@ def test_map_contact_minimal_adopter() -> None:
     assert kwargs["display_name"] == "Alice Smith"
     assert kwargs["adopter_status"] == "new"
     assert kwargs["facilitator_status"] is None
-    assert kwargs["email_normalized"] == "alice@example.com"
     assert kwargs["source_system"] == "dt"
     assert kwargs["source_id"] == "1"
     assert kwargs["local_modified_after_import"] is False
 
 
-def test_map_contact_facilitator_uses_facilitator_status() -> None:
+def test_party_kind_ignores_dt_type_field() -> None:
+    """DT ``type`` is access/user, NOT adopter/facilitator — only
+    ``sub_type`` carries the party kind."""
+    post = _post()
+    meta = _meta(**{"type": "access", META_KEY_PARTY_KIND: "adopter"})
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["party_kind"] == "adopter"
+
+
+def test_status_sourced_from_overall_status_not_vestigial_field() -> None:
+    """``adopter_status``/``facilitator_status`` postmeta are vestigial
+    'new'; the real lifecycle status is ``overall_status``."""
+    post = _post()
+    meta = _meta(
+        **{
+            META_KEY_PARTY_KIND: "adopter",
+            META_KEY_OVERALL_STATUS: "active",  # → matched
+            "adopter_status": "new",  # vestigial, must be ignored
+        }
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "matched"
+
+
+def test_facilitator_status_from_overall_status() -> None:
     post = _post(post_id=42)
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "facilitator",
-            META_KEY_PRIMARY_EMAIL: "fac@example.com",
-            META_KEY_FACILITATOR_STATUS: "matched",  # → ready
-            META_KEY_ADOPTER_STATUS: "engaged",  # ignored for facilitator
+            META_KEY_OVERALL_STATUS: "active",  # → ready
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
@@ -126,31 +142,17 @@ def test_map_contact_uses_synthetic_name_when_everything_blank() -> None:
     assert kwargs["display_name"] == "DT contact 7"
 
 
-def test_map_contact_uppercases_country_code() -> None:
+def test_origin_from_sources_php_array_first_entry() -> None:
     post = _post()
-    meta = _meta(**{META_KEY_COUNTRY_CODE: " us "})
+    serialized = phpserialize.dumps(["Website", "referral"]).decode("utf-8")
+    meta = _meta(**{META_KEY_SOURCES: serialized})
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["country_code"] == "US"
+    assert kwargs["origin"] == "website"
 
 
-def test_map_contact_normalizes_languages_csv() -> None:
+def test_origin_from_sources_plain_string() -> None:
     post = _post()
-    meta = _meta(**{META_KEY_LANGUAGES: "EN, fr,  Es "})
-    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["language_codes"] == ["en", "fr", "es"]
-
-
-def test_map_contact_normalizes_languages_php_serialized() -> None:
-    post = _post()
-    serialized = phpserialize.dumps(["en", "fr", "EN"]).decode("utf-8")
-    meta = _meta(**{META_KEY_LANGUAGES: serialized})
-    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert sorted(kwargs["language_codes"]) == ["en", "en", "fr"]
-
-
-def test_map_contact_normalizes_origin_lowercase() -> None:
-    post = _post()
-    meta = _meta(**{META_KEY_ORIGIN: "Website"})
+    meta = _meta(**{META_KEY_SOURCES: "Website"})
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
     assert kwargs["origin"] == "website"
 
@@ -163,7 +165,7 @@ def test_map_contact_dry_run_raises_on_unmapped_status() -> None:
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_ADOPTER_STATUS: "weird_value",
+            META_KEY_OVERALL_STATUS: "weird_value",
         }
     )
     with pytest.raises(UnmappedStatusError):
@@ -175,7 +177,7 @@ def test_map_contact_production_maps_unmapped_status_to_unknown() -> None:
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_ADOPTER_STATUS: "weird_value",
+            META_KEY_OVERALL_STATUS: "weird_value",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
