@@ -1,7 +1,7 @@
 ---
 title: "feat: Match-review staff override, decline-only reasons, contact email composer"
 type: feat
-status: active
+status: completed
 created: 2026-06-03
 depth: standard
 origin: locked design from brainstorming session (2026-06-03)
