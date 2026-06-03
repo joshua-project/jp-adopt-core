@@ -578,3 +578,69 @@ def test_import_interests_from_fpg_submission_data(monkeypatch, pg_engine, pg_se
         )
         pg_session.execute(text("DELETE FROM fpg WHERE people_id3 = '88001'"))
         pg_session.commit()
+
+
+def test_import_comments_resolves_threading(monkeypatch, pg_engine, pg_session):
+    """A reply comment's parent_id resolves to its parent's new UUID."""
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {
+            "ID": 9601,
+            "post_title": "Threaded",
+            "post_status": "publish",
+            "post_date": None,
+            "post_date_gmt": None,
+        }
+    ]
+    postmeta = {9601: [{"meta_key": "sub_type", "meta_value": "adopter"}]}
+    comments = [
+        {
+            "comment_ID": 700,
+            "comment_post_ID": 9601,
+            "comment_author": "Staff",
+            "comment_author_email": "s@x.dev",
+            "comment_date": None,
+            "comment_date_gmt": "2026-01-01T10:00:00",
+            "comment_content": "Parent note",
+            "comment_type": "",
+            "comment_parent": 0,
+            "user_id": 0,
+            "comment_agent": "Mozilla/5.0",
+            "comment_approved": "1",
+        },
+        {
+            "comment_ID": 701,
+            "comment_post_ID": 9601,
+            "comment_author": "Staff",
+            "comment_author_email": "s@x.dev",
+            "comment_date": None,
+            "comment_date_gmt": "2026-01-02T10:00:00",
+            "comment_content": "Reply note",
+            "comment_type": "",
+            "comment_parent": 700,
+            "user_id": 0,
+            "comment_agent": "Mozilla/5.0",
+            "comment_approved": "1",
+        },
+    ]
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta, comments=comments)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    run_etl(
+        mysql_url="mysql+pymysql://ignored",
+        postgres_url=ETL_TEST_DATABASE_URL,
+        tables=["contacts", "activity_log"],
+        mode="production",
+        watermark=None,
+    )
+
+    rows = pg_session.execute(
+        select(ActivityLog).where(ActivityLog.source_system == "dt")
+    ).scalars().all()
+    by_source = {r.source_id: r for r in rows}
+    parent = by_source["700"]
+    child = by_source["701"]
+    assert child.parent_id == parent.id
+    assert parent.parent_id is None

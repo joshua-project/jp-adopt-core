@@ -382,7 +382,27 @@ def import_comments(
             counts["rows_out_inserted"] += 1
         else:
             counts["rows_out_skipped"] += 1
+
+    _resolve_activity_threading(pg_session)
     return counts
+
+
+def _resolve_activity_threading(pg_session: Session) -> None:
+    """Second pass: link reply comments to their parent. The first pass
+    stashes the source parent id in ``source_metadata.parent_source_id``;
+    now that every comment is imported, resolve it to the parent's new UUID.
+    """
+    pg_session.execute(
+        text(
+            "UPDATE activity_log AS child "
+            "SET parent_id = parent.id "
+            "FROM activity_log AS parent "
+            "WHERE child.source_system = 'dt' "
+            "AND parent.source_system = 'dt' "
+            "AND child.parent_id IS NULL "
+            "AND parent.source_id = child.source_metadata ->> 'parent_source_id'"
+        )
+    )
 
 
 def _load_existing_fpg_ids(pg_session: Session) -> set[str]:
