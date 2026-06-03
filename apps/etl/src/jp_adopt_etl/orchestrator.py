@@ -39,6 +39,7 @@ from typing import Any
 from jp_adopt_api.models import (
     ActivityLog,
     Contact,
+    ContactProfile,
     EtlDeletedInSource,
     EtlRun,
     MigrationConflict,
@@ -62,8 +63,9 @@ from jp_adopt_etl.dt_source import (
     open_engine,
 )
 from jp_adopt_etl.mappers.comments import map_comment
-from jp_adopt_etl.mappers.contacts import map_contact
+from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
 from jp_adopt_etl.mappers.p2p import P2P_TYPE_CONTACT_TO_FPG
+from jp_adopt_etl.mappers.profile import map_contact_profile
 from jp_adopt_etl.mappers.status import Mode, UnmappedStatusError
 from jp_adopt_etl.mappers.users import map_user
 
@@ -310,6 +312,18 @@ def _flush_contact_batch(
         # for "rows_out" counts; we expose rows_out_inserted + _updated as
         # the rows that got written through (whether new or refreshed).
         counts["rows_out_inserted"] += 1
+
+        # Populate the 1:1 contact_profile with the JP-custom adoption fields.
+        profile = map_contact_profile(pivot_postmeta(meta_rows))
+        if profile is not None:
+            pg_session.execute(
+                pg_insert(ContactProfile)
+                .values(id=uuid.uuid4(), contact_id=result.id, **profile)
+                .on_conflict_do_update(
+                    index_elements=["contact_id"],
+                    set_=profile,
+                )
+            )
         del result
 
 

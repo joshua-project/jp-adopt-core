@@ -17,6 +17,7 @@ import pytest
 from jp_adopt_api.models import (
     ActivityLog,
     Contact,
+    ContactProfile,
     EtlRun,
     Outbox,
     StaffIdentityLink,
@@ -405,3 +406,74 @@ def test_import_contacts_skips_locally_modified_rows(
         )
     ).scalar_one()
     assert contact.adopter_status == "new"
+
+
+def test_import_contacts_populates_contact_profile(monkeypatch, pg_engine, pg_session):
+    """A contact with JP-custom adoption postmeta gets a contact_profile row."""
+    import phpserialize
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {
+            "ID": 9301,
+            "post_title": "Profiled Org",
+            "post_status": "publish",
+            "post_date": None,
+            "post_date_gmt": None,
+        }
+    ]
+    postmeta = {
+        9301: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "adopter_type", "meta_value": "organization"},
+            {"meta_key": "entity_size", "meta_value": "101_500"},
+            {"meta_key": "website", "meta_value": "https://org.example"},
+            {
+                "meta_key": "ministry_areas",
+                "meta_value": phpserialize.dumps(["prayer", "training"]).decode(
+                    "utf-8"
+                ),
+            },
+            {"meta_key": "has_doctrinal_distinctives", "meta_value": "1"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    run_etl(
+        mysql_url="mysql+pymysql://ignored",
+        postgres_url=ETL_TEST_DATABASE_URL,
+        tables=["contacts"],
+        mode="production",
+        watermark=None,
+    )
+
+    contact = pg_session.execute(
+        select(Contact).where(
+            Contact.source_system == "dt", Contact.source_id == "9301"
+        )
+    ).scalar_one()
+    profile = pg_session.execute(
+        select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+    ).scalar_one()
+    assert profile.adopter_type == "organization"
+    assert profile.entity_size == "101_500"
+    assert profile.website == "https://org.example"
+    assert profile.ministry_areas == ["prayer", "training"]
+    assert profile.has_doctrinal_distinctives is True
+
+    # Idempotent: a second run updates in place (no duplicate-key error).
+    run_etl(
+        mysql_url="mysql+pymysql://ignored",
+        postgres_url=ETL_TEST_DATABASE_URL,
+        tables=["contacts"],
+        mode="production",
+        watermark=None,
+    )
+    count = pg_session.execute(
+        select(ContactProfile).where(ContactProfile.contact_id == contact.id)
+    ).all()
+    assert len(count) == 1
