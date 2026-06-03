@@ -94,3 +94,37 @@ def test_map_comment_coerces_naive_datetime_to_utc() -> None:
         author_link_id=uuid.uuid4(),
     )
     assert kwargs["occurred_at"].tzinfo is UTC
+
+
+def test_email_comment_tagged_as_email_by_body_prefix() -> None:
+    kwargs = map_comment(
+        comment_row=_row(
+            comment_content=(
+                "**Email sent from JP ADOPT (Disciple.Tools)** "
+                "From: admin to x@y"
+            )
+        ),
+        contact_id=uuid.uuid4(),
+        author_link_id=None,
+    )
+    assert kwargs["kind"] == "email"
+
+
+def test_email_comment_tagged_as_email_by_agent() -> None:
+    kwargs = map_comment(
+        comment_row=_row(
+            comment_content="Reply text", comment_agent="JP ADOPT Inbound"
+        ),
+        contact_id=uuid.uuid4(),
+        author_link_id=None,
+    )
+    assert kwargs["kind"] == "email"
+
+
+def test_plain_note_kind_stays_none() -> None:
+    kwargs = map_comment(
+        comment_row=_row(comment_content="Just a note"),
+        contact_id=uuid.uuid4(),
+        author_link_id=None,
+    )
+    assert kwargs["kind"] is None

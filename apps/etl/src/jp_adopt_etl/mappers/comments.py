@@ -62,6 +62,14 @@ def map_comment(
     raw_kind = comment_row.get("comment_type") or None
     kind = raw_kind.strip().lower() if raw_kind else None
 
+    # DT logs both outbound ("Send email (JP ADOPT)") and inbound
+    # (dt-email-inbound-function) emails as plain comments — not distinguished
+    # by comment_type. Detect by body prefix / agent and tag kind='email' so
+    # the UI can render them as emails rather than notes.
+    agent = comment_row.get("comment_agent") or ""
+    if body.startswith("**Email sent from JP ADOPT") or "JP ADOPT" in agent:
+        kind = "email"
+
     parent_source_id = comment_row.get("comment_parent") or None
     parent_metadata: dict[str, Any] = {}
     if parent_source_id and int(parent_source_id) != 0:
