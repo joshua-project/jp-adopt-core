@@ -70,8 +70,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/intake", tags=["intake"])
 
-# 64KB body limit matches `jp-adopt-forms/src/app/api/v1/adoption/route.ts`.
-INTAKE_MAX_BODY_BYTES = 64 * 1024
+# 1MB body limit. Raised from 64KB per #87: legit high-coverage facilitation
+# submissions (Mission India's 1,701 FPGs) serialize past 64KB. 2000-entry
+# fpg_selections cap (see schemas.py) bounds the worst case well under 1MB.
+INTAKE_MAX_BODY_BYTES = 1024 * 1024
 
 EVENT_SUBMISSION_RECEIVED = "jp.adopt.v1.submission.received"
 

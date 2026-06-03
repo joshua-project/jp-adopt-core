@@ -416,13 +416,12 @@ class AdoptionIntake(IntakeBase):
     """Form B (`/adopt`) payload: an adopter, possibly multi-FPG."""
 
     party_kind: Literal["adopter"] = "adopter"
-    # adv4-001: bound the FPG selection list. Without a max_length an
-    # attacker can pad a 64KB body with ~3500 FpgInterestIn entries, each
-    # of which the A1 fabrication path allocates a UUID for. The Form B UI
-    # exposes a handful of selections at a time; 20 is a generous ceiling
-    # that no legitimate submission will hit (review with product if it ever
-    # does — likely a different schema is appropriate at that scale).
-    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=20)
+    # adv4-001 / #87: bound the FPG selection list so the A1 fabrication path
+    # can't be driven to allocate unbounded UUIDs. Originally 20, but real
+    # high-coverage submissions (Mission India's 1,701-FPG facilitation, plus
+    # five others) legitimately exceed it. Raised to 2000 after product review;
+    # still well below abuse, and INTAKE_MAX_BODY_BYTES caps the absolute body.
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=2000)
 
 
 class FacilitationIntake(IntakeBase):
@@ -432,9 +431,9 @@ class FacilitationIntake(IntakeBase):
     organization_name: str | None = Field(default=None, max_length=512)
     # U12: facilitators also pick FPGs (which groups they can serve, with
     # per-FPG engagement_status / facilitation_services / network_services).
-    # Same shape + bound as the adoption side; an empty list is fine (a
-    # facilitator with no specific FPGs yet).
-    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=20)
+    # Same shape + bound as the adoption side (2000, raised from 20 per #87);
+    # an empty list is fine (a facilitator with no specific FPGs yet).
+    fpg_selections: list[FpgInterestIn] = Field(default_factory=list, max_length=2000)
 
 
 class IntakeSuccessData(BaseModel):
