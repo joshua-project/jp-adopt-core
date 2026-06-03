@@ -465,9 +465,11 @@ async def test_decide_send_back_excludes_facilitator_on_rematch(
 
 
 @pytest.mark.asyncio
-async def test_decide_send_back_requires_reason_code(
+async def test_decide_send_back_without_reason_succeeds(
     client: TestClient, session: AsyncSession
 ) -> None:
+    """F2: the decline reason is optional — a send-back with no reason_code
+    now succeeds (200) and records a null reason."""
     people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session, adopter_status="matched")
     org = await _make_org_with_coverage(session, people_id3=people_id3)
@@ -478,8 +480,11 @@ async def test_decide_send_back_requires_reason_code(
             json={"decision": "send_back"},
             headers=_auth_headers(),
         )
-        assert r.status_code == 400, r.text
-        assert r.json()["detail"]["code"] == "reason_required"
+        assert r.status_code == 200, r.text
+        assert r.json()["match"]["status"] == "sent_back"
+        await session.refresh(m)
+        assert m.status == "sent_back"
+        assert m.decision_reason_code is None
     finally:
         await _cleanup_contact_chain(session, contact)
         await _cleanup_org(session, org.id)

@@ -248,8 +248,12 @@ ADOPTER_TRANSITIONS: dict[tuple[AdopterState, AdopterState], TransitionSpec] = {
         event_type=EVENT_MATCH_ASSIGNED,
     ),
     (AdopterState.MATCHED, AdopterState.SENT_BACK): TransitionSpec(
+        # F2: the decline reason is optional. A reason is still accepted and
+        # validated against the whitelist when supplied, but a send-back with
+        # no reason_code is now legal (the UI prompts for one only on decline,
+        # but never blocks on it).
         allowed_roles=_FACILITATOR_OR_ADMIN,
-        requires_reason=True,
+        requires_reason=False,
         event_type=EVENT_MATCH_SENT_BACK,
         reason_codes=_ALL_REASON_CODES,
     ),

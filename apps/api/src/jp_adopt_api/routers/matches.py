@@ -920,14 +920,9 @@ async def decide_match(
             )
 
         elif body.decision == "send_back":
-            if body.reason_code is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "code": "reason_required",
-                        "message": "send_back requires reason_code",
-                    },
-                )
+            # F2: the decision reason is optional on every verb (the UI only
+            # *prompts* for it on decline). A send-back with no reason_code is
+            # accepted and records a null reason.
             await transition_adopter(
                 db,
                 contact,
