@@ -16,7 +16,7 @@ import logging
 from datetime import date
 from typing import Any
 
-import phpserialize
+from jp_adopt_etl.mappers.php import loads_php_maybe
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +74,7 @@ def _to_list(raw: Any) -> list[str] | None:
     list of non-empty strings."""
     if raw is None or raw == "":
         return None
-    val: Any = raw
-    if isinstance(raw, str) and len(raw) >= 2 and raw[1] == ":":
-        try:
-            val = phpserialize.loads(raw.encode("utf-8"), decode_strings=True)
-        except (ValueError, TypeError, EOFError) as e:
-            logger.warning("phpserialize.loads failed for %r: %s", raw[:64], e)
-            val = raw
+    val = loads_php_maybe(raw)
     if isinstance(val, dict):
         candidates = list(val.values())
     elif isinstance(val, list):

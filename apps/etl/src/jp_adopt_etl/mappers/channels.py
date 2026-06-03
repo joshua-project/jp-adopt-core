@@ -11,13 +11,10 @@ Pure function — no I/O.
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any
 
-import phpserialize
-
-logger = logging.getLogger(__name__)
+from jp_adopt_etl.mappers.php import loads_php_maybe
 
 # Matches a channel value key (NOT its ``_details`` sibling). The hash is the
 # DT field instance id, e.g. ``contact_email_047``.
@@ -27,12 +24,7 @@ _CHANNEL_KEY = re.compile(r"^(contact_email|contact_phone)_[0-9a-f]+$")
 def _is_verified(details: Any) -> bool:
     if not details:
         return False
-    try:
-        raw = details.encode("utf-8") if isinstance(details, str) else details
-        parsed = phpserialize.loads(raw, decode_strings=True)
-    except (ValueError, TypeError, EOFError) as e:
-        logger.warning("phpserialize.loads failed for channel details: %s", e)
-        return False
+    parsed = loads_php_maybe(details)
     return bool(isinstance(parsed, dict) and parsed.get("verified"))
 
 

@@ -16,10 +16,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import phpserialize
 from jp_adopt_api.email_utils import normalize_email
 
 from jp_adopt_etl.mappers.channels import extract_comm_channels
+from jp_adopt_etl.mappers.php import loads_php_maybe
 from jp_adopt_etl.mappers.status import (
     Mode,
     map_adopter_status,
@@ -59,33 +59,13 @@ def pivot_postmeta(meta_rows: list[dict[str, Any]]) -> dict[str, Any]:
     return pivoted
 
 
-def _maybe_deserialize_php(value: Any) -> Any:
-    """If ``value`` is a string that looks like a serialized PHP array,
-    deserialize. Otherwise return it unchanged.
-
-    WordPress's ``maybe_serialize`` wraps arrays + objects but leaves
-    scalars alone. The serialized shape always starts with ``a:`` (array),
-    ``s:`` (string), ``i:`` (int), ``O:`` (object), or ``b:`` (bool) so we
-    can detect cheaply before calling phpserialize.
-    """
-    if not isinstance(value, str):
-        return value
-    if not value or len(value) < 2 or value[1] != ":":
-        return value
-    try:
-        return phpserialize.loads(value.encode("utf-8"), decode_strings=True)
-    except (ValueError, TypeError, EOFError) as e:
-        logger.warning("phpserialize.loads failed for %r: %s", value[:64], e)
-        return value
-
-
 def _first_source(raw: Any) -> str | None:
     """DT ``sources`` is a multi_select (php-serialized array). Take the
     first non-empty entry, lowercased, as the single-valued ``origin``.
     """
     if raw is None:
         return None
-    val = _maybe_deserialize_php(raw)
+    val = loads_php_maybe(raw)
     if isinstance(val, dict):
         # phpserialize unpacks arrays into dicts keyed by int index
         candidates = list(val.values())
