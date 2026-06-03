@@ -157,6 +157,20 @@ def test_origin_from_sources_plain_string() -> None:
     assert kwargs["origin"] == "website"
 
 
+def test_email_and_phone_from_comm_channels() -> None:
+    post = _post()
+    meta = _meta(
+        **{
+            META_KEY_PARTY_KIND: "adopter",
+            "contact_email_047": "Alice@Example.com",
+            "contact_phone_285": "+1 555 0100",
+        }
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["email_normalized"] == "alice@example.com"
+    assert kwargs["phone"] == "+1 555 0100"
+
+
 # ─── error paths ──────────────────────────────────────────────────────────
 
 

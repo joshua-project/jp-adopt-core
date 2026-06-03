@@ -17,7 +17,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import phpserialize
+from jp_adopt_api.email_utils import normalize_email
 
+from jp_adopt_etl.mappers.channels import extract_comm_channels
 from jp_adopt_etl.mappers.status import (
     Mode,
     map_adopter_status,
@@ -167,6 +169,9 @@ def map_contact(
 
     origin = _first_source(meta.get(META_KEY_SOURCES))
 
+    channels = extract_comm_channels(meta)
+    email = channels["email"]
+
     # post_date_gmt is GMT-zoned per WP convention; coerce to a tz-aware
     # datetime for created_at. updated_at is left to the DB default — the
     # ETL is an import, not a state change.
@@ -177,9 +182,10 @@ def map_contact(
         "display_name": display_name,
         "adopter_status": adopter_status,
         "facilitator_status": facilitator_status,
-        # email + phone are multi-value comm channels (contact_email_<hash>);
-        # populated by the orchestrator via mappers/channels.py.
-        "email_normalized": None,
+        # email + phone are multi-value DT comm channels (contact_email_<hash>);
+        # extract_comm_channels picks the primary (verified-first).
+        "email_normalized": normalize_email(email) if email else None,
+        "phone": channels["phone"],
         "origin": origin,
         "source_system": "dt",
         "source_id": post_id,

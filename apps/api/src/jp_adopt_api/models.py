@@ -79,6 +79,7 @@ class Contact(Base):
     )
     b2c_subject_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_system: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_modified_after_import: Mapped[bool] = mapped_column(
