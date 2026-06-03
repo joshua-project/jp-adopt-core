@@ -9,9 +9,10 @@ ETL run instead of one event per imported row.
 
 Tables imported (in dependency order):
   1. ``staff_identity_link``   (from wp_users)
-  2. ``contacts``              (from wp_posts + wp_postmeta pivot)
-  3. ``adopter_interest``      (from each contact's fpg_submission_data JSON)
-  4. ``activity_log``          (from wp_comments)
+  2. ``contacts``              (from wp_posts + wp_postmeta pivot; + contact_profile)
+  3. ``contact_assignment``    (from assigned_to postmeta → B2C subject)
+  4. ``activity_log``          (from wp_comments + wp_dt_activity_log history)
+  5. ``adopter_interest``      (from each contact's fpg_submission_data JSON)
 
 Each table writes one ``etl_run`` row at start, increments counters as
 rows are processed, and finalizes ``ended_at`` at the end (or after an
@@ -40,6 +41,7 @@ from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
     Contact,
+    ContactAssignment,
     ContactProfile,
     EtlDeletedInSource,
     EtlRun,
@@ -64,6 +66,7 @@ from jp_adopt_etl.dt_source import (
     open_engine,
 )
 from jp_adopt_etl.mappers.activity_history import map_activity_log_row
+from jp_adopt_etl.mappers.assignment import parse_assigned_user_id
 from jp_adopt_etl.mappers.comments import map_comment
 from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
 from jp_adopt_etl.mappers.interests import parse_fpg_submission_data
@@ -556,6 +559,96 @@ def _flush_interest_batch(
             counts["rows_out_inserted"] += 1
 
 
+def _load_dt_user_id_to_subject(pg_session: Session) -> dict[str, str]:
+    rows = pg_session.execute(
+        select(StaffIdentityLink.dt_user_id, StaffIdentityLink.b2c_subject_id).where(
+            StaffIdentityLink.b2c_subject_id.is_not(None)
+        )
+    ).all()
+    return {r.dt_user_id: r.b2c_subject_id for r in rows}
+
+
+def import_assignment(
+    *,
+    mysql_conn: Connection,
+    pg_session: Session,
+    mode: Mode,
+    watermark: datetime | None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> dict[str, int]:
+    """Import DT ``assigned_to`` → contact_assignment (1:1 owner).
+
+    The wp_user_id resolves to a B2C subject via ``staff_identity_link``.
+    Staff who have not yet signed in have a NULL ``b2c_subject_id``, so their
+    assignments are skipped and recorded as conflicts; a re-run picks them up
+    once they sign in. ``wp_dt_share`` sub-assignments are out of scope
+    (contact_assignment is 1:1)."""
+    counts = {"rows_in": 0, "rows_out_inserted": 0, "rows_out_skipped": 0}
+    post_to_contact = _load_existing_dt_post_id_to_contact(pg_session)
+    user_to_subject = _load_dt_user_id_to_subject(pg_session)
+
+    batch: list[dict[str, Any]] = []
+    for post in iter_contacts(mysql_conn, watermark=watermark, batch_size=batch_size):
+        batch.append(post)
+        if len(batch) >= batch_size:
+            _flush_assignment_batch(
+                mysql_conn, pg_session, batch, post_to_contact, user_to_subject, counts
+            )
+            batch.clear()
+    if batch:
+        _flush_assignment_batch(
+            mysql_conn, pg_session, batch, post_to_contact, user_to_subject, counts
+        )
+    return counts
+
+
+def _flush_assignment_batch(
+    mysql_conn: Connection,
+    pg_session: Session,
+    batch: Iterable[dict[str, Any]],
+    post_to_contact: dict[str, uuid.UUID],
+    user_to_subject: dict[str, str],
+    counts: dict[str, int],
+) -> None:
+    batch_list = list(batch)
+    meta_by_post = load_postmeta(mysql_conn, [row["ID"] for row in batch_list])
+    for post_row in batch_list:
+        post_id = str(post_row["ID"])
+        contact_id = post_to_contact.get(post_id)
+        if contact_id is None:
+            continue
+        meta = pivot_postmeta(meta_by_post.get(post_row["ID"], []))
+        wp_user_id = parse_assigned_user_id(meta.get("assigned_to"))
+        if wp_user_id is None:
+            continue
+        counts["rows_in"] += 1
+        subject = user_to_subject.get(wp_user_id)
+        if subject is None:
+            counts["rows_out_skipped"] += 1
+            _record_conflict(
+                pg_session,
+                source_system="dt",
+                source_id=post_id,
+                table_name="contact_assignment",
+                conflict_type="assignee_no_subject",
+                source_value={"assigned_to": meta.get("assigned_to")},
+            )
+            continue
+        pg_session.execute(
+            pg_insert(ContactAssignment)
+            .values(
+                contact_id=contact_id,
+                user_subject_id=subject,
+                assigned_by="dt_import",
+            )
+            .on_conflict_do_update(
+                index_elements=["contact_id"],
+                set_={"user_subject_id": subject},
+            )
+        )
+        counts["rows_out_inserted"] += 1
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Public runner
 # ──────────────────────────────────────────────────────────────────────────
@@ -646,6 +739,14 @@ def run_etl(
                                 watermark=watermark,
                                 batch_size=batch_size,
                             )
+                        elif table_name == "contact_assignment":
+                            counts = import_assignment(
+                                mysql_conn=mysql_conn,
+                                pg_session=pg_session,
+                                mode=mode,
+                                watermark=watermark,
+                                batch_size=batch_size,
+                            )
                         else:
                             raise ValueError(f"unknown table {table_name!r}")
                         run_row.rows_in = counts.get("rows_in", 0)
@@ -697,6 +798,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "all",
             "staff_identity_link",
             "contacts",
+            "contact_assignment",
             "activity_log",
             "adopter_interest",
         ],
@@ -742,10 +844,22 @@ def _resolve_tables(table_args: list[str] | None) -> list[str]:
     if not table_args or "all" in table_args:
         # Dependency order: identity-links before activity_log (author FK);
         # contacts before activity_log (contact FK) and adopter_interest.
-        return ["staff_identity_link", "contacts", "activity_log", "adopter_interest"]
+        return [
+            "staff_identity_link",
+            "contacts",
+            "contact_assignment",
+            "activity_log",
+            "adopter_interest",
+        ]
     seen: set[str] = set()
     ordered: list[str] = []
-    for name in ["staff_identity_link", "contacts", "activity_log", "adopter_interest"]:
+    for name in [
+            "staff_identity_link",
+            "contacts",
+            "contact_assignment",
+            "activity_log",
+            "adopter_interest",
+        ]:
         if name in table_args and name not in seen:
             ordered.append(name)
             seen.add(name)
@@ -795,6 +909,7 @@ _ = EtlDeletedInSource
 __all__ = [
     "etl_run",
     "import_activity_history",
+    "import_assignment",
     "import_comments",
     "import_contacts",
     "import_interests",

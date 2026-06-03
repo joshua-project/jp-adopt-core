@@ -711,3 +711,89 @@ def test_import_activity_history_into_activity_log(monkeypatch, pg_engine, pg_se
     ).scalar_one()
     assert row.kind == "field_change"
     assert row.body == "overall_status changed from 'new' to 'active'"
+
+
+def test_import_assignment_resolves_subject_and_records_conflict(
+    monkeypatch, pg_engine, pg_session
+):
+    """assigned_to resolves to a B2C subject via staff_identity_link; an
+    assignee without a subject is skipped + recorded as a conflict."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import (
+        ContactAssignment,
+        MigrationConflict,
+        StaffIdentityLink,
+    )
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # Staff member who has signed in (has a B2C subject).
+    pg_session.add(
+        StaffIdentityLink(
+            id=_uuid.uuid4(),
+            dt_user_id="9802",
+            b2c_subject_id="sub-9802",
+            email="staff@x.dev",
+            email_normalized="staff@x.dev",
+            status="active",
+            source_system="dt",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9801, "post_title": "Owned", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+        {"ID": 9803, "post_title": "OwnedByGhost", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9801: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-9802"},
+        ],
+        9803: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-9999"},  # no link
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "contact_assignment"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contact_assignment"]["rows_in"] == 2
+        assert result["contact_assignment"]["rows_out_inserted"] == 1
+        assert result["contact_assignment"]["rows_out_skipped"] == 1
+
+        owned = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9801")
+        ).scalar_one()
+        assignment = pg_session.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == owned.id
+            )
+        ).scalar_one()
+        assert assignment.user_subject_id == "sub-9802"
+
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contact_assignment",
+                MigrationConflict.source_id == "9803",
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+        assert conflicts[0].conflict_type == "assignee_no_subject"
+    finally:
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id IN ('9801', '9803')")
+        )
+        pg_session.commit()
