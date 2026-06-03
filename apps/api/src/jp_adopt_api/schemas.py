@@ -301,6 +301,27 @@ class ContactNoteCreate(BaseModel):
     kind: str | None = Field(default="note", max_length=64)
 
 
+class ContactEmailCreate(BaseModel):
+    """F3: staff-composed email to a contact. Recorded as an ``email`` note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(min_length=1, max_length=512)
+    body: str = Field(min_length=1, max_length=16384)
+    # Facilitators only: also send to the org's secondary contact email when
+    # one is on file. Ignored for adopters (no secondary contact).
+    include_secondary: bool = False
+
+
+class ContactEmailResponse(BaseModel):
+    note_id: uuid.UUID
+    to: list[str]
+    # Send status of the recorded note at response time. The actual ACS send
+    # happens in a background task; the note's stored status flips to
+    # ``sent`` / ``failed`` once it resolves.
+    status: str
+
+
 # ── Intake (U4): Form A facilitation + Form B adoption ─────────────────────
 #
 # These schemas mirror jp-adopt-forms' POST envelope and accept the subset of
