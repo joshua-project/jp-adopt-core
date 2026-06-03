@@ -1232,8 +1232,8 @@ async def test_override_to_no_coverage_org_succeeds(
 async def test_override_at_capacity_then_accept_bypasses_ceiling(
     client: TestClient, session: AsyncSession
 ) -> None:
-    """An override to an at-capacity org can be accepted without a 409; the
-    committed counter clamps at the ceiling (never exceeds total)."""
+    """An override to an at-capacity org can be accepted without a 409, and
+    committed never exceeds total (overrides are off the capacity ledger)."""
     people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
     contact = await _make_contact(session)
     current = await _make_org_with_coverage(session, people_id3=people_id3)
@@ -1260,13 +1260,78 @@ async def test_override_at_capacity_then_accept_bypasses_ceiling(
         assert r2.status_code == 200, r2.text
         assert r2.json()["match"]["status"] == "accepted"
         await session.refresh(full)
-        # Clamped: committed stays at total (2), never 3.
+        # Off-ledger: committed unchanged, never exceeds total.
         assert full.capacity_committed == 2
         assert full.capacity_committed <= full.capacity_total
     finally:
         await _cleanup_contact_chain(session, contact)
         await _cleanup_org(session, current.id)
         await _cleanup_org(session, full.id)
+
+
+@pytest.mark.asyncio
+async def test_override_is_off_capacity_ledger(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """Override matches never touch capacity_committed — not on accept (an org
+    with room is not incremented) and not on a later send_back (no spurious
+    decrement). This keeps committed an exact count of non-override
+    reservations despite the capacity CHECK forbidding committed > total."""
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session)
+    current = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, current, people_id3)
+    target = await _make_org_with_coverage(
+        session, people_id3=people_id3, capacity_total=5, capacity_committed=1
+    )
+    try:
+        # Override to an org with room.
+        assert (
+            client.post(
+                f"/v1/matches/{m.id}/decide",
+                json={
+                    "decision": "route_elsewhere",
+                    "facilitator_org_id": str(target.id),
+                },
+                headers=_auth_headers(),
+            ).status_code
+            == 200
+        )
+        new = await _open_recommended_match(session, m.adopter_interest_id)
+        # Accept: committed stays at 1 (NOT incremented to 2) — off-ledger.
+        assert (
+            client.post(
+                f"/v1/matches/{new.id}/decide",
+                json={"decision": "accept"},
+                headers=_auth_headers(),
+            ).status_code
+            == 200
+        )
+        await session.refresh(target)
+        assert target.capacity_committed == 1
+        # Send the accepted override back: still no decrement — committed holds.
+        accepted = (
+            await session.execute(
+                select(Match).where(
+                    Match.adopter_interest_id == m.adopter_interest_id,
+                    Match.status == "accepted",
+                )
+            )
+        ).scalar_one()
+        assert (
+            client.post(
+                f"/v1/matches/{accepted.id}/decide",
+                json={"decision": "send_back"},
+                headers=_auth_headers(),
+            ).status_code
+            == 200
+        )
+        await session.refresh(target)
+        assert target.capacity_committed == 1
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, current.id)
+        await _cleanup_org(session, target.id)
 
 
 @pytest.mark.asyncio

@@ -636,7 +636,9 @@ async def send_contact_email(
                 )
             )
         ).scalar_one_or_none()
-        if secondary:
+        # Skip a secondary that duplicates the primary (common data-entry
+        # case) so ACS isn't handed two identical 'to' addresses.
+        if secondary and secondary != contact.email_normalized:
             recipients.append(secondary)
 
     note = ActivityLog(

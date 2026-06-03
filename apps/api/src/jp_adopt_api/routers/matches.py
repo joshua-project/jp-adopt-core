@@ -35,7 +35,7 @@ from typing import Annotated, Literal
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.deps import (
@@ -705,33 +705,6 @@ async def _try_increment_capacity(
     return (result.rowcount or 0) > 0
 
 
-async def _increment_capacity_override(
-    db: AsyncSession, facilitator_org_id: uuid.UUID
-) -> None:
-    """F1 (#52): capacity reservation for a *manual override* accept.
-
-    Unlike :func:`_try_increment_capacity`, this never fails and never 409s —
-    a staff override is allowed even when the org is full (the picker already
-    warned them). The increment is clamped at the ceiling via
-    ``LEAST(committed + 1, total)`` so it can never violate
-    ``ck_facilitating_org_capacity_committed_le_total``: an at-capacity
-    override rides on top without inflating the counter past total (the
-    ``match.is_manual_override`` flag + audit row record that it happened),
-    while an override with room still reserves a real slot. Stamps
-    ``last_assigned_at`` like the normal path."""
-    await db.execute(
-        update(FacilitatingOrg)
-        .where(FacilitatingOrg.id == facilitator_org_id)
-        .values(
-            capacity_committed=func.least(
-                FacilitatingOrg.capacity_committed + 1,
-                FacilitatingOrg.capacity_total,
-            ),
-            last_assigned_at=datetime.now(UTC),
-        )
-    )
-
-
 async def _try_decrement_capacity(
     db: AsyncSession, facilitator_org_id: uuid.UUID
 ) -> None:
@@ -886,25 +859,29 @@ async def decide_match(
             # Bump facilitator capacity_committed atomically on the first
             # accept (manager flow). The facilitator's accept just promotes
             # the row to active; the slot was already reserved.
-            if target == AdopterState.MATCHED:
-                if m.is_manual_override:
-                    # F1 (#52): a staff override is allowed past the ceiling —
-                    # clamp the increment so it never 409s or breaks the
-                    # capacity CHECK.
-                    await _increment_capacity_override(db, m.facilitator_org_id)
-                else:
-                    ok = await _try_increment_capacity(db, m.facilitator_org_id)
-                    if not ok:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail={
-                                "code": "capacity_unavailable",
-                                "message": (
-                                    "Facilitator capacity is at the ceiling; "
-                                    "route to a different org."
-                                ),
-                            },
-                        )
+            #
+            # F1 (#52): manual-override matches are OFF the capacity ledger.
+            # The ck_facilitating_org_capacity_committed_le_total CHECK forbids
+            # committed > total, so committed can never count an over-capacity
+            # override anyway; rather than clamp on increment (which then
+            # desyncs from an unconditional decrement on teardown), overrides
+            # never touch capacity_committed at all — on accept here, and
+            # symmetrically on send_back / route_elsewhere below. So
+            # capacity_committed stays an exact count of non-override
+            # reservations, and an override accept is never blocked.
+            if target == AdopterState.MATCHED and not m.is_manual_override:
+                ok = await _try_increment_capacity(db, m.facilitator_org_id)
+                if not ok:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "code": "capacity_unavailable",
+                            "message": (
+                                "Facilitator capacity is at the ceiling; "
+                                "route to a different org."
+                            ),
+                        },
+                    )
             emit_outbox(
                 db,
                 event_type=event_type,
@@ -942,8 +919,12 @@ async def decide_match(
             # F1: release the capacity reservation ONLY if the prior Match
             # had actually reserved a slot (status was accepted or active).
             # Sending back a ``recommended`` or ``triage`` row would otherwise
-            # silently free some other accepted match's slot.
-            if prior_match_status in _RESERVED_MATCH_STATUSES:
+            # silently free some other accepted match's slot. Override matches
+            # are off-ledger (never reserved), so they never release either.
+            if (
+                prior_match_status in _RESERVED_MATCH_STATUSES
+                and not m.is_manual_override
+            ):
                 await _try_decrement_capacity(db, m.facilitator_org_id)
 
         else:  # route_elsewhere
@@ -1036,15 +1017,15 @@ async def decide_match(
                 reason_text=body.reason_text,
             )
 
-            # F1: route_elsewhere from an already-accepted match must release
-            # the old org's slot AND reserve the new org's slot. For an
-            # override the reservation is clamped (never 409s); for a scored
-            # alternate the ceiling guard still applies.
+            # F1: route_elsewhere from an already-reserved match must release
+            # the old org's slot and reserve the new one. Override matches are
+            # off-ledger on both sides: an override SOURCE never reserved (skip
+            # the release), and an override TARGET never reserves (skip the
+            # acquire). For a scored alternate the ceiling guard still applies.
             if prior_match_status in _RESERVED_MATCH_STATUSES:
-                await _try_decrement_capacity(db, m.facilitator_org_id)
-                if is_override:
-                    await _increment_capacity_override(db, target_org_id)
-                else:
+                if not m.is_manual_override:
+                    await _try_decrement_capacity(db, m.facilitator_org_id)
+                if not is_override:
                     ok = await _try_increment_capacity(db, target_org_id)
                     if not ok:
                         # The outer try/except rolls back the whole

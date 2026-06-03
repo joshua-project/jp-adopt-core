@@ -175,8 +175,15 @@ export function MatchReview({ matchId }: { matchId: string }) {
   const primary = allCandidates.find(
     (c) => c.facilitator_org_id === data.facilitator_org_id,
   );
+  // Scored alternates only: exclude the current org and any null-rank rows.
+  // A manual-override audit attempt has rank === null and is not a selectable
+  // alternate — route_elsewhere(next_attempt_id) on it would 400, so it must
+  // not render a Pick button.
   const alternates = allCandidates.filter(
-    (c) => c.facilitator_org_id !== data.facilitator_org_id,
+    (c) =>
+      c.facilitator_org_id !== data.facilitator_org_id &&
+      c.rank !== null &&
+      c.rank !== undefined,
   );
   const selectedOrg = assignable.find(
     (o) => o.facilitator_org_id === overrideOrgId,
