@@ -110,6 +110,9 @@ class FilterReason(enum.StrEnum):
     NO_CAPACITY = "no_capacity"
     NO_COVERAGE = "no_coverage"
     EXCLUDED = "excluded_by_previous_send_back"
+    # F1 (#52): staff hand-assigned this facilitator, bypassing scoring. The
+    # audit row carries a NULL score since the candidate was never scored.
+    MANUAL_OVERRIDE = "manual_override"
 
 
 @dataclass(frozen=True)
