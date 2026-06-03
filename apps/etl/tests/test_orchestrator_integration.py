@@ -797,3 +797,47 @@ def test_import_assignment_resolves_subject_and_records_conflict(
             text("DELETE FROM migration_conflicts WHERE source_id IN ('9801', '9803')")
         )
         pg_session.commit()
+
+
+def test_dry_run_is_non_mutating_but_writes_etl_run(monkeypatch, pg_engine, pg_session):
+    """--mode dry_run persists no data rows but still writes an etl_run row."""
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {"ID": 9901, "post_title": "Ghost", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None}
+    ]
+    postmeta = {
+        9901: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+        ]
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="dry_run",
+            watermark=None,
+        )
+        # No contact was persisted.
+        ghost = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9901")
+        ).scalar_one_or_none()
+        assert ghost is None
+        # But an etl_run audit row was.
+        runs = pg_session.execute(
+            select(EtlRun).where(
+                EtlRun.mode == "dry_run", EtlRun.table_name == "contacts"
+            )
+        ).scalars().all()
+        assert len(runs) >= 1
+        assert runs[-1].rows_in == 1
+    finally:
+        pg_session.execute(text("DELETE FROM etl_run WHERE mode = 'dry_run'"))
+        pg_session.commit()

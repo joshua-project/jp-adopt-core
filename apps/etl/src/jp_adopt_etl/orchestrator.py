@@ -684,6 +684,7 @@ def run_etl(
                     "started_at": datetime.now(UTC).isoformat(),
                 },
             ) as ctx:
+                etl_run_snapshots: list[dict[str, Any]] = []
                 for table_name in tables:
                     with etl_run(
                         pg_session,
@@ -755,14 +756,32 @@ def run_etl(
                         run_row.rows_out_skipped = counts.get("rows_out_skipped", 0)
                         run_row.rows_in_conflict = counts.get("rows_in_conflict", 0)
                         results[table_name] = counts
+                    # Snapshot the audit row as plain data so dry-run can
+                    # re-create it after rolling back the data writes.
+                    etl_run_snapshots.append(
+                        {
+                            "table_name": run_row.table_name,
+                            "mode": run_row.mode,
+                            "started_at": run_row.started_at,
+                            "ended_at": run_row.ended_at,
+                            "watermark_from": run_row.watermark_from,
+                            "source_max_modified_at": run_row.source_max_modified_at,
+                            "rows_in": run_row.rows_in,
+                            "rows_out_inserted": run_row.rows_out_inserted,
+                            "rows_out_updated": run_row.rows_out_updated,
+                            "rows_out_skipped": run_row.rows_out_skipped,
+                            "rows_in_conflict": run_row.rows_in_conflict,
+                            "errors": run_row.errors,
+                        }
+                    )
                 ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
             if mode == "dry_run":
-                # In dry-run, roll back at the end so nothing persists
-                # except the etl_run audit rows — but we want those to
-                # persist, so we commit only the audit table writes by
-                # selectively flushing. Cleanest is to commit and let
-                # the dry_run mode field signal the intent.
-                pass
+                # Truly non-mutating: discard every data write (and the
+                # suppressed ``bulk_imported`` outbox row), then persist only
+                # the etl_run audit rows so the operator still gets a summary.
+                pg_session.rollback()
+                for snap in etl_run_snapshots:
+                    pg_session.add(EtlRun(id=uuid.uuid4(), **snap))
             pg_session.commit()
         mysql_engine.dispose()
         pg_engine.dispose()

@@ -116,11 +116,12 @@ be captured in the per-event counts.
 |---|---|---|
 | Unmapped DT status | Raises `UnmappedStatusError` | Maps to `'unknown'` + `migration_conflicts` row |
 | etl_run.mode | `'dry_run'` | `'production'` |
-| Side effects | **CURRENTLY:** same as production. v1 commits all writes regardless of mode. To do a non-mutating dry run, use a read-only Postgres user or run against a throwaway DB. | Commits inserts/updates |
+| Side effects | **Non-mutating.** All data writes (and the suppressed `bulk_imported` outbox row) are rolled back at the end; only the `etl_run` audit rows are committed so the operator still gets a per-table summary. | Commits inserts/updates |
 
-The v1 dry-run is fail-loud-on-unknowns, not write-free. This is a known
-gap — `docs/runbooks/dt-cutover.md` calls it out and recommends staging
-as the dry-run target.
+`dry_run` is both fail-loud-on-unknowns AND write-free: it runs the full
+import against the target DB inside one transaction, then rolls back the
+data and re-commits just the `etl_run` rows. Safe to point at the real
+target for a rehearsal — it leaves no `source_system='dt'` rows behind.
 
 ## Delta vs full ETL
 
