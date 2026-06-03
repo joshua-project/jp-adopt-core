@@ -192,6 +192,10 @@ class DecideResponse(BaseModel):
 
     match: MatchSummary
     contact_adopter_status: str | None
+    # On route_elsewhere, the id of the freshly-created `recommended` match
+    # (override or scored alternate). Lets a caller immediately accept the
+    # reassignment in a follow-up call (the "pick + Accept" match-review flow).
+    new_match_id: uuid.UUID | None = None
 
 
 class RunMatchRequest(BaseModel):
@@ -822,6 +826,7 @@ async def decide_match(
     # F1: capture the pre-mutation status so send_back can decide whether
     # this Match was actually holding a reservation.
     prior_match_status = m.status
+    created_match_id: uuid.UUID | None = None
 
     try:
         if body.decision == "accept":
@@ -1049,6 +1054,7 @@ async def decide_match(
                 is_manual_override=is_override,
             )
             db.add(new_match)
+            created_match_id = new_match.id
 
             if is_override:
                 # Audit row: records that an override happened. NULL score
@@ -1118,6 +1124,7 @@ async def decide_match(
     return DecideResponse(
         match=await _build_match_summary(db, m),
         contact_adopter_status=contact.adopter_status,
+        new_match_id=created_match_id,
     )
 
 

@@ -5026,6 +5026,18 @@
               }
             ],
             "title": "Contact Adopter Status"
+          },
+          "new_match_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Match Id"
           }
         },
         "type": "object",

@@ -1270,6 +1270,46 @@ async def test_override_at_capacity_then_accept_bypasses_ceiling(
 
 
 @pytest.mark.asyncio
+async def test_route_elsewhere_returns_new_match_id_for_pick_then_accept(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """The 'pick + Accept' flow: route_elsewhere returns the new match's id so
+    the caller can immediately accept the reassignment in one follow-up."""
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session)
+    current = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, current, people_id3)
+    target = await _make_org_with_coverage(session, people_id3=people_id3)
+    try:
+        r = client.post(
+            f"/v1/matches/{m.id}/decide",
+            json={
+                "decision": "route_elsewhere",
+                "facilitator_org_id": str(target.id),
+            },
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        new_match_id = r.json()["new_match_id"]
+        assert new_match_id  # populated on route_elsewhere
+        # Accept the reassignment in a follow-up call.
+        r2 = client.post(
+            f"/v1/matches/{new_match_id}/decide",
+            json={"decision": "accept"},
+            headers=_auth_headers(),
+        )
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["contact_adopter_status"] == "matched"
+        assert r2.json()["match"]["facilitator_org_id"] == str(target.id)
+        # accept response is not a route -> no new match id.
+        assert r2.json()["new_match_id"] is None
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, current.id)
+        await _cleanup_org(session, target.id)
+
+
+@pytest.mark.asyncio
 async def test_override_is_off_capacity_ledger(
     client: TestClient, session: AsyncSession
 ) -> None:

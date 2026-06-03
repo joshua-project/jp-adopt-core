@@ -1359,6 +1359,8 @@ export interface components {
             match: components["schemas"]["MatchSummary"];
             /** Contact Adopter Status */
             contact_adopter_status: string | null;
+            /** New Match Id */
+            new_match_id?: string | null;
         };
         /** FacilitatingOrgListResponse */
         FacilitatingOrgListResponse: {
