@@ -841,3 +841,69 @@ def test_dry_run_is_non_mutating_but_writes_etl_run(monkeypatch, pg_engine, pg_s
     finally:
         pg_session.execute(text("DELETE FROM etl_run WHERE mode = 'dry_run'"))
         pg_session.commit()
+
+
+def test_full_run_records_deleted_in_source(monkeypatch, pg_engine, pg_session):
+    """A contact imported on a prior full run but absent from a later
+    snapshot is recorded in etl_deleted_in_source (idempotently)."""
+    from jp_adopt_api.models import EtlDeletedInSource
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    present = _MockedDtSource(
+        contacts=[
+            {"ID": 9011, "post_title": "Here", "post_status": "publish",
+             "post_date": None, "post_date_gmt": None}
+        ],
+        postmeta={9011: [{"meta_key": "sub_type", "meta_value": "adopter"}]},
+    )
+    _patch_dt_source(monkeypatch, present)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+    run_etl(
+        mysql_url="mysql+pymysql://ignored",
+        postgres_url=ETL_TEST_DATABASE_URL,
+        tables=["contacts"],
+        mode="production",
+        watermark=None,
+    )
+
+    try:
+        # Later snapshot no longer contains 9011.
+        gone = _MockedDtSource(contacts=[], postmeta={})
+        _patch_dt_source(monkeypatch, gone)
+        _open_engine_returns_pg(monkeypatch, pg_engine)
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        rows = pg_session.execute(
+            select(EtlDeletedInSource).where(
+                EtlDeletedInSource.source_system == "dt",
+                EtlDeletedInSource.source_id == "9011",
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+
+        # Idempotent: a third full run does not duplicate the record.
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        rows = pg_session.execute(
+            select(EtlDeletedInSource).where(
+                EtlDeletedInSource.source_system == "dt",
+                EtlDeletedInSource.source_id == "9011",
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+    finally:
+        pg_session.execute(
+            text("DELETE FROM etl_deleted_in_source WHERE source_id = '9011'")
+        )
+        pg_session.commit()

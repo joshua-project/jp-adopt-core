@@ -332,6 +332,51 @@ def _flush_contact_batch(
         del result
 
 
+def sweep_deleted_contacts(
+    mysql_conn: Connection,
+    pg_session: Session,
+    etl_run_id: uuid.UUID,
+) -> int:
+    """Record DT contacts that were imported previously but are absent from
+    the current source snapshot. Never hard-deletes — writes to
+    ``etl_deleted_in_source`` for Amy to review. Full-run only (the caller
+    skips this on watermarked delta runs). Idempotent: a source_id already
+    recorded is not duplicated.
+    """
+    seen = {
+        str(post["ID"]) for post in iter_contacts(mysql_conn, watermark=None)
+    }
+    existing = {
+        sid
+        for (sid,) in pg_session.execute(
+            select(Contact.source_id).where(Contact.source_system == "dt")
+        ).all()
+        if sid is not None
+    }
+    already = {
+        sid
+        for (sid,) in pg_session.execute(
+            select(EtlDeletedInSource.source_id).where(
+                EtlDeletedInSource.source_system == "dt",
+                EtlDeletedInSource.table_name == "contacts",
+            )
+        ).all()
+    }
+    recorded = 0
+    for source_id in existing - seen - already:
+        pg_session.add(
+            EtlDeletedInSource(
+                id=uuid.uuid4(),
+                etl_run_id=etl_run_id,
+                table_name="contacts",
+                source_system="dt",
+                source_id=source_id,
+            )
+        )
+        recorded += 1
+    return recorded
+
+
 def import_comments(
     *,
     mysql_conn: Connection,
@@ -709,6 +754,12 @@ def run_etl(
                             run_row.source_max_modified_at = fetch_max_modified(
                                 mysql_conn, table="wp_posts"
                             )
+                            # Full-run only: flag contacts that vanished from
+                            # the source since a prior import (no hard delete).
+                            if watermark is None:
+                                sweep_deleted_contacts(
+                                    mysql_conn, pg_session, run_row.id
+                                )
                         elif table_name == "activity_log":
                             counts = import_comments(
                                 mysql_conn=mysql_conn,
@@ -919,12 +970,6 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-# Silence unused-import warnings on EtlDeletedInSource — the model is
-# imported here so external callers can populate it via the same session,
-# and so the table is referenced in __all__-style exports of this module.
-_ = EtlDeletedInSource
-
-
 __all__ = [
     "etl_run",
     "import_activity_history",
@@ -935,4 +980,5 @@ __all__ = [
     "import_users",
     "main",
     "run_etl",
+    "sweep_deleted_contacts",
 ]
