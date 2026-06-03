@@ -218,6 +218,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/emails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Contact Email
+         * @description F3: email a contact and record the email as a note on the timeline.
+         *
+         *     Matches the magic-link send pattern: write the note in-transaction,
+         *     commit, then fire ``send_contact_email_inline`` via BackgroundTasks (ACS,
+         *     dev-fallback log). The background task flips the note's stored
+         *     ``source_metadata.status`` to ``sent`` / ``failed`` once delivery
+         *     resolves. Inherits magic-link's known durability gap (a process crash
+         *     between commit and send drops the email; the queued note row stays as a
+         *     visible, re-sendable record).
+         */
+        post: operations["send_contact_email_v1_contacts__contact_id__emails_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/contacts/{contact_id}/assignment": {
         parameters: {
             query?: never;
@@ -335,6 +363,28 @@ export interface paths {
         };
         /** Get Match */
         get: operations["get_match_v1_matches__match_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/assignable-orgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Assignable Orgs
+         * @description F1 (#52): every active non-triage org annotated with eligibility for
+         *     this match's interest, so staff can override-assign with eyes-open
+         *     warnings. Read-only — no writes, no outbox.
+         */
+        get: operations["assignable_orgs_v1_matches__match_id__assignable_orgs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -677,6 +727,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AssignableOrg */
+        AssignableOrg: {
+            /**
+             * Facilitator Org Id
+             * Format: uuid
+             */
+            facilitator_org_id: string;
+            /** Name */
+            name: string;
+            /** Country Code */
+            country_code?: string | null;
+            /** Capacity Total */
+            capacity_total: number;
+            /** Capacity Committed */
+            capacity_committed: number;
+            /** Covers Fpg */
+            covers_fpg: boolean;
+            /** Has Capacity */
+            has_capacity: boolean;
+            /** Warning */
+            warning?: ("no_coverage" | "at_capacity") | null;
+        };
+        /** AssignableOrgsResponse */
+        AssignableOrgsResponse: {
+            /** Items */
+            items: components["schemas"]["AssignableOrg"][];
+        };
         /** CampaignCreate */
         CampaignCreate: {
             /** Name */
@@ -851,6 +928,33 @@ export interface components {
         ContactAssignmentRequest: {
             /** User Subject Id */
             user_subject_id?: string | null;
+        };
+        /**
+         * ContactEmailCreate
+         * @description F3: staff-composed email to a contact. Recorded as an ``email`` note.
+         */
+        ContactEmailCreate: {
+            /** Subject */
+            subject: string;
+            /** Body */
+            body: string;
+            /**
+             * Include Secondary
+             * @default false
+             */
+            include_secondary: boolean;
+        };
+        /** ContactEmailResponse */
+        ContactEmailResponse: {
+            /**
+             * Note Id
+             * Format: uuid
+             */
+            note_id: string;
+            /** To */
+            to: string[];
+            /** Status */
+            status: string;
         };
         /**
          * ContactEnrollmentRow
@@ -1247,6 +1351,8 @@ export interface components {
             reason_text?: string | null;
             /** Next Attempt Id */
             next_attempt_id?: string | null;
+            /** Facilitator Org Id */
+            facilitator_org_id?: string | null;
         };
         /** DecideResponse */
         DecideResponse: {
@@ -2102,6 +2208,43 @@ export interface operations {
             };
         };
     };
+    send_contact_email_v1_contacts__contact_id__emails_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactEmailCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactEmailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     assign_contact_v1_contacts__contact_id__assignment_put: {
         parameters: {
             query?: never;
@@ -2495,6 +2638,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MatchSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assignable_orgs_v1_matches__match_id__assignable_orgs_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignableOrgsResponse"];
                 };
             };
             /** @description Validation Error */

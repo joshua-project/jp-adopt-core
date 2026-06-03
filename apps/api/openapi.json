@@ -854,6 +854,76 @@
         }
       }
     },
+    "/v1/contacts/{contact_id}/emails": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Send Contact Email",
+        "description": "F3: email a contact and record the email as a note on the timeline.\n\nMatches the magic-link send pattern: write the note in-transaction,\ncommit, then fire ``send_contact_email_inline`` via BackgroundTasks (ACS,\ndev-fallback log). The background task flips the note's stored\n``source_metadata.status`` to ``sent`` / ``failed`` once delivery\nresolves. Inherits magic-link's known durability gap (a process crash\nbetween commit and send drops the email; the queued note row stays as a\nvisible, re-sendable record).",
+        "operationId": "send_contact_email_v1_contacts__contact_id__emails_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactEmailCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactEmailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contacts/{contact_id}/assignment": {
       "put": {
         "tags": [
@@ -1447,6 +1517,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MatchSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/{match_id}/assignable-orgs": {
+      "get": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Assignable Orgs",
+        "description": "F1 (#52): every active non-triage org annotated with eligibility for\nthis match's interest, so staff can override-assign with eyes-open\nwarnings. Read-only \u2014 no writes, no outbox.",
+        "operationId": "assignable_orgs_v1_matches__match_id__assignable_orgs_get",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignableOrgsResponse"
                 }
               }
             }
@@ -2726,6 +2856,87 @@
   },
   "components": {
     "schemas": {
+      "AssignableOrg": {
+        "properties": {
+          "facilitator_org_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Facilitator Org Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "capacity_total": {
+            "type": "integer",
+            "title": "Capacity Total"
+          },
+          "capacity_committed": {
+            "type": "integer",
+            "title": "Capacity Committed"
+          },
+          "covers_fpg": {
+            "type": "boolean",
+            "title": "Covers Fpg"
+          },
+          "has_capacity": {
+            "type": "boolean",
+            "title": "Has Capacity"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "no_coverage",
+                  "at_capacity"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "facilitator_org_id",
+          "name",
+          "capacity_total",
+          "capacity_committed",
+          "covers_fpg",
+          "has_capacity"
+        ],
+        "title": "AssignableOrg"
+      },
+      "AssignableOrgsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssignableOrg"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "AssignableOrgsResponse"
+      },
       "CampaignCreate": {
         "properties": {
           "name": {
@@ -3153,6 +3364,62 @@
         "type": "object",
         "title": "ContactAssignmentRequest",
         "description": "Assign a contact to a staff user. ``user_subject_id`` omitted \u2192 assign to\nthe calling user (the common 'assign to me' case)."
+      },
+      "ContactEmailCreate": {
+        "properties": {
+          "subject": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Subject"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Body"
+          },
+          "include_secondary": {
+            "type": "boolean",
+            "title": "Include Secondary",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subject",
+          "body"
+        ],
+        "title": "ContactEmailCreate",
+        "description": "F3: staff-composed email to a contact. Recorded as an ``email`` note."
+      },
+      "ContactEmailResponse": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Note Id"
+          },
+          "to": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "To"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_id",
+          "to",
+          "status"
+        ],
+        "title": "ContactEmailResponse"
       },
       "ContactEnrollmentRow": {
         "properties": {
@@ -4723,6 +4990,18 @@
               }
             ],
             "title": "Next Attempt Id"
+          },
+          "facilitator_org_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Facilitator Org Id"
           }
         },
         "additionalProperties": false,
