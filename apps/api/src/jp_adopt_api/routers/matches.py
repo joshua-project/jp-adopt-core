@@ -35,7 +35,7 @@ from typing import Annotated, Literal
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.deps import (
@@ -44,6 +44,7 @@ from jp_adopt_api.deps import (
     require_role,
 )
 from jp_adopt_api.domain.matching import (
+    FilterReason,
     TriageOrgMissingError,
     match_or_route,
 )
@@ -158,15 +159,30 @@ class DecideRequest(BaseModel):
     # by attempt_id; if omitted, the next-highest-ranked unmasked alternative
     # is selected automatically.
     next_attempt_id: uuid.UUID | None = None
+    # F1 (#52): staff override — on `route_elsewhere`, assign an arbitrary
+    # active org by id, bypassing scoring entirely (including orgs the filter
+    # dropped for no-coverage / no-capacity). Mutually exclusive with
+    # next_attempt_id.
+    facilitator_org_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
-    def _next_attempt_only_for_route_elsewhere(self) -> "DecideRequest":
-        # F24: silently dropping the field on accept/send_back hides client
-        # bugs; reject the combination at the schema layer so it surfaces as
-        # a 422 with a clear path.
+    def _validate_route_elsewhere_fields(self) -> "DecideRequest":
+        # F24: silently dropping these on accept/send_back hides client bugs;
+        # reject the combination at the schema layer so it surfaces as a 422.
         if self.next_attempt_id is not None and self.decision != "route_elsewhere":
             raise ValueError(
                 "next_attempt_id is only valid with decision='route_elsewhere'"
+            )
+        if (
+            self.facilitator_org_id is not None
+            and self.decision != "route_elsewhere"
+        ):
+            raise ValueError(
+                "facilitator_org_id is only valid with decision='route_elsewhere'"
+            )
+        if self.facilitator_org_id is not None and self.next_attempt_id is not None:
+            raise ValueError(
+                "facilitator_org_id and next_attempt_id are mutually exclusive"
             )
         return self
 
@@ -689,6 +705,33 @@ async def _try_increment_capacity(
     return (result.rowcount or 0) > 0
 
 
+async def _increment_capacity_override(
+    db: AsyncSession, facilitator_org_id: uuid.UUID
+) -> None:
+    """F1 (#52): capacity reservation for a *manual override* accept.
+
+    Unlike :func:`_try_increment_capacity`, this never fails and never 409s —
+    a staff override is allowed even when the org is full (the picker already
+    warned them). The increment is clamped at the ceiling via
+    ``LEAST(committed + 1, total)`` so it can never violate
+    ``ck_facilitating_org_capacity_committed_le_total``: an at-capacity
+    override rides on top without inflating the counter past total (the
+    ``match.is_manual_override`` flag + audit row record that it happened),
+    while an override with room still reserves a real slot. Stamps
+    ``last_assigned_at`` like the normal path."""
+    await db.execute(
+        update(FacilitatingOrg)
+        .where(FacilitatingOrg.id == facilitator_org_id)
+        .values(
+            capacity_committed=func.least(
+                FacilitatingOrg.capacity_committed + 1,
+                FacilitatingOrg.capacity_total,
+            ),
+            last_assigned_at=datetime.now(UTC),
+        )
+    )
+
+
 async def _try_decrement_capacity(
     db: AsyncSession, facilitator_org_id: uuid.UUID
 ) -> None:
@@ -844,18 +887,24 @@ async def decide_match(
             # accept (manager flow). The facilitator's accept just promotes
             # the row to active; the slot was already reserved.
             if target == AdopterState.MATCHED:
-                ok = await _try_increment_capacity(db, m.facilitator_org_id)
-                if not ok:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "code": "capacity_unavailable",
-                            "message": (
-                                "Facilitator capacity is at the ceiling; "
-                                "route to a different org."
-                            ),
-                        },
-                    )
+                if m.is_manual_override:
+                    # F1 (#52): a staff override is allowed past the ceiling —
+                    # clamp the increment so it never 409s or breaks the
+                    # capacity CHECK.
+                    await _increment_capacity_override(db, m.facilitator_org_id)
+                else:
+                    ok = await _try_increment_capacity(db, m.facilitator_org_id)
+                    if not ok:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail={
+                                "code": "capacity_unavailable",
+                                "message": (
+                                    "Facilitator capacity is at the ceiling; "
+                                    "route to a different org."
+                                ),
+                            },
+                        )
             emit_outbox(
                 db,
                 event_type=event_type,
@@ -904,48 +953,85 @@ async def decide_match(
 
         else:  # route_elsewhere
             # Mark this Match declined; create a new `recommended` Match for
-            # the chosen alternative (or the next-best alternative when
-            # next_attempt_id is omitted). The Contact's adopter_status is
-            # NOT mutated here — the recommendation slot just rotates to a
-            # different facilitator.
-            alternates = (
-                await db.execute(
-                    select(MatchAttempt)
-                    .where(
-                        MatchAttempt.adopter_interest_id == m.adopter_interest_id,
-                        MatchAttempt.candidate_facilitator_id != m.facilitator_org_id,
-                        MatchAttempt.rank.is_not(None),
+            # the chosen target. The target comes from one of two sources:
+            #   * a scored alternate (next_attempt_id, or next-best by rank), or
+            #   * F1 (#52) a staff override — an arbitrary active org by id,
+            #     bypassing scoring entirely.
+            # The Contact's adopter_status is NOT mutated here — the
+            # recommendation slot just rotates to a different facilitator.
+            is_override = body.facilitator_org_id is not None
+            chosen: MatchAttempt | None = None
+            if is_override:
+                # Override is a manager capability — a plain facilitator (even
+                # one scoped to this match's org) must not reassign arbitrarily.
+                if not roles & staff_roles:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "code": "role_required",
+                            "message": (
+                                "Override assignment requires a staff manager role"
+                            ),
+                        },
                     )
-                    .order_by(MatchAttempt.rank.asc())
-                )
-            ).scalars().all()
-            chosen: MatchAttempt | None
-            if body.next_attempt_id is not None:
-                chosen = next(
-                    (a for a in alternates if a.id == body.next_attempt_id),
-                    None,
-                )
-                if chosen is None:
+                target_org = await db.get(FacilitatingOrg, body.facilitator_org_id)
+                if (
+                    target_org is None
+                    or not target_org.active
+                    or target_org.is_triage_org
+                    or target_org.id == m.facilitator_org_id
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
-                            "code": "alternate_not_found",
-                            "message": "next_attempt_id is not a ranked alternate",
+                            "code": "invalid_override_org",
+                            "message": (
+                                "facilitator_org_id must be an active, non-triage "
+                                "org other than the current one"
+                            ),
                         },
                     )
+                target_org_id = target_org.id
             else:
-                chosen = alternates[0] if alternates else None
-            if chosen is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "no_alternates",
-                        "message": (
-                            "No ranked alternates available; "
-                            "trigger a new run instead"
-                        ),
-                    },
-                )
+                alternates = (
+                    await db.execute(
+                        select(MatchAttempt)
+                        .where(
+                            MatchAttempt.adopter_interest_id == m.adopter_interest_id,
+                            MatchAttempt.candidate_facilitator_id
+                            != m.facilitator_org_id,
+                            MatchAttempt.rank.is_not(None),
+                        )
+                        .order_by(MatchAttempt.rank.asc())
+                    )
+                ).scalars().all()
+                if body.next_attempt_id is not None:
+                    chosen = next(
+                        (a for a in alternates if a.id == body.next_attempt_id),
+                        None,
+                    )
+                    if chosen is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={
+                                "code": "alternate_not_found",
+                                "message": "next_attempt_id is not a ranked alternate",
+                            },
+                        )
+                else:
+                    chosen = alternates[0] if alternates else None
+                if chosen is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "code": "no_alternates",
+                            "message": (
+                                "No ranked alternates available; "
+                                "trigger a new run instead"
+                            ),
+                        },
+                    )
+                target_org_id = chosen.candidate_facilitator_id
 
             await _stamp_decision(
                 m,
@@ -955,39 +1041,58 @@ async def decide_match(
                 reason_text=body.reason_text,
             )
 
-            # F1: route_elsewhere from an already-accepted match must
-            # release the old org's slot AND reserve the new org's slot.
-            # Otherwise an in-flight accept rerouted to a different org
-            # leaves a phantom slot on the original.
+            # F1: route_elsewhere from an already-accepted match must release
+            # the old org's slot AND reserve the new org's slot. For an
+            # override the reservation is clamped (never 409s); for a scored
+            # alternate the ceiling guard still applies.
             if prior_match_status in _RESERVED_MATCH_STATUSES:
                 await _try_decrement_capacity(db, m.facilitator_org_id)
-                ok = await _try_increment_capacity(
-                    db, chosen.candidate_facilitator_id
-                )
-                if not ok:
-                    # Roll back the just-decremented old-org slot by
-                    # re-incrementing before bailing out, since the outer
-                    # try/except will rollback the whole transaction anyway
-                    # — this just keeps the in-memory state consistent if a
-                    # later test inspects it.
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "code": "capacity_unavailable",
-                            "message": (
-                                "Alternate facilitator is at capacity; "
-                                "trigger a new run to refresh ranking."
-                            ),
-                        },
-                    )
+                if is_override:
+                    await _increment_capacity_override(db, target_org_id)
+                else:
+                    ok = await _try_increment_capacity(db, target_org_id)
+                    if not ok:
+                        # The outer try/except rolls back the whole
+                        # transaction anyway; bail out with a clear 409.
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail={
+                                "code": "capacity_unavailable",
+                                "message": (
+                                    "Alternate facilitator is at capacity; "
+                                    "trigger a new run to refresh ranking."
+                                ),
+                            },
+                        )
 
             new_match = Match(
                 id=uuid.uuid4(),
                 adopter_interest_id=m.adopter_interest_id,
-                facilitator_org_id=chosen.candidate_facilitator_id,
+                facilitator_org_id=target_org_id,
                 status="recommended",
+                is_manual_override=is_override,
             )
             db.add(new_match)
+
+            if is_override:
+                # Audit row: records that an override happened. NULL score
+                # (never scored); rank stays NULL so it is not offered as a
+                # future ranked alternate.
+                db.add(
+                    MatchAttempt(
+                        id=uuid.uuid4(),
+                        contact_id=contact.id,
+                        adopter_interest_id=m.adopter_interest_id,
+                        run_id=uuid.uuid4(),
+                        candidate_facilitator_id=target_org_id,
+                        score=None,
+                        score_breakdown=None,
+                        filter_results={
+                            "filter_reason": FilterReason.MANUAL_OVERRIDE.value
+                        },
+                        rank=None,
+                    )
+                )
 
             emit_outbox(
                 db,
@@ -999,7 +1104,8 @@ async def decide_match(
                     "new_match_id": str(new_match.id),
                     "contact_id": str(contact.id),
                     "from_facilitator_org_id": str(m.facilitator_org_id),
-                    "to_facilitator_org_id": str(chosen.candidate_facilitator_id),
+                    "to_facilitator_org_id": str(target_org_id),
+                    "manual_override": is_override,
                     "actor": {"sub": user.sub, "role": actor_role},
                     "timestamp": datetime.now(UTC).isoformat(),
                 },
