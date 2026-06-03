@@ -1003,3 +1003,123 @@ async def test_decide_accept_with_next_attempt_id_returns_422(
     finally:
         await _cleanup_contact_chain(session, contact)
         await _cleanup_org(session, org.id)
+
+
+# ─── F1 (#52): assignable-orgs picker ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_assignable_orgs_annotates_eligibility(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """Each active non-triage org is tagged covers_fpg / has_capacity /
+    warning for the match's interest; the current match org is excluded."""
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    other = f"OTH{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session)
+    current = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, current, people_id3)
+    covering = await _make_org_with_coverage(
+        session, people_id3=people_id3, capacity_total=5, capacity_committed=1
+    )
+    at_cap = await _make_org_with_coverage(
+        session, people_id3=people_id3, capacity_total=2, capacity_committed=2
+    )
+    non_cov = await _make_org_with_coverage(session, people_id3=other)
+    try:
+        r = client.get(
+            f"/v1/matches/{m.id}/assignable-orgs", headers=_auth_headers()
+        )
+        assert r.status_code == 200, r.text
+        items = {i["facilitator_org_id"]: i for i in r.json()["items"]}
+        assert str(current.id) not in items  # current org excluded
+        assert items[str(covering.id)]["covers_fpg"] is True
+        assert items[str(covering.id)]["has_capacity"] is True
+        assert items[str(covering.id)]["warning"] is None
+        assert items[str(at_cap.id)]["covers_fpg"] is True
+        assert items[str(at_cap.id)]["has_capacity"] is False
+        assert items[str(at_cap.id)]["warning"] == "at_capacity"
+        assert items[str(non_cov.id)]["covers_fpg"] is False
+        assert items[str(non_cov.id)]["warning"] == "no_coverage"
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        for o in (current, covering, at_cap, non_cov):
+            await _cleanup_org(session, o.id)
+
+
+@pytest.mark.asyncio
+async def test_assignable_orgs_excludes_triage_and_inactive(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """Triage orgs (seeded bbb1) and inactive orgs never appear as
+    assignable candidates."""
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session)
+    current = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, current, people_id3)
+    await _ensure_fpg(session, people_id3)
+    inactive = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"Inactive {uuid.uuid4().hex[:6]}",
+        country_code="US",
+        language_codes=["en"],
+        capacity_total=5,
+        capacity_committed=0,
+        active=False,
+        is_triage_org=False,
+    )
+    session.add(inactive)
+    session.add(
+        FacilitatorFpgCoverage(facilitator_org_id=inactive.id, people_id3=people_id3)
+    )
+    await session.commit()
+    try:
+        r = client.get(
+            f"/v1/matches/{m.id}/assignable-orgs", headers=_auth_headers()
+        )
+        assert r.status_code == 200, r.text
+        ids = {i["facilitator_org_id"] for i in r.json()["items"]}
+        assert str(inactive.id) not in ids
+        assert "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1" not in ids  # seeded triage
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, current.id)
+        await _cleanup_org(session, inactive.id)
+
+
+@pytest.mark.asyncio
+async def test_assignable_orgs_unknown_match_returns_404(
+    client: TestClient,
+) -> None:
+    r = client.get(
+        f"/v1/matches/{uuid.uuid4()}/assignable-orgs", headers=_auth_headers()
+    )
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.asyncio
+async def test_assignable_orgs_non_staff_returns_403(
+    client: TestClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Override assignment is a manager capability — a pure facilitator is
+    refused (403) even on a match they could otherwise view."""
+    from jp_adopt_api import deps as deps_module
+
+    people_id3 = f"TST{uuid.uuid4().hex[:5].upper()}"
+    contact = await _make_contact(session)
+    org = await _make_org_with_coverage(session, people_id3=people_id3)
+    m = await _seed_recommended_match(session, contact, org, people_id3)
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    try:
+        r = client.get(
+            f"/v1/matches/{m.id}/assignable-orgs", headers=_auth_headers()
+        )
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "role_required"
+    finally:
+        await _cleanup_contact_chain(session, contact)
+        await _cleanup_org(session, org.id)

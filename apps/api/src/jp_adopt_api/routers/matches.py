@@ -62,6 +62,7 @@ from jp_adopt_api.models import (
     AdopterInterest,
     Contact,
     FacilitatingOrg,
+    FacilitatorFpgCoverage,
     FacilitatorOrgMembership,
     Match,
     MatchAttempt,
@@ -535,6 +536,109 @@ async def get_match(
                 detail={"code": "role_required", "message": "Insufficient role"},
             )
     return await _build_match_summary(db, m)
+
+
+# ── Staff override: assignable-org picker (F1 / #52) ───────────────────────
+
+# Override assignment is a manager capability: a facilitator must not be able
+# to reassign a contact to an arbitrary org. Both this picker and the decide
+# override path (route_elsewhere + facilitator_org_id) gate on this set.
+_OVERRIDE_ROLES = frozenset({"staff_admin", "adoption_manager"})
+
+
+class AssignableOrg(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    facilitator_org_id: uuid.UUID
+    name: str
+    country_code: str | None = None
+    capacity_total: int
+    capacity_committed: int
+    covers_fpg: bool
+    has_capacity: bool
+    # Why this org would not normally be recommended for this interest, or
+    # null when it is fully eligible. ``no_coverage`` takes precedence when an
+    # org both lacks coverage and is at capacity.
+    warning: Literal["no_coverage", "at_capacity"] | None = None
+
+
+class AssignableOrgsResponse(BaseModel):
+    items: list[AssignableOrg]
+
+
+@router.get("/{match_id}/assignable-orgs", response_model=AssignableOrgsResponse)
+async def assignable_orgs(
+    match_id: uuid.UUID,
+    db: DbSession,
+    user_with_roles: CurrentUserWithRoles,
+) -> AssignableOrgsResponse:
+    """F1 (#52): every active non-triage org annotated with eligibility for
+    this match's interest, so staff can override-assign with eyes-open
+    warnings. Read-only — no writes, no outbox."""
+    _user, roles = user_with_roles
+    if not roles & _OVERRIDE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "role_required",
+                "message": "Override assignment requires a staff manager role",
+            },
+        )
+    m = await db.get(Match, match_id)
+    if m is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Match not found"
+        )
+    _contact_id, people_id3 = await _load_interest_meta(db, m.adopter_interest_id)
+
+    orgs = (
+        await db.execute(
+            select(FacilitatingOrg).where(
+                FacilitatingOrg.is_triage_org.is_(False),
+                FacilitatingOrg.active.is_(True),
+                FacilitatingOrg.id != m.facilitator_org_id,
+            )
+        )
+    ).scalars().all()
+    coverage_rows = (
+        await db.execute(
+            select(
+                FacilitatorFpgCoverage.facilitator_org_id,
+                FacilitatorFpgCoverage.people_id3,
+            )
+        )
+    ).all()
+    coverage: dict[uuid.UUID, set[str]] = {}
+    for org_id, pid3 in coverage_rows:
+        coverage.setdefault(org_id, set()).add(pid3)
+
+    items: list[AssignableOrg] = []
+    for org in orgs:
+        covers_fpg = people_id3 is not None and people_id3 in coverage.get(
+            org.id, set()
+        )
+        has_capacity = org.capacity_committed < org.capacity_total
+        warning: Literal["no_coverage", "at_capacity"] | None = None
+        if not covers_fpg:
+            warning = "no_coverage"
+        elif not has_capacity:
+            warning = "at_capacity"
+        items.append(
+            AssignableOrg(
+                facilitator_org_id=org.id,
+                name=org.name,
+                country_code=org.country_code,
+                capacity_total=org.capacity_total,
+                capacity_committed=org.capacity_committed,
+                covers_fpg=covers_fpg,
+                has_capacity=has_capacity,
+                warning=warning,
+            )
+        )
+    # Eligible-first (no warning), then by name — so the cleanest options
+    # surface at the top of the picker.
+    items.sort(key=lambda o: (o.warning is not None, o.name.lower()))
+    return AssignableOrgsResponse(items=items)
 
 
 # Internal: shared by accept / send_back / route_elsewhere
