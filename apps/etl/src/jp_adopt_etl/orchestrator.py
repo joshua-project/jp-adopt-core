@@ -10,7 +10,7 @@ ETL run instead of one event per imported row.
 Tables imported (in dependency order):
   1. ``staff_identity_link``   (from wp_users)
   2. ``contacts``              (from wp_posts + wp_postmeta pivot)
-  3. ``adopter_interest``      (from wp_p2p contacts_to_peoplegroups)
+  3. ``adopter_interest``      (from each contact's fpg_submission_data JSON)
   4. ``activity_log``          (from wp_comments)
 
 Each table writes one ``etl_run`` row at start, increments counters as
@@ -38,10 +38,12 @@ from typing import Any
 
 from jp_adopt_api.models import (
     ActivityLog,
+    AdopterInterest,
     Contact,
     ContactProfile,
     EtlDeletedInSource,
     EtlRun,
+    Fpg,
     MigrationConflict,
     StaffIdentityLink,
 )
@@ -49,7 +51,6 @@ from jp_adopt_api.outbox_suppression import outbox_suppressed
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from jp_adopt_etl.dt_source import (
@@ -57,14 +58,13 @@ from jp_adopt_etl.dt_source import (
     fetch_max_modified,
     iter_comments,
     iter_contacts,
-    iter_p2p,
     iter_users,
     load_postmeta,
     open_engine,
 )
 from jp_adopt_etl.mappers.comments import map_comment
 from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
-from jp_adopt_etl.mappers.p2p import P2P_TYPE_CONTACT_TO_FPG
+from jp_adopt_etl.mappers.interests import parse_fpg_submission_data
 from jp_adopt_etl.mappers.profile import map_contact_profile
 from jp_adopt_etl.mappers.status import Mode, UnmappedStatusError
 from jp_adopt_etl.mappers.users import map_user
@@ -385,40 +385,98 @@ def import_comments(
     return counts
 
 
-def import_p2p_interests(
+def _load_existing_fpg_ids(pg_session: Session) -> set[str]:
+    rows = pg_session.execute(select(Fpg.people_id3)).all()
+    return {str(r.people_id3) for r in rows if r.people_id3 is not None}
+
+
+def import_interests(
     *,
     mysql_conn: Connection,
     pg_session: Session,
     mode: Mode,
-    p2p_type: str = P2P_TYPE_CONTACT_TO_FPG,
+    watermark: datetime | None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> dict[str, int]:
-    """Import wp_p2p (contacts_to_peoplegroups) → adopter_interest.
+    """Import per-FPG interests from each contact's ``fpg_submission_data``
+    postmeta (JSON) → ``adopter_interest``.
 
-    Gracefully degrades when the source DB has no p2p table (OperationalError),
-    logging a single warning and returning zero counts.
+    Idempotent on ``(source_system='dt', source_id='<post_id>:<people_id3>')``.
+    Interests whose ``people_id3`` is absent from ``fpg`` are skipped and
+    recorded as conflicts (the FK would otherwise abort the batch); operators
+    run ``sync_fpg`` before cutover so this should be rare.
     """
     counts = {"rows_in": 0, "rows_out_inserted": 0, "rows_out_skipped": 0}
     post_to_contact = _load_existing_dt_post_id_to_contact(pg_session)
-    try:
-        rows = list(iter_p2p(mysql_conn, p2p_type=p2p_type))
-    except OperationalError as e:
-        logger.warning(
-            "wp_p2p table not present or unreadable; skipping AdopterInterest "
-            "import: %s",
-            e,
+    fpg_ids = _load_existing_fpg_ids(pg_session)
+
+    batch: list[dict[str, Any]] = []
+    for post in iter_contacts(mysql_conn, watermark=watermark, batch_size=batch_size):
+        batch.append(post)
+        if len(batch) >= batch_size:
+            _flush_interest_batch(
+                mysql_conn, pg_session, batch, post_to_contact, fpg_ids, counts
+            )
+            batch.clear()
+    if batch:
+        _flush_interest_batch(
+            mysql_conn, pg_session, batch, post_to_contact, fpg_ids, counts
         )
-        return counts
-    # p2p_from is the contact post_id; p2p_to is the people-group post_id.
-    # people_id3 is read from DT's fpg_submission_data in the U13 cutover pass;
-    # this loop only counts rows until that resolver is wired.
-    for p2p_row in rows:
-        counts["rows_in"] += 1
-        contact_id = post_to_contact.get(str(p2p_row.get("p2p_from")))
-        if contact_id is None:
-            counts["rows_out_skipped"] += 1
-            continue
-        counts["rows_out_skipped"] += 1
     return counts
+
+
+def _flush_interest_batch(
+    mysql_conn: Connection,
+    pg_session: Session,
+    batch: Iterable[dict[str, Any]],
+    post_to_contact: dict[str, uuid.UUID],
+    fpg_ids: set[str],
+    counts: dict[str, int],
+) -> None:
+    batch_list = list(batch)
+    meta_by_post = load_postmeta(mysql_conn, [row["ID"] for row in batch_list])
+    for post_row in batch_list:
+        post_id = str(post_row["ID"])
+        contact_id = post_to_contact.get(post_id)
+        if contact_id is None:
+            continue
+        meta = pivot_postmeta(meta_by_post.get(post_row["ID"], []))
+        for interest in parse_fpg_submission_data(meta.get("fpg_submission_data")):
+            counts["rows_in"] += 1
+            people_id3 = interest["people_id3"]
+            if people_id3 not in fpg_ids:
+                counts["rows_out_skipped"] += 1
+                _record_conflict(
+                    pg_session,
+                    source_system="dt",
+                    source_id=f"{post_id}:{people_id3}",
+                    table_name="adopter_interest",
+                    conflict_type="fpg_not_found",
+                    source_value={"people_id3": people_id3},
+                )
+                continue
+            stmt = (
+                pg_insert(AdopterInterest)
+                .values(
+                    id=uuid.uuid4(),
+                    contact_id=contact_id,
+                    source_system="dt",
+                    source_id=f"{post_id}:{people_id3}",
+                    **interest,
+                )
+                .on_conflict_do_update(
+                    index_elements=["source_system", "source_id"],
+                    index_where=text("source_id IS NOT NULL"),
+                    set_={
+                        "engagement_status": interest["engagement_status"],
+                        "facilitation_services": interest["facilitation_services"],
+                        "network_services": interest["network_services"],
+                        "commitment_types": interest["commitment_types"],
+                    },
+                )
+            )
+            pg_session.execute(stmt)
+            counts["rows_out_inserted"] += 1
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -492,10 +550,12 @@ def run_etl(
                                 mysql_conn, table="wp_comments"
                             )
                         elif table_name == "adopter_interest":
-                            counts = import_p2p_interests(
+                            counts = import_interests(
                                 mysql_conn=mysql_conn,
                                 pg_session=pg_session,
                                 mode=mode,
+                                watermark=watermark,
+                                batch_size=batch_size,
                             )
                         else:
                             raise ValueError(f"unknown table {table_name!r}")
@@ -647,7 +707,7 @@ __all__ = [
     "etl_run",
     "import_comments",
     "import_contacts",
-    "import_p2p_interests",
+    "import_interests",
     "import_users",
     "main",
     "run_etl",

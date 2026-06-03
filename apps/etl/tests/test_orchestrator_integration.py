@@ -164,7 +164,6 @@ def _patch_dt_source(monkeypatch, mock: _MockedDtSource) -> None:
     monkeypatch.setattr(orch, "iter_contacts", mock.iter_contacts)
     monkeypatch.setattr(orch, "load_postmeta", mock.load_postmeta)
     monkeypatch.setattr(orch, "iter_comments", mock.iter_comments)
-    monkeypatch.setattr(orch, "iter_p2p", mock.iter_p2p)
     monkeypatch.setattr(orch, "fetch_max_modified", mock.fetch_max_modified)
 
 
@@ -477,3 +476,105 @@ def test_import_contacts_populates_contact_profile(monkeypatch, pg_engine, pg_se
         select(ContactProfile).where(ContactProfile.contact_id == contact.id)
     ).all()
     assert len(count) == 1
+
+
+def test_import_interests_from_fpg_submission_data(monkeypatch, pg_engine, pg_session):
+    """Per-FPG interests are parsed from fpg_submission_data and upserted
+    idempotently; an unknown people_id3 is skipped + recorded as a conflict."""
+    from jp_adopt_api.models import AdopterInterest, MigrationConflict
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    pg_session.execute(
+        text(
+            "INSERT INTO fpg (people_id3, name, frontier) VALUES "
+            "('88001', 'Test FPG', true) ON CONFLICT (people_id3) DO NOTHING"
+        )
+    )
+    pg_session.commit()
+
+    # Second element's people_id3 (99999) is not in fpg → skipped + conflict.
+    fpg_json = (
+        '[{"peopleId3":88001,"engagementStatus":"ready","canFacilitate":true,'
+        '"facilitationServices":["prayer_updates"],"networkServices":[],'
+        '"commitmentTypes":["pray"]},'
+        '{"peopleId3":99999,"engagementStatus":"potential",'
+        '"facilitationServices":[],"networkServices":[],"commitmentTypes":[]}]'
+    )
+    contacts = [
+        {
+            "ID": 9501,
+            "post_title": "Interested",
+            "post_status": "publish",
+            "post_date": None,
+            "post_date_gmt": None,
+        }
+    ]
+    postmeta = {
+        9501: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "fpg_submission_data", "meta_value": fpg_json},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "adopter_interest"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["adopter_interest"]["rows_in"] == 2
+        assert result["adopter_interest"]["rows_out_inserted"] == 1
+        assert result["adopter_interest"]["rows_out_skipped"] == 1
+
+        contact = pg_session.execute(
+            select(Contact).where(
+                Contact.source_system == "dt", Contact.source_id == "9501"
+            )
+        ).scalar_one()
+        interests = pg_session.execute(
+            select(AdopterInterest).where(AdopterInterest.contact_id == contact.id)
+        ).scalars().all()
+        assert len(interests) == 1
+        assert interests[0].people_id3 == "88001"
+        assert interests[0].engagement_status == "ready"
+        assert interests[0].facilitation_services == ["prayer_updates"]
+        assert interests[0].source_id == "9501:88001"
+
+        # Unknown people_id3 recorded as a conflict.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "adopter_interest",
+                MigrationConflict.source_id == "9501:99999",
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+        assert conflicts[0].conflict_type == "fpg_not_found"
+
+        # Idempotent re-run: still exactly one interest row.
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "adopter_interest"],
+            mode="production",
+            watermark=None,
+        )
+        interests = pg_session.execute(
+            select(AdopterInterest).where(AdopterInterest.contact_id == contact.id)
+        ).scalars().all()
+        assert len(interests) == 1
+    finally:
+        pg_session.execute(
+            delete(AdopterInterest).where(AdopterInterest.source_system == "dt")
+        )
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id LIKE '9501:%'")
+        )
+        pg_session.execute(text("DELETE FROM fpg WHERE people_id3 = '88001'"))
+        pg_session.commit()
