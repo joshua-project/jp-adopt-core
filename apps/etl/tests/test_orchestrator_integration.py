@@ -95,11 +95,16 @@ class _MockedDtSource:
         contacts: list[dict] | None = None,
         postmeta: dict[int, list[dict]] | None = None,
         comments: list[dict] | None = None,
+        activity_log: list[dict] | None = None,
     ) -> None:
         self.users = users or []
         self.contacts = contacts or []
         self.postmeta = postmeta or {}
         self.comments = comments or []
+        self.activity_log = activity_log or []
+
+    def iter_activity_log(self, _conn, *, watermark=None, batch_size=500):
+        yield from self.activity_log
 
     def iter_users(self, _conn):
         yield from self.users
@@ -131,16 +136,23 @@ class _MockedDtSource:
         return iter([])
 
     def fetch_max_modified(self, _conn, table="wp_posts"):
+        # The real reader returns datetime | None; coerce ISO fixture strings
+        # so callers (e.g. _max_watermark) get the same type they would in prod.
+        def _dt(v):
+            from datetime import datetime
+
+            return datetime.fromisoformat(v) if isinstance(v, str) else v
+
         if table == "wp_posts":
             timestamps = [
-                r["post_modified_gmt"]
+                _dt(r["post_modified_gmt"])
                 for r in self.contacts
                 if r.get("post_modified_gmt")
             ]
             return max(timestamps, default=None)
         if table == "wp_comments":
             timestamps = [
-                r["comment_date_gmt"]
+                _dt(r["comment_date_gmt"])
                 for r in self.comments
                 if r.get("comment_date_gmt")
             ]
@@ -156,6 +168,7 @@ def _patch_dt_source(monkeypatch, mock: _MockedDtSource) -> None:
     monkeypatch.setattr(src, "iter_contacts", mock.iter_contacts)
     monkeypatch.setattr(src, "load_postmeta", mock.load_postmeta)
     monkeypatch.setattr(src, "iter_comments", mock.iter_comments)
+    monkeypatch.setattr(src, "iter_activity_log", mock.iter_activity_log)
     monkeypatch.setattr(src, "iter_p2p", mock.iter_p2p)
     monkeypatch.setattr(src, "fetch_max_modified", mock.fetch_max_modified)
     # Orchestrator imports the readers directly, so we have to repoint
@@ -164,6 +177,7 @@ def _patch_dt_source(monkeypatch, mock: _MockedDtSource) -> None:
     monkeypatch.setattr(orch, "iter_contacts", mock.iter_contacts)
     monkeypatch.setattr(orch, "load_postmeta", mock.load_postmeta)
     monkeypatch.setattr(orch, "iter_comments", mock.iter_comments)
+    monkeypatch.setattr(orch, "iter_activity_log", mock.iter_activity_log)
     monkeypatch.setattr(orch, "fetch_max_modified", mock.fetch_max_modified)
 
 
@@ -644,3 +658,56 @@ def test_import_comments_resolves_threading(monkeypatch, pg_engine, pg_session):
     child = by_source["701"]
     assert child.parent_id == parent.id
     assert parent.parent_id is None
+
+
+def test_import_activity_history_into_activity_log(monkeypatch, pg_engine, pg_session):
+    """A wp_dt_activity_log field_update row becomes a kind='field_change'
+    activity_log entry alongside comments."""
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {
+            "ID": 9701,
+            "post_title": "Audited",
+            "post_status": "publish",
+            "post_date": None,
+            "post_date_gmt": None,
+        }
+    ]
+    postmeta = {9701: [{"meta_key": "sub_type", "meta_value": "adopter"}]}
+    activity_log = [
+        {
+            "histid": 9001,
+            "action": "field_update",
+            "object_type": "contacts",
+            "object_id": 9701,
+            "user_id": 0,
+            "hist_time": 1700000000,
+            "meta_key": "overall_status",
+            "old_value": "new",
+            "meta_value": "active",
+            "field_type": "key_select",
+        }
+    ]
+    mock = _MockedDtSource(
+        contacts=contacts, postmeta=postmeta, activity_log=activity_log
+    )
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    run_etl(
+        mysql_url="mysql+pymysql://ignored",
+        postgres_url=ETL_TEST_DATABASE_URL,
+        tables=["contacts", "activity_log"],
+        mode="production",
+        watermark=None,
+    )
+
+    row = pg_session.execute(
+        select(ActivityLog).where(
+            ActivityLog.source_system == "dt",
+            ActivityLog.source_id == "histlog:9001",
+        )
+    ).scalar_one()
+    assert row.kind == "field_change"
+    assert row.body == "overall_status changed from 'new' to 'active'"

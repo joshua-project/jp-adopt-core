@@ -56,12 +56,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from jp_adopt_etl.dt_source import (
     DEFAULT_BATCH_SIZE,
     fetch_max_modified,
+    iter_activity_log,
     iter_comments,
     iter_contacts,
     iter_users,
     load_postmeta,
     open_engine,
 )
+from jp_adopt_etl.mappers.activity_history import map_activity_log_row
 from jp_adopt_etl.mappers.comments import map_comment
 from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
 from jp_adopt_etl.mappers.interests import parse_fpg_submission_data
@@ -405,6 +407,61 @@ def _resolve_activity_threading(pg_session: Session) -> None:
     )
 
 
+def import_activity_history(
+    *,
+    mysql_conn: Connection,
+    pg_session: Session,
+    mode: Mode,
+    watermark: datetime | None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> dict[str, int]:
+    """Import wp_dt_activity_log field-change rows → activity_log
+    (kind='field_change'). Idempotent on ``source_id='histlog:<histid>'``."""
+    counts = {"rows_in": 0, "rows_out_inserted": 0, "rows_out_skipped": 0}
+    obj_to_contact = _load_existing_dt_post_id_to_contact(pg_session)
+    user_to_link = _load_existing_dt_user_id_to_link(pg_session)
+    for row in iter_activity_log(
+        mysql_conn, watermark=watermark, batch_size=batch_size
+    ):
+        counts["rows_in"] += 1
+        contact_id = obj_to_contact.get(str(row.get("object_id")))
+        if contact_id is None:
+            counts["rows_out_skipped"] += 1
+            continue
+        user_id = row.get("user_id")
+        author_link_id = (
+            user_to_link.get(str(user_id))
+            if user_id and int(user_id) != 0
+            else None
+        )
+        kwargs = map_activity_log_row(
+            row=row, contact_id=contact_id, author_link_id=author_link_id
+        )
+        stmt = (
+            pg_insert(ActivityLog)
+            .values(id=uuid.uuid4(), **kwargs)
+            .on_conflict_do_nothing(
+                index_elements=["source_system", "source_id"],
+                index_where=text("source_id IS NOT NULL"),
+            )
+            .returning(ActivityLog.id)
+        )
+        if pg_session.execute(stmt).one_or_none() is not None:
+            counts["rows_out_inserted"] += 1
+        else:
+            counts["rows_out_skipped"] += 1
+    return counts
+
+
+def _max_watermark(*values: datetime | None) -> datetime | None:
+    """Return the latest of the given watermarks, normalizing naive
+    datetimes to UTC so MySQL-naive and epoch-derived values compare."""
+    normalized = [
+        (v if v.tzinfo else v.replace(tzinfo=UTC)) for v in values if v is not None
+    ]
+    return max(normalized, default=None)
+
+
 def _load_existing_fpg_ids(pg_session: Session) -> set[str]:
     rows = pg_session.execute(select(Fpg.people_id3)).all()
     return {str(r.people_id3) for r in rows if r.people_id3 is not None}
@@ -566,8 +623,20 @@ def run_etl(
                                 watermark=watermark,
                                 batch_size=batch_size,
                             )
-                            run_row.source_max_modified_at = fetch_max_modified(
-                                mysql_conn, table="wp_comments"
+                            history = import_activity_history(
+                                mysql_conn=mysql_conn,
+                                pg_session=pg_session,
+                                mode=mode,
+                                watermark=watermark,
+                                batch_size=batch_size,
+                            )
+                            for key, value in history.items():
+                                counts[key] = counts.get(key, 0) + value
+                            run_row.source_max_modified_at = _max_watermark(
+                                fetch_max_modified(mysql_conn, table="wp_comments"),
+                                fetch_max_modified(
+                                    mysql_conn, table="wp_dt_activity_log"
+                                ),
                             )
                         elif table_name == "adopter_interest":
                             counts = import_interests(
@@ -725,6 +794,7 @@ _ = EtlDeletedInSource
 
 __all__ = [
     "etl_run",
+    "import_activity_history",
     "import_comments",
     "import_contacts",
     "import_interests",
