@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -183,6 +183,41 @@ def iter_p2p(
         yield dict(row)
 
 
+def iter_activity_log(
+    conn: Connection,
+    *,
+    watermark: datetime | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """Yield wp_dt_activity_log field-change rows for contacts.
+
+    Filters to ``action='field_update'`` AND ``object_type='contacts'`` —
+    the rest of the table is system noise (error_log, viewed, logged_in).
+    ``hist_time`` is a unix epoch int, so the watermark is compared as such.
+    """
+    clauses = ["action = 'field_update'", "object_type = 'contacts'"]
+    params: dict[str, Any] = {}
+    if watermark is not None:
+        clauses.append("hist_time > :wm_unix")
+        params["wm_unix"] = int(watermark.timestamp())
+    sql = (
+        "SELECT histid, action, object_type, object_id, user_id, hist_time, "
+        "meta_key, old_value, meta_value, field_type "
+        "FROM wp_dt_activity_log "
+        f"WHERE {' AND '.join(clauses)} "
+        "ORDER BY histid ASC"
+    )
+    result = conn.execution_options(stream_results=True).execute(text(sql), params)
+    batch: list[dict[str, Any]] = []
+    for row in result.mappings():
+        batch.append(dict(row))
+        if len(batch) >= batch_size:
+            yield from batch
+            batch = []
+    if batch:
+        yield from batch
+
+
 def fetch_max_modified(conn: Connection, table: str = "wp_posts") -> datetime | None:
     """The watermark for the next delta run is the highest post_modified_gmt
     among DT contacts at snapshot time."""
@@ -193,6 +228,21 @@ def fetch_max_modified(conn: Connection, table: str = "wp_posts") -> datetime | 
         )
     elif table == "wp_comments":
         sql = "SELECT MAX(comment_date_gmt) AS max_ts FROM wp_comments"
+    elif table == "wp_dt_activity_log":
+        # hist_time is a unix epoch int; convert MAX to a tz-aware datetime.
+        result = (
+            conn.execute(
+                text(
+                    "SELECT MAX(hist_time) AS max_ts FROM wp_dt_activity_log "
+                    "WHERE action = 'field_update' AND object_type = 'contacts'"
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if result and result.get("max_ts"):
+            return datetime.fromtimestamp(int(result["max_ts"]), tz=UTC)
+        return None
     else:
         raise ValueError(f"unsupported watermark table: {table!r}")
     result = conn.execute(text(sql)).mappings().one_or_none()
@@ -202,6 +252,7 @@ def fetch_max_modified(conn: Connection, table: str = "wp_posts") -> datetime | 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
     "fetch_max_modified",
+    "iter_activity_log",
     "iter_comments",
     "iter_contacts",
     "iter_p2p",
