@@ -79,6 +79,7 @@ class Contact(Base):
     )
     b2c_subject_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_system: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_modified_after_import: Mapped[bool] = mapped_column(
@@ -605,6 +606,15 @@ class AdopterInterest(Base):
             "('ready', 'potential', 'none')",
             name="ck_adopter_interest_engagement_status",
         ),
+        # DT ETL idempotency: ON CONFLICT (source_system, source_id) needs a
+        # unique partial index. Local-origin rows (source_id NULL) are excluded.
+        Index(
+            "uq_adopter_interest_source_system_source_id",
+            "source_system",
+            "source_id",
+            unique=True,
+            postgresql_where="source_id IS NOT NULL",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -631,6 +641,10 @@ class AdopterInterest(Base):
     network_services: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text), nullable=True
     )
+    source_system: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'local'"), default="local"
+    )
+    source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

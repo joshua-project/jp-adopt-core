@@ -7,11 +7,16 @@ operator-facing wrapper.
 
 ## Pre-cutover (Friday evening, 5/22)
 
-1. Confirm staging Postgres is at migration `0009`:
+1. Confirm staging Postgres is at the latest migration (`0025`):
    ```bash
    uv run --package jp-adopt-api alembic current
-   # expect: 0009 (head)
+   # expect: 0025 (head)
    ```
+   `0023` adds `contacts.phone`; `0024` adds `adopter_interest.source_system`/
+   `source_id` plus the partial unique index needed for ETL idempotency;
+   `0025` adds a partial unique index on `migration_conflicts` so the
+   hourly delta cron can use `ON CONFLICT DO NOTHING` without unbounded
+   row growth.
 2. Dry-run against the latest DT MySQL snapshot:
    ```bash
    uv run --package jp-adopt-etl dt-etl \
@@ -25,17 +30,39 @@ operator-facing wrapper.
    means a new DT enum value has appeared; add a mapping to
    `apps/etl/src/jp_adopt_etl/mappers/status.py` and re-run.
 3. Spot-check 5 known contacts against the staging DB. Pick contacts you
-   manually edited recently in DT — their `display_name` and
-   `adopter_status` should round-trip:
+   manually edited recently in DT — their `display_name`, `email_normalized`,
+   and lifecycle status should round-trip:
    ```sql
-   SELECT source_id, display_name, adopter_status, country_code, language_codes
+   SELECT source_id, display_name, party_kind, adopter_status,
+          facilitator_status, email_normalized, phone, origin
    FROM contacts WHERE source_system = 'dt' ORDER BY created_at DESC LIMIT 5;
    ```
-4. Verify the `migration_conflicts` table is empty or only contains
-   expected items (unmapped party_kind, deferred p2p resolutions):
+   Also verify the related rows landed:
+   ```sql
+   SELECT COUNT(*) FROM contact_profile WHERE contact_id IN
+     (SELECT id FROM contacts WHERE source_system = 'dt');
+   SELECT COUNT(*) FROM adopter_interest WHERE source_system = 'dt';
+   SELECT COUNT(*) FROM contact_assignment;
+   SELECT COUNT(*) FROM activity_log WHERE source_system = 'dt';
+   ```
+4. Triage `migration_conflicts` by `conflict_type`:
    ```sql
    SELECT conflict_type, COUNT(*) FROM migration_conflicts GROUP BY 1;
    ```
+   Expected conflict types (informational, not blocking):
+   - `duplicate_email` — DT permits multiple contacts to share an email;
+     the new system's partial unique index does not. The ETL keeps the
+     contact and clears the duplicate's `email_normalized`. Reconcile
+     post-cutover by picking the canonical contact per email.
+   - `assignee_no_subject` — DT user has no B2C signin yet, so
+     `assigned_to` can't resolve to a `user_subject_id`. Re-run after the
+     assignee signs into jp-adopt-core for the first time.
+   - `fpg_not_found` — `fpg_submission_data.peopleId3` not in the local
+     `fpg` table. Seed the FPG and re-run.
+   - `unmapped_status:*` — a DT enum value missing from `status.py`. Add
+     a mapping and re-run.
+   - `local_modified_after_import` — staff edited the contact in
+     jp-adopt-core after a prior import; the ETL preserved the local edit.
 5. Rehearse the rollback from Step "If cutover fails" below in staging.
 
 ## Cutover (Saturday 5/23 14:00-18:00 ET)
@@ -69,8 +96,16 @@ uv run --package jp-adopt-etl dt-etl \
 ```sql
 -- Row counts vs MySQL source
 SELECT COUNT(*) FROM contacts WHERE source_system = 'dt';
+SELECT COUNT(*) FROM contact_profile WHERE contact_id IN
+  (SELECT id FROM contacts WHERE source_system = 'dt');
+SELECT COUNT(*) FROM adopter_interest WHERE source_system = 'dt';
+SELECT COUNT(*) FROM contact_assignment;
 SELECT COUNT(*) FROM activity_log WHERE source_system = 'dt';
 SELECT COUNT(*) FROM staff_identity_link WHERE source_system = 'dt';
+
+-- Activity_log by kind (notes + emails + field changes)
+SELECT kind, COUNT(*) FROM activity_log WHERE source_system = 'dt'
+  GROUP BY 1 ORDER BY 2 DESC;
 
 -- Status distribution sanity check
 SELECT adopter_status, COUNT(*) FROM contacts WHERE source_system = 'dt'
@@ -91,10 +126,16 @@ ORDER BY started_at DESC;
 Compare contact counts against DT MySQL:
 ```sql
 -- in MySQL
-SELECT COUNT(*) FROM wp_posts WHERE post_type = 'contacts';
+SELECT COUNT(*) FROM wp_posts WHERE post_type = 'contacts'
+  AND post_status NOT IN ('trash', 'auto-draft');
+SELECT COUNT(*) FROM wp_dt_activity_log
+  WHERE action = 'field_update' AND object_type = 'contacts';
 ```
-The Postgres count should match (modulo any rows in `migration_conflicts`
-flagged as `local_modified_after_import`).
+The Postgres contact count should match (modulo any rows in
+`migration_conflicts` flagged as `local_modified_after_import`).
+`activity_log` (kind='field_change') should match `wp_dt_activity_log`
+minus any `rows_out_skipped` (contact not yet imported when the audit row
+was visited).
 
 ### 17:00 — review migration_conflicts
 ```sql
@@ -143,9 +184,17 @@ SELECT * FROM migration_conflicts
    contacts):
    ```sql
    DELETE FROM activity_log WHERE source_system = 'dt';
-   DELETE FROM contacts WHERE source_system = 'dt' AND local_modified_after_import = false;
+   DELETE FROM adopter_interest WHERE source_system = 'dt';
+   DELETE FROM contact_assignment WHERE contact_id IN
+     (SELECT id FROM contacts WHERE source_system = 'dt');
+   DELETE FROM contact_profile WHERE contact_id IN
+     (SELECT id FROM contacts WHERE source_system = 'dt');
+   DELETE FROM contacts
+     WHERE source_system = 'dt' AND local_modified_after_import = false;
    DELETE FROM staff_identity_link WHERE source_system = 'dt';
-   DELETE FROM migration_conflicts WHERE source_system = 'dt' AND detected_at > now() - interval '6 hours';
+   DELETE FROM etl_deleted_in_source WHERE source_system = 'dt';
+   DELETE FROM migration_conflicts
+     WHERE source_system = 'dt' AND detected_at > now() - interval '6 hours';
    ```
 5. Diagnose the root cause Saturday evening; reschedule the cutover for
    Sunday or postpone until Amy is back.

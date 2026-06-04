@@ -34,6 +34,12 @@ ADOPTER_STATUS_MAP: Final[dict[str, str]] = {
     "matched": "matched",
     "active": "matched",  # DT collapsed active into matched
     "inactive": "do_not_engage",
+    # overall_status is the authoritative DT lifecycle source (see
+    # .dt-inspection/decisions.md). 'unassignable' = closed / not pursued.
+    "unassignable": "do_not_engage",
+    # 'closed' surfaced in DT production — same terminal-not-pursuing
+    # semantics as 'unassignable' (6 adopter rows in prod at cutover).
+    "closed": "do_not_engage",
 }
 
 
@@ -47,6 +53,8 @@ FACILITATOR_STATUS_MAP: Final[dict[str, str]] = {
     "matched": "ready",
     "active": "ready",
     "inactive": "do_not_engage",
+    "unassignable": "do_not_engage",
+    "closed": "do_not_engage",
 }
 
 
