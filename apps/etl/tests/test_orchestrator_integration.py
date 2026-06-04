@@ -62,18 +62,28 @@ def _cleanup_dt_rows(pg_session):
     The test fixture data uses post_id range 9000-9999 to avoid colliding
     with any other test suite's data."""
     yield
-    pg_session.execute(
-        delete(ActivityLog).where(ActivityLog.source_system == "dt")
+    # Scope all cleanup to the 9xxx test ID range so we never clobber real
+    # DT data the operator may have left behind in the dev DB.
+    test_contact_ids = select(Contact.id).where(
+        Contact.source_system == "dt", Contact.source_id.like("9%")
     )
     pg_session.execute(
-        delete(ContactAssignment).where(
-            ContactAssignment.contact_id.in_(
-                select(Contact.id).where(Contact.source_system == "dt")
-            )
+        delete(ActivityLog).where(
+            ActivityLog.source_system == "dt",
+            ActivityLog.source_id.like("9%")
+            | ActivityLog.source_id.like("histlog:9%"),
         )
     )
     pg_session.execute(
-        delete(MigrationConflict).where(MigrationConflict.source_system == "dt")
+        delete(ContactAssignment).where(
+            ContactAssignment.contact_id.in_(test_contact_ids)
+        )
+    )
+    pg_session.execute(
+        delete(MigrationConflict).where(
+            MigrationConflict.source_system == "dt",
+            MigrationConflict.source_id.like("9%"),
+        )
     )
     pg_session.execute(
         delete(Contact).where(
@@ -87,8 +97,18 @@ def _cleanup_dt_rows(pg_session):
             StaffIdentityLink.dt_user_id.like("9%"),
         )
     )
+    # Production-mode tests create etl_run rows with the real table names
+    # ('contacts', 'activity_log', etc.). Without cleanup these accumulate
+    # across suite runs and confuse `len(runs) >= 1` assertions. The
+    # `started_at > now() - interval '5 minutes'` filter limits the wipe
+    # to rows created during the current suite run, avoiding any unrelated
+    # production etl_run rows.
     pg_session.execute(
-        text("DELETE FROM etl_run WHERE table_name LIKE 'test_%'")
+        text(
+            "DELETE FROM etl_run WHERE "
+            "table_name LIKE 'test_%' "
+            "OR started_at > now() - interval '5 minutes'"
+        )
     )
     pg_session.commit()
 
@@ -1057,6 +1077,151 @@ def test_import_assignment_protects_local_overrides(
     finally:
         pg_session.execute(
             text("DELETE FROM migration_conflicts WHERE source_id = '9820'")
+        )
+        pg_session.commit()
+
+
+def test_migration_conflicts_dedup_across_delta_runs(
+    monkeypatch, pg_engine, pg_session
+):
+    """A recurring conflict (e.g. the same DT contact repeatedly losing
+    to a local_assignment_override) must record only ONE row across N
+    delta runs — migration 0025's partial unique index + ON CONFLICT
+    DO NOTHING make _record_conflict idempotent."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import StaffIdentityLink
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    pg_session.add(
+        StaffIdentityLink(
+            id=_uuid.uuid4(), dt_user_id="9830", b2c_subject_id="sub-9830",
+            email="dup@x.dev", email_normalized="dup@x.dev",
+            status="active", source_system="dt",
+        ),
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9840, "post_title": "Recurring", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9840: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-9830"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        # 1) Initial DT import.
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "contact_assignment"],
+            mode="production",
+            watermark=None,
+        )
+        contact = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9840")
+        ).scalar_one()
+
+        # 2) Staff override.
+        pg_session.execute(
+            text(
+                "UPDATE contact_assignment SET assigned_by='staff_action' "
+                "WHERE contact_id=:cid"
+            ),
+            {"cid": contact.id},
+        )
+        pg_session.commit()
+
+        # 3) Run the delta three times. Each run detects the override and
+        # would record a conflict — without the dedup index this grows
+        # linearly with runs.
+        for _ in range(3):
+            run_etl(
+                mysql_url="mysql+pymysql://ignored",
+                postgres_url=ETL_TEST_DATABASE_URL,
+                tables=["contact_assignment"],
+                mode="production",
+                watermark=None,
+            )
+
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contact_assignment",
+                MigrationConflict.conflict_type == "local_assignment_override",
+                MigrationConflict.source_id == "9840",
+            )
+        ).scalars().all()
+        # Exactly one row even though the conflict was detected on each
+        # of the three delta runs.
+        assert len(conflicts) == 1
+    finally:
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id = '9840'")
+        )
+        pg_session.commit()
+
+
+def test_dry_run_exception_path_preserves_audit(
+    monkeypatch, pg_engine, pg_session
+):
+    """A dry-run that raises mid-loop (e.g. UnmappedStatusError in a later
+    table) still commits the audit trail for tables that completed before
+    the failure. The exception propagates after the replay."""
+    from jp_adopt_etl.mappers.status import UnmappedStatusError
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # First table: a contact with a status we *don't* map (forces
+    # UnmappedStatusError in dry_run).
+    contacts = [
+        {"ID": 9905, "post_title": "Bad", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9905: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "totally_unknown"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        with pytest.raises(UnmappedStatusError):
+            run_etl(
+                mysql_url="mysql+pymysql://ignored",
+                postgres_url=ETL_TEST_DATABASE_URL,
+                tables=["contacts"],
+                mode="dry_run",
+                watermark=None,
+            )
+
+        # The conflict for the unmapped status was recorded *before* the
+        # exception re-raised; the exception-path replay preserved it.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.source_id == "9905",
+                MigrationConflict.conflict_type.like("unmapped_status:%"),
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+
+        # No contact row persisted (dry-run is non-mutating).
+        ghost = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9905")
+        ).scalar_one_or_none()
+        assert ghost is None
+    finally:
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id = '9905'")
         )
         pg_session.commit()
 

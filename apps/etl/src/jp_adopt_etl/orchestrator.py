@@ -34,6 +34,7 @@ import sys
 import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -47,6 +48,7 @@ from jp_adopt_api.models import (
     EtlRun,
     Fpg,
     MigrationConflict,
+    Outbox,
     StaffIdentityLink,
 )
 from jp_adopt_api.outbox_suppression import outbox_suppressed
@@ -75,6 +77,93 @@ from jp_adopt_etl.mappers.status import Mode, UnmappedStatusError
 from jp_adopt_etl.mappers.users import map_user
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Dry-run snapshot dataclasses
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _EtlRunSnapshot:
+    """In-memory copy of an EtlRun row plus the original id so dry-run can
+    re-insert with a fresh id and remap FK references on dependent rows."""
+
+    original_id: uuid.UUID
+    table_name: str
+    mode: str
+    started_at: datetime
+    ended_at: datetime | None
+    watermark_from: datetime | None
+    source_max_modified_at: datetime | None
+    rows_in: int
+    rows_out_inserted: int
+    rows_out_updated: int
+    rows_out_skipped: int
+    rows_in_conflict: int
+    errors: int
+
+    @classmethod
+    def from_row(cls, row: EtlRun) -> _EtlRunSnapshot:
+        return cls(
+            original_id=row.id,
+            table_name=row.table_name,
+            mode=row.mode,
+            started_at=row.started_at,
+            ended_at=row.ended_at,
+            watermark_from=row.watermark_from,
+            source_max_modified_at=row.source_max_modified_at,
+            rows_in=row.rows_in,
+            rows_out_inserted=row.rows_out_inserted,
+            rows_out_updated=row.rows_out_updated,
+            rows_out_skipped=row.rows_out_skipped,
+            rows_in_conflict=row.rows_in_conflict,
+            errors=row.errors,
+        )
+
+    def to_kwargs(self) -> dict[str, Any]:
+        return {
+            "table_name": self.table_name,
+            "mode": self.mode,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "watermark_from": self.watermark_from,
+            "source_max_modified_at": self.source_max_modified_at,
+            "rows_in": self.rows_in,
+            "rows_out_inserted": self.rows_out_inserted,
+            "rows_out_updated": self.rows_out_updated,
+            "rows_out_skipped": self.rows_out_skipped,
+            "rows_in_conflict": self.rows_in_conflict,
+            "errors": self.errors,
+        }
+
+
+@dataclass
+class _DeletedInSourceSnapshot:
+    original_etl_run_id: uuid.UUID
+    table_name: str
+    source_system: str
+    source_id: str
+    last_seen_at: datetime | None
+    detected_at: datetime
+
+    def to_kwargs(self, new_etl_run_id: uuid.UUID) -> dict[str, Any]:
+        return {
+            "etl_run_id": new_etl_run_id,
+            "table_name": self.table_name,
+            "source_system": self.source_system,
+            "source_id": self.source_id,
+            "last_seen_at": self.last_seen_at,
+            "detected_at": self.detected_at,
+        }
+
+
+@dataclass
+class _DryRunCapture:
+    pre_conflict_ids: set[uuid.UUID] = field(default_factory=set)
+    pre_deleted_ids: set[uuid.UUID] = field(default_factory=set)
+    pre_outbox_bulk_imported_ids: set[uuid.UUID] = field(default_factory=set)
+    etl_runs: list[_EtlRunSnapshot] = field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -129,8 +218,16 @@ def _record_conflict(
     source_value: dict[str, Any] | None = None,
     local_value: dict[str, Any] | None = None,
 ) -> None:
-    session.add(
-        MigrationConflict(
+    """Insert a migration_conflicts row, deduped by natural key.
+
+    Migration 0025 adds a partial unique index on
+    ``(source_system, source_id, table_name, conflict_type)`` so an hourly
+    cron that re-detects the same conflict each run does not unbounded-grow
+    the table.
+    """
+    session.execute(
+        pg_insert(MigrationConflict)
+        .values(
             id=uuid.uuid4(),
             source_system=source_system,
             source_id=source_id,
@@ -138,6 +235,15 @@ def _record_conflict(
             conflict_type=conflict_type,
             source_value=source_value,
             local_value=local_value,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                "source_system",
+                "source_id",
+                "table_name",
+                "conflict_type",
+            ],
+            index_where=text("source_id IS NOT NULL"),
         )
     )
 
@@ -548,6 +654,14 @@ def _min_watermark(*values: datetime | None) -> datetime | None:
     back-dated comment whose date < histlog_max could never be picked up.
     MIN re-reads a slice of the leading stream on the next run, but the
     ON CONFLICT upsert is idempotent so the only cost is repeat work.
+
+    Edge case: if one stream is empty (max returns None for that source)
+    on the first run, the only timestamp comes from the other stream.
+    A subsequent back-dated row inserted into the empty stream with a
+    date earlier than that timestamp would be missed. Mitigation in
+    practice: install-time full scan (--mode production without
+    --watermark) before flipping the hourly cron on. Long-term fix:
+    per-source watermark columns (deferred to a follow-up migration).
     """
     normalized = [
         (v if v.tzinfo else v.replace(tzinfo=UTC)) for v in values if v is not None
@@ -757,6 +871,121 @@ def _flush_assignment_batch(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Dry-run replay
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _capture_dry_run_pre_state(pg_session: Session) -> _DryRunCapture:
+    """Snapshot the audit-table row ids that already exist so a later
+    diff (post-flush, pre-rollback) identifies what THIS run added."""
+    return _DryRunCapture(
+        pre_conflict_ids=set(
+            pg_session.execute(select(MigrationConflict.id)).scalars().all()
+        ),
+        pre_deleted_ids=set(
+            pg_session.execute(select(EtlDeletedInSource.id)).scalars().all()
+        ),
+        pre_outbox_bulk_imported_ids=set(
+            pg_session.execute(
+                select(Outbox.id).where(
+                    Outbox.event_type == "jp.adopt.v1.bulk_imported"
+                )
+            )
+            .scalars()
+            .all()
+        ),
+    )
+
+
+def _replay_dry_run_audit(
+    pg_session: Session, capture: _DryRunCapture
+) -> None:
+    """Discard every data write from the in-flight transaction, then
+    re-add the audit rows (etl_run + migration_conflicts +
+    etl_deleted_in_source + bulk_imported Outbox) with fresh ids so a
+    rehearsal still surfaces exactly what would happen in production.
+
+    Safe to call on the exception path: the per-table work that failed
+    leaves its partial writes inside the same transaction; rollback
+    discards them, and the snapshots captured so far are still replayed.
+    """
+    try:
+        pg_session.flush()
+    except Exception:
+        # If flush itself raises (e.g. deferred constraint), the session
+        # is in an aborted state. Rollback restores it; nothing to replay.
+        pg_session.rollback()
+        return
+
+    new_conflicts = [
+        {
+            "source_system": c.source_system,
+            "source_id": c.source_id,
+            "table_name": c.table_name,
+            "conflict_type": c.conflict_type,
+            "source_value": c.source_value,
+            "local_value": c.local_value,
+            "detected_at": c.detected_at,
+        }
+        for c in pg_session.execute(select(MigrationConflict)).scalars().all()
+        if c.id not in capture.pre_conflict_ids
+    ]
+    new_deleted = [
+        _DeletedInSourceSnapshot(
+            original_etl_run_id=d.etl_run_id,
+            table_name=d.table_name,
+            source_system=d.source_system,
+            source_id=d.source_id,
+            last_seen_at=d.last_seen_at,
+            detected_at=d.detected_at,
+        )
+        for d in pg_session.execute(select(EtlDeletedInSource)).scalars().all()
+        if d.id not in capture.pre_deleted_ids
+    ]
+    new_bulk_imported = [
+        {
+            "event_type": o.event_type,
+            "payload_json": o.payload_json,
+            "created_at": o.created_at,
+        }
+        for o in pg_session.execute(
+            select(Outbox).where(
+                Outbox.event_type == "jp.adopt.v1.bulk_imported"
+            )
+        )
+        .scalars()
+        .all()
+        if o.id not in capture.pre_outbox_bulk_imported_ids
+    ]
+
+    pg_session.rollback()
+
+    etl_run_id_remap: dict[uuid.UUID, uuid.UUID] = {}
+    for snap in capture.etl_runs:
+        new_id = uuid.uuid4()
+        etl_run_id_remap[snap.original_id] = new_id
+        pg_session.add(EtlRun(id=new_id, **snap.to_kwargs()))
+    for conflict_kwargs in new_conflicts:
+        pg_session.add(MigrationConflict(id=uuid.uuid4(), **conflict_kwargs))
+    for deleted_snap in new_deleted:
+        # Skip if the parent etl_run snapshot was never captured (e.g.
+        # sweep_deleted_contacts wrote a row but the parent table's
+        # context manager raised before snapshot append). A KeyError here
+        # would mask the real exception in the exception-path branch.
+        new_run_id = etl_run_id_remap.get(deleted_snap.original_etl_run_id)
+        if new_run_id is None:
+            continue
+        pg_session.add(
+            EtlDeletedInSource(
+                id=uuid.uuid4(),
+                **deleted_snap.to_kwargs(new_run_id),
+            )
+        )
+    for outbox_kwargs in new_bulk_imported:
+        pg_session.add(Outbox(id=uuid.uuid4(), **outbox_kwargs))
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Public runner
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -781,177 +1010,134 @@ def run_etl(
     async def _drive() -> dict[str, dict[str, int]]:
         results: dict[str, dict[str, int]] = {}
         with SessionLocal() as pg_session, mysql_engine.connect() as mysql_conn:
-            # Capture pre-existing audit-row ids so dry-run can later identify
-            # which rows this run added (and re-add them after the rollback
-            # discards every data write).
-            pre_conflict_ids: set[uuid.UUID] = set()
-            pre_deleted_ids: set[uuid.UUID] = set()
-            if mode == "dry_run":
-                pre_conflict_ids = set(
-                    pg_session.execute(select(MigrationConflict.id)).scalars().all()
-                )
-                pre_deleted_ids = set(
-                    pg_session.execute(select(EtlDeletedInSource.id)).scalars().all()
-                )
-            async with outbox_suppressed(
-                f"dt_etl:{','.join(tables)}",
-                pg_session,  # type: ignore[arg-type]  # async-safe context var; session is sync
-                metadata={
-                    "mode": mode,
-                    "mysql_url_scheme": mysql_url.split("://", 1)[0],
-                    "tables": tables,
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-            ) as ctx:
-                etl_run_snapshots: list[dict[str, Any]] = []
-                for table_name in tables:
-                    with etl_run(
-                        pg_session,
-                        table_name=table_name,
-                        mode=mode,
-                        watermark_from=watermark,
-                    ) as run_row:
-                        if table_name == "staff_identity_link":
-                            counts = import_users(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                            )
-                        elif table_name == "contacts":
-                            counts = import_contacts(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                                watermark=watermark,
-                                batch_size=batch_size,
-                            )
-                            run_row.source_max_modified_at = fetch_max_modified(
-                                mysql_conn, table="wp_posts"
-                            )
-                            # Full-run only: flag contacts that vanished from
-                            # the source since a prior import (no hard delete).
-                            if watermark is None:
-                                sweep_deleted_contacts(
-                                    mysql_conn, pg_session, run_row.id
+            capture = (
+                _capture_dry_run_pre_state(pg_session)
+                if mode == "dry_run"
+                else _DryRunCapture()
+            )
+            try:
+                async with outbox_suppressed(
+                    f"dt_etl:{','.join(tables)}",
+                    pg_session,  # type: ignore[arg-type]  # async-safe context var; session is sync
+                    metadata={
+                        "mode": mode,
+                        "mysql_url_scheme": mysql_url.split("://", 1)[0],
+                        "tables": tables,
+                        "started_at": datetime.now(UTC).isoformat(),
+                    },
+                ) as ctx:
+                    for table_name in tables:
+                        with etl_run(
+                            pg_session,
+                            table_name=table_name,
+                            mode=mode,
+                            watermark_from=watermark,
+                        ) as run_row:
+                            if table_name == "staff_identity_link":
+                                counts = import_users(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
                                 )
-                        elif table_name == "activity_log":
-                            counts = import_comments(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                                watermark=watermark,
-                                batch_size=batch_size,
+                            elif table_name == "contacts":
+                                counts = import_contacts(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
+                                    watermark=watermark,
+                                    batch_size=batch_size,
+                                )
+                                run_row.source_max_modified_at = fetch_max_modified(
+                                    mysql_conn, table="wp_posts"
+                                )
+                                # Full-run only: flag contacts that vanished
+                                # from source since a prior import.
+                                if watermark is None:
+                                    sweep_deleted_contacts(
+                                        mysql_conn, pg_session, run_row.id
+                                    )
+                            elif table_name == "activity_log":
+                                counts = import_comments(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
+                                    watermark=watermark,
+                                    batch_size=batch_size,
+                                )
+                                history = import_activity_history(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
+                                    watermark=watermark,
+                                    batch_size=batch_size,
+                                )
+                                for key, value in history.items():
+                                    counts[key] = counts.get(key, 0) + value
+                                run_row.source_max_modified_at = _min_watermark(
+                                    fetch_max_modified(
+                                        mysql_conn, table="wp_comments"
+                                    ),
+                                    fetch_max_modified(
+                                        mysql_conn, table="wp_dt_activity_log"
+                                    ),
+                                )
+                            elif table_name == "adopter_interest":
+                                counts = import_interests(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
+                                    watermark=watermark,
+                                    batch_size=batch_size,
+                                )
+                            elif table_name == "contact_assignment":
+                                counts = import_assignment(
+                                    mysql_conn=mysql_conn,
+                                    pg_session=pg_session,
+                                    mode=mode,
+                                    watermark=watermark,
+                                    batch_size=batch_size,
+                                )
+                            else:
+                                raise ValueError(f"unknown table {table_name!r}")
+                            run_row.rows_in = counts.get("rows_in", 0)
+                            run_row.rows_out_inserted = counts.get(
+                                "rows_out_inserted", 0
                             )
-                            history = import_activity_history(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                                watermark=watermark,
-                                batch_size=batch_size,
+                            run_row.rows_out_updated = counts.get(
+                                "rows_out_updated", 0
                             )
-                            for key, value in history.items():
-                                counts[key] = counts.get(key, 0) + value
-                            run_row.source_max_modified_at = _min_watermark(
-                                fetch_max_modified(mysql_conn, table="wp_comments"),
-                                fetch_max_modified(
-                                    mysql_conn, table="wp_dt_activity_log"
-                                ),
+                            run_row.rows_out_skipped = counts.get(
+                                "rows_out_skipped", 0
                             )
-                        elif table_name == "adopter_interest":
-                            counts = import_interests(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                                watermark=watermark,
-                                batch_size=batch_size,
+                            run_row.rows_in_conflict = counts.get(
+                                "rows_in_conflict", 0
                             )
-                        elif table_name == "contact_assignment":
-                            counts = import_assignment(
-                                mysql_conn=mysql_conn,
-                                pg_session=pg_session,
-                                mode=mode,
-                                watermark=watermark,
-                                batch_size=batch_size,
-                            )
-                        else:
-                            raise ValueError(f"unknown table {table_name!r}")
-                        run_row.rows_in = counts.get("rows_in", 0)
-                        run_row.rows_out_inserted = counts.get("rows_out_inserted", 0)
-                        run_row.rows_out_updated = counts.get("rows_out_updated", 0)
-                        run_row.rows_out_skipped = counts.get("rows_out_skipped", 0)
-                        run_row.rows_in_conflict = counts.get("rows_in_conflict", 0)
-                        results[table_name] = counts
-                    # Snapshot the audit row as plain data so dry-run can
-                    # re-create it after rolling back the data writes. The
-                    # _original_id key lets us remap FK references in
-                    # EtlDeletedInSource (whose etl_run_id pointed at the
-                    # in-flight run_row.id that the rollback will discard).
-                    etl_run_snapshots.append(
-                        {
-                            "_original_id": run_row.id,
-                            "table_name": run_row.table_name,
-                            "mode": run_row.mode,
-                            "started_at": run_row.started_at,
-                            "ended_at": run_row.ended_at,
-                            "watermark_from": run_row.watermark_from,
-                            "source_max_modified_at": run_row.source_max_modified_at,
-                            "rows_in": run_row.rows_in,
-                            "rows_out_inserted": run_row.rows_out_inserted,
-                            "rows_out_updated": run_row.rows_out_updated,
-                            "rows_out_skipped": run_row.rows_out_skipped,
-                            "rows_in_conflict": run_row.rows_in_conflict,
-                            "errors": run_row.errors,
-                        }
-                    )
-                ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
+                            results[table_name] = counts
+                        # Snapshot the audit row immediately so an exception
+                        # in a later table still leaves a replayable record
+                        # of the tables that completed.
+                        capture.etl_runs.append(
+                            _EtlRunSnapshot.from_row(run_row)
+                        )
+                    ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
+            except Exception:
+                # On exception in dry_run, replay the audit trail captured so
+                # far so the operator can triage whatever tables completed.
+                # Production-mode exceptions intentionally abort everything;
+                # the per-table audit was committed inline by etl_run() flush
+                # but won't survive the SessionLocal rollback either way.
+                if mode == "dry_run":
+                    try:
+                        _replay_dry_run_audit(pg_session, capture)
+                        pg_session.commit()
+                    except Exception:
+                        logger.exception(
+                            "dry-run audit replay failed on exception path"
+                        )
+                        pg_session.rollback()
+                raise
             if mode == "dry_run":
-                # Truly non-mutating: discard every data write, then persist
-                # the per-table etl_run audit rows + the migration_conflicts
-                # + etl_deleted_in_source rows so a rehearsal still surfaces
-                # exactly what would happen in production.
-                pg_session.flush()
-                new_conflicts = [
-                    {
-                        "source_system": c.source_system,
-                        "source_id": c.source_id,
-                        "table_name": c.table_name,
-                        "conflict_type": c.conflict_type,
-                        "source_value": c.source_value,
-                        "local_value": c.local_value,
-                        "detected_at": c.detected_at,
-                    }
-                    for c in pg_session.execute(
-                        select(MigrationConflict)
-                    ).scalars().all()
-                    if c.id not in pre_conflict_ids
-                ]
-                new_deleted = [
-                    {
-                        "_original_etl_run_id": d.etl_run_id,
-                        "table_name": d.table_name,
-                        "source_system": d.source_system,
-                        "source_id": d.source_id,
-                        "last_seen_at": d.last_seen_at,
-                        "detected_at": d.detected_at,
-                    }
-                    for d in pg_session.execute(
-                        select(EtlDeletedInSource)
-                    ).scalars().all()
-                    if d.id not in pre_deleted_ids
-                ]
-                pg_session.rollback()
-                etl_run_id_remap: dict[uuid.UUID, uuid.UUID] = {}
-                for snap in etl_run_snapshots:
-                    original_id = snap.pop("_original_id")
-                    new_id = uuid.uuid4()
-                    etl_run_id_remap[original_id] = new_id
-                    pg_session.add(EtlRun(id=new_id, **snap))
-                for snap in new_conflicts:
-                    pg_session.add(MigrationConflict(id=uuid.uuid4(), **snap))
-                for snap in new_deleted:
-                    original_run_id = snap.pop("_original_etl_run_id")
-                    snap["etl_run_id"] = etl_run_id_remap[original_run_id]
-                    pg_session.add(EtlDeletedInSource(id=uuid.uuid4(), **snap))
+                _replay_dry_run_audit(pg_session, capture)
             pg_session.commit()
         mysql_engine.dispose()
         pg_engine.dispose()
