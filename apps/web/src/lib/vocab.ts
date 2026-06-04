@@ -86,6 +86,13 @@ const MATCH_STATUS_LABELS: Record<string, string> = {
   matched: "Matched",
 };
 
+const CAMPAIGN_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  active: "Active",
+  paused: "Paused",
+  archived: "Archived",
+};
+
 const REASON_CODE_LABELS: Record<string, string> = {
   capacity_full: "Facilitator at capacity",
   geography_mismatch: "Geography mismatch",
@@ -95,7 +102,7 @@ const REASON_CODE_LABELS: Record<string, string> = {
   other: "Other (see notes)",
 };
 
-export type StatusKind = "adopter" | "facilitator" | "match";
+export type StatusKind = "adopter" | "facilitator" | "match" | "campaign";
 
 /** Look up a status label by kind. Falls back to `humanize` for unknowns. */
 export function humanizeStatus(
@@ -108,7 +115,9 @@ export function humanizeStatus(
       ? FACILITATOR_STATUS_LABELS
       : kind === "match"
         ? MATCH_STATUS_LABELS
-        : ADOPTER_STATUS_LABELS;
+        : kind === "campaign"
+          ? CAMPAIGN_STATUS_LABELS
+          : ADOPTER_STATUS_LABELS;
   return table[value] ?? humanize(value);
 }
 

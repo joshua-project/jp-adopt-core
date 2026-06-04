@@ -365,3 +365,62 @@ export async function transitionContact(
     `/v1/contacts/${contactId}/transition`,
   );
 }
+
+// ── Drip campaigns (#55) ─────────────────────────────────────────────────
+
+type CampaignListResponseBody =
+  paths["/v1/drips/campaigns"]["get"]["responses"]["200"]["content"]["application/json"];
+type CampaignReadBody =
+  paths["/v1/drips/campaigns/{campaign_id}"]["get"]["responses"]["200"]["content"]["application/json"];
+type CampaignCreateBody =
+  paths["/v1/drips/campaigns"]["post"]["requestBody"]["content"]["application/json"];
+
+export async function listCampaigns(
+  ctx: ApiClientContext,
+): Promise<CampaignListResponseBody> {
+  return _assertPresent(
+    await apiFetch<CampaignListResponseBody>(ctx, "/v1/drips/campaigns"),
+    "/v1/drips/campaigns",
+  );
+}
+
+export async function createCampaign(
+  ctx: ApiClientContext,
+  body: CampaignCreateBody,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, "/v1/drips/campaigns", {
+      method: "POST",
+      body,
+    }),
+    "/v1/drips/campaigns",
+  );
+}
+
+export async function activateCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/activate`,
+      { method: "POST" },
+    ),
+    `/v1/drips/campaigns/${campaignId}/activate`,
+  );
+}
+
+export async function pauseCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/pause`,
+      { method: "POST" },
+    ),
+    `/v1/drips/campaigns/${campaignId}/pause`,
+  );
+}
