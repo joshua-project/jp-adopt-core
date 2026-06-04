@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 
-from jp_adopt_api.deps import DbSession, require_role
+from jp_adopt_api.deps import DbSession, SettingsDep, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
@@ -26,6 +27,8 @@ from jp_adopt_api.schemas import (
     ContactActivityResponse,
     ContactActivityRow,
     ContactAssignmentRequest,
+    ContactEmailCreate,
+    ContactEmailResponse,
     ContactEnrollmentRow,
     ContactEnrollmentsResponse,
     ContactListResponse,
@@ -41,6 +44,8 @@ from jp_adopt_api.schemas import (
     ContactTransitionRow,
     ContactTransitionsResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
@@ -550,6 +555,120 @@ async def add_contact_note(
     await db.commit()
     await db.refresh(note)
     return ContactActivityRow.model_validate(note)
+
+
+def _schedule_contact_email_send(
+    background_tasks: BackgroundTasks,
+    *,
+    note_id: uuid.UUID,
+    recipients: list[str],
+    subject: str,
+    body: str,
+    reply_to: str | None,
+    settings: SettingsDep,
+) -> None:
+    """Register the post-response ACS send (F3). The worker module is imported
+    lazily so the API process does not import azure-communication-email at
+    startup, mirroring ``auth_magic_link._enqueue_send_factory``."""
+    try:
+        from jp_adopt_worker.tasks.send_contact_email import (
+            send_contact_email_inline,
+        )
+    except Exception:  # pragma: no cover - worker pkg optional in some envs
+        logger.warning(
+            "contact_email.enqueue.worker_pkg_unavailable note_id=%s", note_id
+        )
+        return
+    background_tasks.add_task(
+        send_contact_email_inline,
+        note_id=note_id,
+        recipients=recipients,
+        subject=subject,
+        body=body,
+        reply_to=reply_to,
+        acs_connection_string=settings.acs_connection_string,
+        acs_sender_address=settings.acs_sender_address,
+        database_url=settings.database_url,
+    )
+
+
+@router.post(
+    "/{contact_id}/emails",
+    response_model=ContactEmailResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def send_contact_email(
+    contact_id: uuid.UUID,
+    body: ContactEmailCreate,
+    db: DbSession,
+    settings: SettingsDep,
+    background_tasks: BackgroundTasks,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactEmailResponse:
+    """F3: email a contact and record the email as a note on the timeline.
+
+    Matches the magic-link send pattern: write the note in-transaction,
+    commit, then fire ``send_contact_email_inline`` via BackgroundTasks (ACS,
+    dev-fallback log). The background task flips the note's stored
+    ``source_metadata.status`` to ``sent`` / ``failed`` once delivery
+    resolves. Inherits magic-link's known durability gap (a process crash
+    between commit and send drops the email; the queued note row stays as a
+    visible, re-sendable record)."""
+    contact = await _require_contact(db, contact_id)
+    user, _roles = user_with_roles
+    if not contact.email_normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "email_required",
+                "message": "Contact has no email address to send to",
+            },
+        )
+    recipients = [contact.email_normalized]
+    # Secondary contact lives on the 1:1 contact_profile and is a
+    # facilitator-only concept; ignore the flag for adopters or when no
+    # secondary address is on file.
+    if body.include_secondary and contact.party_kind == "facilitator":
+        secondary = (
+            await db.execute(
+                select(ContactProfile.secondary_contact_email).where(
+                    ContactProfile.contact_id == contact_id
+                )
+            )
+        ).scalar_one_or_none()
+        # Skip a secondary that duplicates the primary (common data-entry
+        # case) so ACS isn't handed two identical 'to' addresses.
+        if secondary and secondary != contact.email_normalized:
+            recipients.append(secondary)
+
+    note = ActivityLog(
+        id=uuid.uuid4(),
+        contact_id=contact_id,
+        author_id=user.sub,
+        body=body.body,
+        kind="email",
+        source_system="local",
+        source_metadata={
+            "subject": body.subject,
+            "to": recipients,
+            "status": "queued",
+        },
+        occurred_at=datetime.now(UTC),
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+
+    _schedule_contact_email_send(
+        background_tasks,
+        note_id=note.id,
+        recipients=recipients,
+        subject=body.subject,
+        body=body.body,
+        reply_to=getattr(user, "email", None),
+        settings=settings,
+    )
+    return ContactEmailResponse(note_id=note.id, to=recipients, status="queued")
 
 
 @router.put("/{contact_id}/assignment", response_model=ContactRead)

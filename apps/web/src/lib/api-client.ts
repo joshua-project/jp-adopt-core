@@ -298,6 +298,42 @@ export async function decideMatch(
   );
 }
 
+type AssignableOrgsResponseBody =
+  paths["/v1/matches/{match_id}/assignable-orgs"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function getAssignableOrgs(
+  ctx: ApiClientContext,
+  matchId: string,
+): Promise<AssignableOrgsResponseBody> {
+  return _assertPresent(
+    await apiFetch<AssignableOrgsResponseBody>(
+      ctx,
+      `/v1/matches/${matchId}/assignable-orgs`,
+    ),
+    `/v1/matches/${matchId}/assignable-orgs`,
+  );
+}
+
+type ContactEmailRequestBody =
+  paths["/v1/contacts/{contact_id}/emails"]["post"]["requestBody"]["content"]["application/json"];
+type ContactEmailResponseBody =
+  paths["/v1/contacts/{contact_id}/emails"]["post"]["responses"]["202"]["content"]["application/json"];
+
+export async function sendContactEmail(
+  ctx: ApiClientContext,
+  contactId: string,
+  body: ContactEmailRequestBody,
+): Promise<ContactEmailResponseBody> {
+  return _assertPresent(
+    await apiFetch<ContactEmailResponseBody>(
+      ctx,
+      `/v1/contacts/${contactId}/emails`,
+      { method: "POST", body },
+    ),
+    `/v1/contacts/${contactId}/emails`,
+  );
+}
+
 export async function runMatch(
   ctx: ApiClientContext,
   contactId: string,

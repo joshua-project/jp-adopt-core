@@ -695,6 +695,13 @@ class Match(Base):
     decided_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision_reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision_reason_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # F1 (#52): staff override — this match was hand-assigned to a facilitator
+    # the algorithm did not recommend (possibly one it filtered out for
+    # no-coverage / no-capacity). Flagged so accepts can bypass the capacity
+    # ceiling (see routers/matches.py) and so overrides are auditable.
+    is_manual_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

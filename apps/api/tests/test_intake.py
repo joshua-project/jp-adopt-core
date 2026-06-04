@@ -273,9 +273,9 @@ def test_intake_requires_idempotency_header(client: TestClient) -> None:
 
 
 def test_intake_rejects_payload_too_large(client: TestClient) -> None:
-    # Build a body > 64KB by stuffing the display_name limit (max 512) with
+    # Build a body > 1MB by stuffing the display_name limit (max 512) with
     # repeats of a long extra field that survives `extra="ignore"`.
-    big = "x" * (70 * 1024)
+    big = "x" * (1100 * 1024)
     r = client.post(
         "/v1/intake/adoption",
         json={
@@ -290,13 +290,13 @@ def test_intake_rejects_payload_too_large(client: TestClient) -> None:
 
 
 def test_intake_rejects_oversized_fpg_selections(client: TestClient) -> None:
-    """adv4-001: ``fpg_selections`` is bounded at 20 entries. 21 entries
+    """adv4-001: ``fpg_selections`` is bounded at 2000 entries. 2001 entries
     must be rejected at the schema layer (400 ``validation_failed``).
-    Without the cap a 64KB body can carry ~3500 FpgInterestIn entries that
-    the A1 fabrication path allocates a UUID for, opening an enumeration /
-    amplification vector."""
+    The cap (raised from 20 per #87 to fit legit high-coverage orgs like
+    Mission India's 1,701-FPG submission) still bounds the A1 fabrication
+    path's UUID allocation, capping the enumeration / amplification vector."""
     email = f"bigfpg-{uuid.uuid4().hex[:6]}@example.com"
-    fpg_selections = [{"people_id3": f"R{i:04d}"} for i in range(21)]
+    fpg_selections = [{"people_id3": f"R{i:04d}"} for i in range(2001)]
     r = client.post(
         "/v1/intake/adoption",
         json=_adoption_body(email=email, fpg_selections=fpg_selections),
