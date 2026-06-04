@@ -598,6 +598,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/drips/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Templates
+         * @description Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step
+         *     UI can present a dropdown instead of a free-text field, eliminating
+         *     typo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the
+         *     directory is missing — a fresh dev environment isn't an error.
+         */
+        get: operations["list_templates_v1_drips_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns/{campaign_id}": {
         parameters: {
             query?: never;
@@ -701,6 +724,45 @@ export interface paths {
         /** Manual Enroll */
         post: operations["manual_enroll_v1_drips_campaigns__campaign_id__enroll_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suppression-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Suppression */
+        get: operations["list_suppression_v1_suppression_list_get"];
+        put?: never;
+        /**
+         * Add Suppression
+         * @description Add an email to the suppression list. Idempotent — re-adding the same
+         *     address returns the existing row at 200, not 409 (per F3 KTD-4).
+         */
+        post: operations["add_suppression_v1_suppression_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suppression-list/{email_hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Suppression */
+        delete: operations["remove_suppression_v1_suppression_list__email_hash__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -957,6 +1019,23 @@ export interface components {
             status: string;
         };
         /**
+         * ContactEnrollmentEventRow
+         * @description One enrollment_event entry surfaced to the per-contact drips panel.
+         */
+        ContactEnrollmentEventRow: {
+            /** Event Type */
+            event_type: string;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
          * ContactEnrollmentRow
          * @description One drip-campaign enrollment for the contact (the #55 read slice).
          */
@@ -986,6 +1065,8 @@ export interface components {
             last_step_sent_at: string | null;
             /** Exit Reason */
             exit_reason: string | null;
+            /** Events */
+            events?: components["schemas"]["ContactEnrollmentEventRow"][];
         };
         /** ContactEnrollmentsResponse */
         ContactEnrollmentsResponse: {
@@ -1730,6 +1811,60 @@ export interface components {
             fpg_affinity?: number | null;
             /** Theological */
             theological?: number | null;
+        };
+        /**
+         * SuppressionCreate
+         * @description Request body for ``POST /v1/suppression-list``. The server normalizes
+         *     and hashes the email; the raw address is never persisted.
+         */
+        SuppressionCreate: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+            /**
+             * Reason
+             * @default manual
+             */
+            reason: string;
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** SuppressionListResponse */
+        SuppressionListResponse: {
+            /** Items */
+            items: components["schemas"]["SuppressionRead"][];
+            /** Total */
+            total: number;
+        };
+        /** SuppressionRead */
+        SuppressionRead: {
+            /** Email Hash */
+            email_hash: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Suppressed At
+             * Format: date-time
+             */
+            suppressed_at: string;
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** TemplateListResponse */
+        TemplateListResponse: {
+            /** Items */
+            items: components["schemas"]["TemplateRead"][];
+        };
+        /** TemplateRead */
+        TemplateRead: {
+            /** Name */
+            name: string;
         };
         /** TransitionRequest */
         TransitionRequest: {
@@ -3090,6 +3225,37 @@ export interface operations {
             };
         };
     };
+    list_templates_v1_drips_templates_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_campaign_v1_drips_campaigns__campaign_id__get: {
         parameters: {
             query?: never;
@@ -3351,6 +3517,106 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ManualEnrollResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_suppression_v1_suppression_list_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_suppression_v1_suppression_list_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuppressionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_suppression_v1_suppression_list__email_hash__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                email_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
