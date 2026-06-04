@@ -103,6 +103,13 @@ def test_unassignable_maps_to_do_not_engage_both_sides() -> None:
     assert map_facilitator_status("unassignable", mode="dry_run") == "do_not_engage"
 
 
+def test_closed_maps_to_do_not_engage_both_sides() -> None:
+    # DT prod surfaced overall_status='closed' on 7 rows — same terminal
+    # not-pursuing semantics as 'unassignable'.
+    assert map_adopter_status("closed", mode="dry_run") == "do_not_engage"
+    assert map_facilitator_status("closed", mode="dry_run") == "do_not_engage"
+
+
 def test_overall_status_active_maps_per_side() -> None:
     assert map_adopter_status("active", mode="dry_run") == "matched"
     assert map_facilitator_status("active", mode="dry_run") == "ready"
