@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -26,8 +26,11 @@ from jp_adopt_api.config import get_settings
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
+    Campaign,
     Contact,
     ContactProfile,
+    Enrollment,
+    EnrollmentEvent,
     FacilitatingOrg,
     Match,
     TransitionAudit,
@@ -295,5 +298,168 @@ def test_send_email_unknown_contact_404(client: TestClient):
         f"/v1/contacts/{uuid.uuid4()}/emails",
         headers=AUTH,
         json={"subject": "s", "body": "b"},
+    )
+    assert r.status_code == 404, r.text
+
+
+# ── F3 (#55): GET /v1/contacts/{id}/enrollments — events field ────────────
+
+
+@pytest.mark.asyncio
+async def test_enrollments_includes_events_most_recent_first(
+    client: TestClient, session: AsyncSession
+) -> None:
+    contact = Contact(
+        id=uuid.uuid4(),
+        party_kind="adopter",
+        display_name="Drips Adopter",
+        adopter_status="new",
+        email_normalized=f"drips-{uuid.uuid4().hex[:10]}@example.com",
+        origin="record_test",
+    )
+    campaign = Campaign(
+        id=uuid.uuid4(),
+        name="Test Welcome",
+        status="active",
+        trigger_type="event",
+        trigger_event_type="jp.adopt.v1.match.accepted_by_facilitator",
+    )
+    session.add_all([contact, campaign])
+    await session.flush()
+    enrollment = Enrollment(
+        id=uuid.uuid4(),
+        campaign_id=campaign.id,
+        contact_id=contact.id,
+        state="active",
+        current_step_position=0,
+        campaign_version=1,
+    )
+    session.add(enrollment)
+    await session.flush()
+    base = datetime.now(UTC)
+    session.add_all(
+        [
+            EnrollmentEvent(
+                enrollment_id=enrollment.id,
+                event_type="step_sent",
+                payload={"step_position": 0},
+                created_at=base,
+            ),
+            EnrollmentEvent(
+                enrollment_id=enrollment.id,
+                event_type="step_sent",
+                payload={"step_position": 1},
+                created_at=base + timedelta(seconds=1),
+            ),
+            EnrollmentEvent(
+                enrollment_id=enrollment.id,
+                event_type="paused",
+                payload=None,
+                created_at=base + timedelta(seconds=2),
+            ),
+        ]
+    )
+    await session.commit()
+    try:
+        r = client.get(f"/v1/contacts/{contact.id}/enrollments", headers=AUTH)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total"] == 1
+        item = body["items"][0]
+        assert item["campaign_name"] == "Test Welcome"
+        types = [e["event_type"] for e in item["events"]]
+        # Most-recent first: paused, then the two step_sents.
+        assert types == ["paused", "step_sent", "step_sent"]
+        assert item["events"][1]["payload"] == {"step_position": 1}
+    finally:
+        await session.execute(
+            delete(EnrollmentEvent).where(
+                EnrollmentEvent.enrollment_id == enrollment.id
+            )
+        )
+        await session.execute(delete(Enrollment).where(Enrollment.id == enrollment.id))
+        await session.execute(delete(Campaign).where(Campaign.id == campaign.id))
+        await session.execute(delete(Contact).where(Contact.id == contact.id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_enrollments_events_capped_per_enrollment(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """An enrollment with > 20 events returns only the 20 most recent in the
+    response so payload stays bounded."""
+    contact = Contact(
+        id=uuid.uuid4(),
+        party_kind="adopter",
+        display_name="Long History Adopter",
+        adopter_status="new",
+        email_normalized=f"longhist-{uuid.uuid4().hex[:10]}@example.com",
+        origin="record_test",
+    )
+    campaign = Campaign(
+        id=uuid.uuid4(),
+        name="Long Campaign",
+        status="active",
+        trigger_type="event",
+        trigger_event_type="jp.adopt.v1.match.accepted_by_facilitator",
+    )
+    session.add_all([contact, campaign])
+    await session.flush()
+    enrollment = Enrollment(
+        id=uuid.uuid4(),
+        campaign_id=campaign.id,
+        contact_id=contact.id,
+        state="active",
+        current_step_position=0,
+        campaign_version=1,
+    )
+    session.add(enrollment)
+    await session.flush()
+    base = datetime.now(UTC)
+    for i in range(25):
+        session.add(
+            EnrollmentEvent(
+                enrollment_id=enrollment.id,
+                event_type="step_sent",
+                payload={"i": i},
+                created_at=base + timedelta(seconds=i),
+            )
+        )
+    await session.commit()
+    try:
+        r = client.get(f"/v1/contacts/{contact.id}/enrollments", headers=AUTH)
+        assert r.status_code == 200, r.text
+        events = r.json()["items"][0]["events"]
+        assert len(events) == 20
+        # Most-recent first; the newest payload.i is 24.
+        assert events[0]["payload"] == {"i": 24}
+        assert events[-1]["payload"] == {"i": 5}
+    finally:
+        await session.execute(
+            delete(EnrollmentEvent).where(
+                EnrollmentEvent.enrollment_id == enrollment.id
+            )
+        )
+        await session.execute(delete(Enrollment).where(Enrollment.id == enrollment.id))
+        await session.execute(delete(Campaign).where(Campaign.id == campaign.id))
+        await session.execute(delete(Contact).where(Contact.id == contact.id))
+        await session.commit()
+
+
+def test_enrollments_zero_enrollments(
+    client: TestClient, fixture_contact: Contact
+):
+    """A contact with no enrollments returns an empty list, total=0 — not 404."""
+    r = client.get(
+        f"/v1/contacts/{fixture_contact.id}/enrollments", headers=AUTH
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"items": [], "total": 0}
+
+
+def test_enrollments_unknown_contact_returns_404(client: TestClient):
+    r = client.get(
+        f"/v1/contacts/{uuid.uuid4()}/enrollments", headers=AUTH
     )
     assert r.status_code == 404, r.text

@@ -256,6 +256,16 @@ class ContactActivityResponse(BaseModel):
     total: int
 
 
+class ContactEnrollmentEventRow(BaseModel):
+    """One enrollment_event entry surfaced to the per-contact drips panel."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    event_type: str
+    payload: dict[str, Any] | None = None
+    created_at: datetime
+
+
 class ContactEnrollmentRow(BaseModel):
     """One drip-campaign enrollment for the contact (the #55 read slice)."""
 
@@ -269,6 +279,9 @@ class ContactEnrollmentRow(BaseModel):
     enrolled_at: datetime
     last_step_sent_at: datetime | None
     exit_reason: str | None
+    # Most-recent events first, capped per enrollment server-side so the
+    # response stays bounded even when an enrollment accumulates many.
+    events: list[ContactEnrollmentEventRow] = Field(default_factory=list)
 
 
 class ContactEnrollmentsResponse(BaseModel):
