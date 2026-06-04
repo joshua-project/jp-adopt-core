@@ -30,7 +30,6 @@ from jp_adopt_api.domain.state_machine import (
     IllegalTransitionError,
     InvalidReasonCodeError,
     ReasonCode,
-    ReasonRequiredError,
     RoleNotPermittedError,
     TransitionSpec,
     available_transitions,
@@ -96,11 +95,13 @@ def test_every_adopter_state_appears_in_transitions() -> None:
     assert not missing, f"orphan states with no transitions: {missing}"
 
 
-def test_sent_back_spec_requires_reason_with_all_codes() -> None:
+def test_sent_back_spec_reason_optional_with_all_codes() -> None:
+    """F2: the decline reason is optional, but when supplied it is still
+    validated against the (all-codes) whitelist."""
     spec: TransitionSpec = ADOPTER_TRANSITIONS[
         (AdopterState.MATCHED, AdopterState.SENT_BACK)
     ]
-    assert spec.requires_reason is True
+    assert spec.requires_reason is False
     assert spec.reason_codes is not None
     assert ReasonCode.CAPACITY_FULL in spec.reason_codes
     assert ReasonCode.OTHER in spec.reason_codes
@@ -248,17 +249,18 @@ async def test_role_not_permitted(session: AsyncSession) -> None:
     assert exc_info.value.actor_role == "adoption_partner"
 
 
-async def test_reason_required_raises(session: AsyncSession) -> None:
+async def test_sent_back_without_reason_succeeds(session: AsyncSession) -> None:
+    """F2: matched → sent_back with no reason_code is now legal."""
     contact = await _make_contact(session, adopter_status="matched")
-    with pytest.raises(ReasonRequiredError):
-        await transition_adopter(
-            session,
-            contact,
-            to_state=AdopterState.SENT_BACK,
-            actor_b2c_sub=ACTOR_SUB,
-            actor_role="facilitator",
-            reason_code=None,
-        )
+    await transition_adopter(
+        session,
+        contact,
+        to_state=AdopterState.SENT_BACK,
+        actor_b2c_sub=ACTOR_SUB,
+        actor_role="facilitator",
+        reason_code=None,
+    )
+    assert contact.adopter_status == "sent_back"
 
 
 async def test_sent_back_with_reason_other_succeeds(

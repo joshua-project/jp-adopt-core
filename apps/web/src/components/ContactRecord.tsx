@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 import type { paths } from "@jp-adopt/contracts";
 
-import { apiFetch } from "../lib/api-client";
+import { apiFetch, sendContactEmail } from "../lib/api-client";
 import { useApiContext } from "../lib/useApiContext";
 import {
   formatTimestamp,
@@ -222,6 +222,14 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [editingProfile, setEditingProfile] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
 
+  // F3: send-email modal
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [emailSecondary, setEmailSecondary] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailErr, setEmailErr] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setErr(null);
     try {
@@ -268,6 +276,31 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setBusy(false);
     }
   }, [ctx, contactId, noteBody, load]);
+
+  const sendEmail = useCallback(async () => {
+    const subject = emailSubject.trim();
+    const body = emailBody.trim();
+    if (!subject || !body) return;
+    setEmailBusy(true);
+    setEmailErr(null);
+    try {
+      await sendContactEmail(ctx, contactId, {
+        subject,
+        body,
+        include_secondary: emailSecondary,
+      });
+      setEmailOpen(false);
+      setEmailSubject("");
+      setEmailBody("");
+      setEmailSecondary(false);
+      // Refresh so the sent email appears as an `email` note on the timeline.
+      await load();
+    } catch (e) {
+      setEmailErr(e instanceof Error ? e.message : "Failed to send email");
+    } finally {
+      setEmailBusy(false);
+    }
+  }, [ctx, contactId, emailSubject, emailBody, emailSecondary, load]);
 
   const saveName = useCallback(async () => {
     const name = nameDraft.trim();
@@ -590,9 +623,27 @@ export function ContactRecord({ contactId }: { contactId: string }) {
               value={noteBody}
               onChange={(e) => setNoteBody(e.target.value)}
             />
-            <button type="button" className={BTN} disabled={busy || !noteBody.trim()} onClick={addNote}>
-              {busy ? "Saving…" : "Add note"}
-            </button>
+            <div className="flex gap-2">
+              <button type="button" className={BTN} disabled={busy || !noteBody.trim()} onClick={addNote}>
+                {busy ? "Saving…" : "Add note"}
+              </button>
+              <button
+                type="button"
+                className={BTN}
+                disabled={!contact?.email_normalized}
+                title={
+                  contact?.email_normalized
+                    ? undefined
+                    : "Contact has no email address"
+                }
+                onClick={() => {
+                  setEmailErr(null);
+                  setEmailOpen(true);
+                }}
+              >
+                Send email
+              </button>
+            </div>
           </div>
           {activity?.items.length ? (
             <ul className="space-y-3 text-sm">
@@ -690,6 +741,71 @@ export function ContactRecord({ contactId }: { contactId: string }) {
           </Tile>
         ))}
       </div>
+
+      {/* F3: send-email modal */}
+      {emailOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-lg space-y-3 rounded-lg bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-slate-900">
+              Email {contact?.display_name}
+            </h3>
+            <p className="text-xs text-slate-500">
+              To: {contact?.email_normalized}
+            </p>
+            <label className="block text-xs text-slate-600">
+              Subject
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={emailSubject}
+                maxLength={512}
+                onChange={(e) => setEmailSubject(e.target.value)}
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              Message
+              <textarea
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                rows={6}
+                value={emailBody}
+                onChange={(e) => setEmailBody(e.target.value)}
+              />
+            </label>
+            {partyKind === "facilitator" ? (
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={emailSecondary}
+                  onChange={(e) => setEmailSecondary(e.target.checked)}
+                />
+                Also send to secondary contact
+              </label>
+            ) : null}
+            {emailErr ? (
+              <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                {emailErr}
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className={BTN}
+                disabled={emailBusy}
+                onClick={() => setEmailOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                disabled={emailBusy || !emailSubject.trim() || !emailBody.trim()}
+                onClick={sendEmail}
+              >
+                {emailBusy ? "Sending…" : "Send email"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -151,19 +151,20 @@ async def test_transition_illegal_returns_409(
 
 
 @pytest.mark.asyncio
-async def test_transition_reason_required_returns_400(
+async def test_transition_sent_back_without_reason_succeeds(
     client: TestClient, session: AsyncSession
 ) -> None:
+    """F2: matched → sent_back no longer requires a reason_code (the UI only
+    prompts for one on decline, but never blocks on it)."""
     contact = await _make_contact(session, adopter_status="matched")
     try:
-        # matched → sent_back requires reason_code.
         r = client.post(
             f"/v1/contacts/{contact.id}/transition",
             json={"kind": "adopter", "to_state": "sent_back"},
             headers=_auth_headers(),
         )
-        assert r.status_code == 400, r.text
-        assert r.json()["detail"]["code"] == "reason_required"
+        assert r.status_code == 200, r.text
+        assert r.json()["transitioned_to"] == "sent_back"
     finally:
         await _cleanup_contact(session, contact)
 

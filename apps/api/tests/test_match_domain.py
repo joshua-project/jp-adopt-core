@@ -366,3 +366,41 @@ async def test_match_attempt_jsonb_roundtrip(conn: AsyncConnection) -> None:
         assert row.filter_results == filter_results
         assert row.rank == 1
         assert str(row.run_id) == str(run_id)
+
+
+# F1 (#52): match.is_manual_override + manual_override filter reason
+
+
+async def test_match_is_manual_override_defaults_false(
+    conn: AsyncConnection,
+) -> None:
+    """Migration 0022: a match inserted without is_manual_override defaults
+    to false (existing algorithmic matches stay unflagged)."""
+    async with conn.begin():
+        cid = await _make_contact(conn)
+        iid = await _make_interest(conn, cid, people_id3="AAA03")
+        mid = uuid.uuid4()
+        await conn.execute(
+            text(
+                """
+                INSERT INTO match (id, adopter_interest_id, facilitator_org_id, status)
+                VALUES (:id, :iid, :fid, 'recommended')
+                """
+            ),
+            {"id": mid, "iid": iid, "fid": EXAMPLE_MISSION_ID},
+        )
+        flagged = (
+            await conn.execute(
+                text("SELECT is_manual_override FROM match WHERE id = :id"),
+                {"id": mid},
+            )
+        ).scalar_one()
+        assert flagged is False
+
+
+def test_filter_reason_has_manual_override() -> None:
+    """The manual_override audit reason resolves on the FilterReason enum."""
+    from jp_adopt_api.domain.matching import FilterReason
+
+    assert FilterReason("manual_override") is FilterReason.MANUAL_OVERRIDE
+    assert FilterReason.MANUAL_OVERRIDE.value == "manual_override"
