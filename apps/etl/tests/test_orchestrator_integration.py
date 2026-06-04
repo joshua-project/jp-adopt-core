@@ -17,8 +17,10 @@ import pytest
 from jp_adopt_api.models import (
     ActivityLog,
     Contact,
+    ContactAssignment,
     ContactProfile,
     EtlRun,
+    MigrationConflict,
     Outbox,
     StaffIdentityLink,
 )
@@ -62,6 +64,16 @@ def _cleanup_dt_rows(pg_session):
     yield
     pg_session.execute(
         delete(ActivityLog).where(ActivityLog.source_system == "dt")
+    )
+    pg_session.execute(
+        delete(ContactAssignment).where(
+            ContactAssignment.contact_id.in_(
+                select(Contact.id).where(Contact.source_system == "dt")
+            )
+        )
+    )
+    pg_session.execute(
+        delete(MigrationConflict).where(MigrationConflict.source_system == "dt")
     )
     pg_session.execute(
         delete(Contact).where(
@@ -137,7 +149,7 @@ class _MockedDtSource:
 
     def fetch_max_modified(self, _conn, table="wp_posts"):
         # The real reader returns datetime | None; coerce ISO fixture strings
-        # so callers (e.g. _max_watermark) get the same type they would in prod.
+        # so callers (e.g. _min_watermark) get the same type they would in prod.
         def _dt(v):
             from datetime import datetime
 
@@ -874,18 +886,30 @@ def test_duplicate_email_keeps_contact_clears_email_records_conflict(
 
 
 def test_dry_run_is_non_mutating_but_writes_etl_run(monkeypatch, pg_engine, pg_session):
-    """--mode dry_run persists no data rows but still writes an etl_run row."""
+    """--mode dry_run persists no data rows but still writes etl_run +
+    migration_conflicts audit rows so an operator can triage the would-be
+    impact without leaving production-shaped data behind."""
     from jp_adopt_etl.orchestrator import run_etl
 
     contacts = [
+        # Two contacts colliding on the same email — production-mode would
+        # record a duplicate_email conflict. Dry-run must do the same.
         {"ID": 9901, "post_title": "Ghost", "post_status": "publish",
-         "post_date": None, "post_date_gmt": None}
+         "post_date": None, "post_date_gmt": None},
+        {"ID": 9902, "post_title": "Ghost Twin", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
     ]
     postmeta = {
         9901: [
             {"meta_key": "sub_type", "meta_value": "adopter"},
             {"meta_key": "overall_status", "meta_value": "new"},
-        ]
+            {"meta_key": "contact_email_aaa", "meta_value": "ghost@x.dev"},
+        ],
+        9902: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_bbb", "meta_value": "ghost@x.dev"},
+        ],
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
     _patch_dt_source(monkeypatch, mock)
@@ -901,19 +925,139 @@ def test_dry_run_is_non_mutating_but_writes_etl_run(monkeypatch, pg_engine, pg_s
         )
         # No contact was persisted.
         ghost = pg_session.execute(
-            select(Contact).where(Contact.source_id == "9901")
-        ).scalar_one_or_none()
-        assert ghost is None
-        # But an etl_run audit row was.
+            select(Contact).where(Contact.source_id.in_(["9901", "9902"]))
+        ).scalars().all()
+        assert ghost == []
+        # But the etl_run audit row was.
         runs = pg_session.execute(
             select(EtlRun).where(
                 EtlRun.mode == "dry_run", EtlRun.table_name == "contacts"
             )
         ).scalars().all()
         assert len(runs) >= 1
-        assert runs[-1].rows_in == 1
+        assert runs[-1].rows_in == 2
+        # AND the duplicate_email conflict was preserved through the rollback.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contacts",
+                MigrationConflict.conflict_type == "duplicate_email",
+                MigrationConflict.source_id.in_(["9901", "9902"]),
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
     finally:
         pg_session.execute(text("DELETE FROM etl_run WHERE mode = 'dry_run'"))
+        pg_session.execute(
+            text(
+                "DELETE FROM migration_conflicts "
+                "WHERE source_id IN ('9901', '9902')"
+            )
+        )
+        pg_session.commit()
+
+
+def test_import_assignment_protects_local_overrides(
+    monkeypatch, pg_engine, pg_session
+):
+    """A staff reassignment in jp-adopt-core (assigned_by != 'dt_import')
+    is preserved across a delta re-run — DT does not clobber it."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import StaffIdentityLink
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # Two staff. Both signed into B2C.
+    pg_session.add_all([
+        StaffIdentityLink(
+            id=_uuid.uuid4(), dt_user_id="9810", b2c_subject_id="sub-9810",
+            email="dt@x.dev", email_normalized="dt@x.dev",
+            status="active", source_system="dt",
+        ),
+        StaffIdentityLink(
+            id=_uuid.uuid4(), dt_user_id="9811", b2c_subject_id="sub-9811",
+            email="local@x.dev", email_normalized="local@x.dev",
+            status="active", source_system="dt",
+        ),
+    ])
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9820, "post_title": "Owned", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9820: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-9810"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        # 1) Initial DT import sets assignment to sub-9810 with assigned_by='dt_import'.
+        run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "contact_assignment"],
+            mode="production",
+            watermark=None,
+        )
+        contact = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9820")
+        ).scalar_one()
+        assignment = pg_session.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact.id
+            )
+        ).scalar_one()
+        assert assignment.user_subject_id == "sub-9810"
+        assert assignment.assigned_by == "dt_import"
+
+        # 2) Staff reassigns in jp-adopt-core via the API (out of band).
+        pg_session.execute(
+            text(
+                "UPDATE contact_assignment SET user_subject_id='sub-9811', "
+                "assigned_by='staff_action' WHERE contact_id=:cid"
+            ),
+            {"cid": contact.id},
+        )
+        pg_session.commit()
+
+        # 3) Delta re-run of the ETL. DT still says assigned_to='user-9810'.
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contact_assignment"],
+            mode="production",
+            watermark=None,
+        )
+
+        # Staff override held; conflict recorded for operator review.
+        pg_session.expire_all()
+        kept = pg_session.execute(
+            select(ContactAssignment).where(
+                ContactAssignment.contact_id == contact.id
+            )
+        ).scalar_one()
+        assert kept.user_subject_id == "sub-9811"
+        assert kept.assigned_by == "staff_action"
+        assert result["contact_assignment"]["rows_out_skipped"] == 1
+
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contact_assignment",
+                MigrationConflict.conflict_type == "local_assignment_override",
+                MigrationConflict.source_id == "9820",
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+    finally:
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id = '9820'")
+        )
         pg_session.commit()
 
 

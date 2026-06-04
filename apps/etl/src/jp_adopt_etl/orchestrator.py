@@ -538,13 +538,21 @@ def import_activity_history(
     return counts
 
 
-def _max_watermark(*values: datetime | None) -> datetime | None:
-    """Return the latest of the given watermarks, normalizing naive
-    datetimes to UTC so MySQL-naive and epoch-derived values compare."""
+def _min_watermark(*values: datetime | None) -> datetime | None:
+    """Return the *earliest* of the given watermarks, normalizing naive
+    datetimes to UTC so MySQL-naive and epoch-derived values compare.
+
+    The activity_log target merges two source streams (wp_comments +
+    wp_dt_activity_log) into a single watermark column. Using MAX would
+    skip rows from the lagging stream on the next delta run — e.g. a
+    back-dated comment whose date < histlog_max could never be picked up.
+    MIN re-reads a slice of the leading stream on the next run, but the
+    ON CONFLICT upsert is idempotent so the only cost is repeat work.
+    """
     normalized = [
         (v if v.tzinfo else v.replace(tzinfo=UTC)) for v in values if v is not None
     ]
-    return max(normalized, default=None)
+    return min(normalized, default=None)
 
 
 def _load_existing_fpg_ids(pg_session: Session) -> set[str]:
@@ -716,7 +724,10 @@ def _flush_assignment_batch(
                 source_value={"assigned_to": meta.get("assigned_to")},
             )
             continue
-        pg_session.execute(
+        # ON CONFLICT only updates rows previously placed by the ETL — a
+        # staff reassignment in jp-adopt-core (assigned_by != 'dt_import')
+        # is protected against being clobbered by an hourly delta re-run.
+        stmt = (
             pg_insert(ContactAssignment)
             .values(
                 contact_id=contact_id,
@@ -726,9 +737,23 @@ def _flush_assignment_batch(
             .on_conflict_do_update(
                 index_elements=["contact_id"],
                 set_={"user_subject_id": subject},
+                where=ContactAssignment.assigned_by == "dt_import",
             )
+            .returning(ContactAssignment.contact_id)
         )
-        counts["rows_out_inserted"] += 1
+        result = pg_session.execute(stmt).one_or_none()
+        if result is None:
+            counts["rows_out_skipped"] += 1
+            _record_conflict(
+                pg_session,
+                source_system="dt",
+                source_id=post_id,
+                table_name="contact_assignment",
+                conflict_type="local_assignment_override",
+                source_value={"dt_assigned_to": meta.get("assigned_to")},
+            )
+        else:
+            counts["rows_out_inserted"] += 1
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -756,6 +781,18 @@ def run_etl(
     async def _drive() -> dict[str, dict[str, int]]:
         results: dict[str, dict[str, int]] = {}
         with SessionLocal() as pg_session, mysql_engine.connect() as mysql_conn:
+            # Capture pre-existing audit-row ids so dry-run can later identify
+            # which rows this run added (and re-add them after the rollback
+            # discards every data write).
+            pre_conflict_ids: set[uuid.UUID] = set()
+            pre_deleted_ids: set[uuid.UUID] = set()
+            if mode == "dry_run":
+                pre_conflict_ids = set(
+                    pg_session.execute(select(MigrationConflict.id)).scalars().all()
+                )
+                pre_deleted_ids = set(
+                    pg_session.execute(select(EtlDeletedInSource.id)).scalars().all()
+                )
             async with outbox_suppressed(
                 f"dt_etl:{','.join(tables)}",
                 pg_session,  # type: ignore[arg-type]  # async-safe context var; session is sync
@@ -814,7 +851,7 @@ def run_etl(
                             )
                             for key, value in history.items():
                                 counts[key] = counts.get(key, 0) + value
-                            run_row.source_max_modified_at = _max_watermark(
+                            run_row.source_max_modified_at = _min_watermark(
                                 fetch_max_modified(mysql_conn, table="wp_comments"),
                                 fetch_max_modified(
                                     mysql_conn, table="wp_dt_activity_log"
@@ -845,9 +882,13 @@ def run_etl(
                         run_row.rows_in_conflict = counts.get("rows_in_conflict", 0)
                         results[table_name] = counts
                     # Snapshot the audit row as plain data so dry-run can
-                    # re-create it after rolling back the data writes.
+                    # re-create it after rolling back the data writes. The
+                    # _original_id key lets us remap FK references in
+                    # EtlDeletedInSource (whose etl_run_id pointed at the
+                    # in-flight run_row.id that the rollback will discard).
                     etl_run_snapshots.append(
                         {
+                            "_original_id": run_row.id,
                             "table_name": run_row.table_name,
                             "mode": run_row.mode,
                             "started_at": run_row.started_at,
@@ -864,12 +905,53 @@ def run_etl(
                     )
                 ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
             if mode == "dry_run":
-                # Truly non-mutating: discard every data write (and the
-                # suppressed ``bulk_imported`` outbox row), then persist only
-                # the etl_run audit rows so the operator still gets a summary.
+                # Truly non-mutating: discard every data write, then persist
+                # the per-table etl_run audit rows + the migration_conflicts
+                # + etl_deleted_in_source rows so a rehearsal still surfaces
+                # exactly what would happen in production.
+                pg_session.flush()
+                new_conflicts = [
+                    {
+                        "source_system": c.source_system,
+                        "source_id": c.source_id,
+                        "table_name": c.table_name,
+                        "conflict_type": c.conflict_type,
+                        "source_value": c.source_value,
+                        "local_value": c.local_value,
+                        "detected_at": c.detected_at,
+                    }
+                    for c in pg_session.execute(
+                        select(MigrationConflict)
+                    ).scalars().all()
+                    if c.id not in pre_conflict_ids
+                ]
+                new_deleted = [
+                    {
+                        "_original_etl_run_id": d.etl_run_id,
+                        "table_name": d.table_name,
+                        "source_system": d.source_system,
+                        "source_id": d.source_id,
+                        "last_seen_at": d.last_seen_at,
+                        "detected_at": d.detected_at,
+                    }
+                    for d in pg_session.execute(
+                        select(EtlDeletedInSource)
+                    ).scalars().all()
+                    if d.id not in pre_deleted_ids
+                ]
                 pg_session.rollback()
+                etl_run_id_remap: dict[uuid.UUID, uuid.UUID] = {}
                 for snap in etl_run_snapshots:
-                    pg_session.add(EtlRun(id=uuid.uuid4(), **snap))
+                    original_id = snap.pop("_original_id")
+                    new_id = uuid.uuid4()
+                    etl_run_id_remap[original_id] = new_id
+                    pg_session.add(EtlRun(id=new_id, **snap))
+                for snap in new_conflicts:
+                    pg_session.add(MigrationConflict(id=uuid.uuid4(), **snap))
+                for snap in new_deleted:
+                    original_run_id = snap.pop("_original_etl_run_id")
+                    snap["etl_run_id"] = etl_run_id_remap[original_run_id]
+                    pg_session.add(EtlDeletedInSource(id=uuid.uuid4(), **snap))
             pg_session.commit()
         mysql_engine.dispose()
         pg_engine.dispose()

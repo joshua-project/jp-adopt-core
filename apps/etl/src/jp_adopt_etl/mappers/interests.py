@@ -51,8 +51,6 @@ def parse_fpg_submission_data(raw: Any) -> list[dict[str, Any]]:
                 "facilitation_services": _str_list(el.get("facilitationServices")),
                 "network_services": _str_list(el.get("networkServices")),
                 "commitment_types": _str_list(el.get("commitmentTypes")),
-                "commitment_level": None,
-                "notes": None,
             }
         )
     return out

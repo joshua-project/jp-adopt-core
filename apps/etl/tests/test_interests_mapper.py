@@ -21,8 +21,6 @@ def test_parse_maps_camel_to_interest_kwargs() -> None:
         "facilitation_services": ["prayer_updates", "financial"],
         "network_services": [],
         "commitment_types": ["pray"],
-        "commitment_level": None,
-        "notes": None,
     }
     assert rows[1]["people_id3"] == "10379"
     assert rows[1]["engagement_status"] == "potential"
