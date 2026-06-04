@@ -424,3 +424,81 @@ export async function pauseCampaign(
     `/v1/drips/campaigns/${campaignId}/pause`,
   );
 }
+
+type CampaignPatchBody =
+  paths["/v1/drips/campaigns/{campaign_id}"]["patch"]["requestBody"]["content"]["application/json"];
+type CampaignStepCreateBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["requestBody"]["content"]["application/json"];
+type CampaignStepReadBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["responses"]["201"]["content"]["application/json"];
+type TemplateListResponseBody =
+  paths["/v1/drips/templates"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function getCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, `/v1/drips/campaigns/${campaignId}`),
+    `/v1/drips/campaigns/${campaignId}`,
+  );
+}
+
+export async function patchCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+  body: CampaignPatchBody,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, `/v1/drips/campaigns/${campaignId}`, {
+      method: "PATCH",
+      body,
+    }),
+    `/v1/drips/campaigns/${campaignId}`,
+  );
+}
+
+export async function addCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  body: CampaignStepCreateBody,
+): Promise<CampaignStepReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignStepReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps`,
+      { method: "POST", body },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps`,
+  );
+}
+
+export async function deleteCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+): Promise<void> {
+  await apiFetch<void>(
+    ctx,
+    `/v1/drips/campaigns/${campaignId}/steps/${position}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function archiveCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/drips/campaigns/${campaignId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listDripTemplates(
+  ctx: ApiClientContext,
+): Promise<TemplateListResponseBody> {
+  return _assertPresent(
+    await apiFetch<TemplateListResponseBody>(ctx, "/v1/drips/templates"),
+    "/v1/drips/templates",
+  );
+}
