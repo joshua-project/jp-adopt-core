@@ -535,3 +535,46 @@ export async function enrollInCampaign(
     `/v1/drips/campaigns/${campaignId}/enroll`,
   );
 }
+
+// ── Suppression (#55) ────────────────────────────────────────────────────
+
+type SuppressionListResponseBody =
+  paths["/v1/suppression-list"]["get"]["responses"]["200"]["content"]["application/json"];
+type SuppressionCreateBody =
+  paths["/v1/suppression-list"]["post"]["requestBody"]["content"]["application/json"];
+type SuppressionReadBody =
+  paths["/v1/suppression-list"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function listSuppression(
+  ctx: ApiClientContext,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<SuppressionListResponseBody> {
+  return _assertPresent(
+    await apiFetch<SuppressionListResponseBody>(ctx, "/v1/suppression-list", {
+      query: { limit: opts.limit, offset: opts.offset },
+    }),
+    "/v1/suppression-list",
+  );
+}
+
+export async function addSuppression(
+  ctx: ApiClientContext,
+  body: SuppressionCreateBody,
+): Promise<SuppressionReadBody> {
+  return _assertPresent(
+    await apiFetch<SuppressionReadBody>(ctx, "/v1/suppression-list", {
+      method: "POST",
+      body,
+    }),
+    "/v1/suppression-list",
+  );
+}
+
+export async function removeSuppression(
+  ctx: ApiClientContext,
+  emailHash: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/suppression-list/${emailHash}`, {
+    method: "DELETE",
+  });
+}
