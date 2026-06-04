@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -215,4 +216,19 @@ async def test_process_adoption_unknown_people_id3_raises(session: AsyncSession)
     with pytest.raises(IntakeValidationError):
         await process_adoption_payload(
             session, payload=payload, settings=get_settings()
+        )
+
+
+@pytest.mark.parametrize("model", [AdoptionIntake, FacilitationIntake])
+def test_fpg_selections_cap_accepts_2000_rejects_2001(model) -> None:
+    """#87: cap raised from 20 to 2000 so high-coverage orgs (Mission India,
+    1,701 FPGs) validate. 2000 passes the schema layer; 2001 still bounces."""
+    base = {"email": "cap@example.com", "display_name": "Cap"}
+    ok = model.model_validate(
+        {**base, "fpg_selections": [{"people_id3": f"R{i:04d}"} for i in range(2000)]}
+    )
+    assert len(ok.fpg_selections) == 2000
+    with pytest.raises(ValidationError):
+        model.model_validate(
+            {**base, "fpg_selections": [{"people_id3": f"R{i:04d}"} for i in range(2001)]}
         )
