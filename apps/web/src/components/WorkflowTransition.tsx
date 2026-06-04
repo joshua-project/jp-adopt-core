@@ -10,6 +10,7 @@ import {
   ApiError,
   apiFetch,
   decideMatch,
+  getContactEnrollments,
   transitionContact,
 } from "../lib/api-client";
 import { REASON_CODES, type ReasonCode } from "../lib/reason-codes";
@@ -55,6 +56,7 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
   const searchParams = useSearchParams();
   const matchId = searchParams.get("match");
   const [contact, setContact] = useState<Contact | null>(null);
+  const [activeDripCount, setActiveDripCount] = useState<number | null>(null);
   const [kind, setKind] = useState<"adopter" | "facilitator">("adopter");
   // F38: leave the to-state empty until the user picks one; the previous
   // default of "contacted" silently committed Amy to a specific transition
@@ -84,6 +86,14 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
         setKind("facilitator");
       } else {
         setKind("adopter");
+      }
+      try {
+        const en = await getContactEnrollments(ctx, contactId);
+        setActiveDripCount(
+          en.items.filter((row) => row.state === "active").length,
+        );
+      } catch {
+        setActiveDripCount(null);
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load contact");
@@ -190,6 +200,19 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
                 {(contact.facilitator_status ?? "—").replace(/_/g, " ")}
               </span>
             </span>
+          </p>
+        ) : null}
+        {activeDripCount !== null ? (
+          <p className="mt-1 text-xs text-slate-500">
+            {activeDripCount === 0
+              ? "Not enrolled in any drips."
+              : `Active in ${activeDripCount} drip${activeDripCount === 1 ? "" : "s"}.`}{" "}
+            <Link
+              href={`/contacts/${contactId}`}
+              className="underline hover:text-slate-700"
+            >
+              Manage
+            </Link>
           </p>
         ) : null}
       </div>

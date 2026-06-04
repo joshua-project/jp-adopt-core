@@ -502,3 +502,36 @@ export async function listDripTemplates(
     "/v1/drips/templates",
   );
 }
+
+type ContactEnrollmentsResponseBody =
+  paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
+type ManualEnrollResponseBody =
+  paths["/v1/drips/campaigns/{campaign_id}/enroll"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function getContactEnrollments(
+  ctx: ApiClientContext,
+  contactId: string,
+): Promise<ContactEnrollmentsResponseBody> {
+  return _assertPresent(
+    await apiFetch<ContactEnrollmentsResponseBody>(
+      ctx,
+      `/v1/contacts/${contactId}/enrollments`,
+    ),
+    `/v1/contacts/${contactId}/enrollments`,
+  );
+}
+
+export async function enrollInCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+  contactId: string,
+): Promise<ManualEnrollResponseBody> {
+  return _assertPresent(
+    await apiFetch<ManualEnrollResponseBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/enroll`,
+      { method: "POST", body: { contact_id: contactId } },
+    ),
+    `/v1/drips/campaigns/${campaignId}/enroll`,
+  );
+}

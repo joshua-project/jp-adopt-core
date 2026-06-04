@@ -6,7 +6,13 @@ import type { ReactNode } from "react";
 
 import type { paths } from "@jp-adopt/contracts";
 
-import { apiFetch, sendContactEmail } from "../lib/api-client";
+import {
+  apiFetch,
+  enrollInCampaign,
+  formatApiError,
+  listCampaigns,
+  sendContactEmail,
+} from "../lib/api-client";
 import { useApiContext } from "../lib/useApiContext";
 import {
   formatTimestamp,
@@ -230,6 +236,16 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailErr, setEmailErr] = useState<string | null>(null);
 
+  // U7: manual-enroll affordance
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [activeCampaigns, setActiveCampaigns] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [enrollCampaignId, setEnrollCampaignId] = useState("");
+  const [enrollBusy, setEnrollBusy] = useState(false);
+  const [enrollErr, setEnrollErr] = useState<string | null>(null);
+  const [enrollMsg, setEnrollMsg] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setErr(null);
     try {
@@ -276,6 +292,53 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setBusy(false);
     }
   }, [ctx, contactId, noteBody, load]);
+
+  const openEnroll = useCallback(async () => {
+    setEnrollErr(null);
+    setEnrollMsg(null);
+    setEnrollOpen(true);
+    try {
+      const res = await listCampaigns(ctx);
+      const active = res.items
+        .filter((c) => c.status === "active")
+        .map((c) => ({ id: c.id, name: c.name }));
+      setActiveCampaigns(active);
+      if (active.length > 0 && !enrollCampaignId) {
+        setEnrollCampaignId(active[0].id);
+      }
+    } catch (e) {
+      setEnrollErr(formatApiError(e));
+    }
+  }, [ctx, enrollCampaignId]);
+
+  const submitEnroll = useCallback(async () => {
+    if (!enrollCampaignId) return;
+    setEnrollBusy(true);
+    setEnrollErr(null);
+    setEnrollMsg(null);
+    try {
+      const res = await enrollInCampaign(ctx, enrollCampaignId, contactId);
+      if (res.reason === "created") {
+        setEnrollMsg("Enrolled.");
+        setEnrollOpen(false);
+        await load();
+      } else {
+        const phrase =
+          res.reason === "already_enrolled"
+            ? "Contact is already enrolled in this campaign."
+            : res.reason === "suppressed"
+              ? "Contact email is on the suppression list."
+              : res.reason === "do_not_engage"
+                ? "Contact is opted out — cannot enroll."
+                : `Not enrolled: ${humanize(res.reason)}`;
+        setEnrollErr(phrase);
+      }
+    } catch (e) {
+      setEnrollErr(formatApiError(e));
+    } finally {
+      setEnrollBusy(false);
+    }
+  }, [ctx, enrollCampaignId, contactId, load]);
 
   const sendEmail = useCallback(async () => {
     const subject = emailSubject.trim();
@@ -664,23 +727,58 @@ export function ContactRecord({ contactId }: { contactId: string }) {
           )}
         </Tile>
 
-        <Tile title="Drip enrollments" count={enrollments?.total ?? 0}>
+        <Tile
+          title="Drip enrollments"
+          count={enrollments?.total ?? 0}
+          action={
+            <button type="button" className={BTN} onClick={openEnroll}>
+              Manual enroll
+            </button>
+          }
+        >
+          {enrollMsg ? (
+            <div className="mb-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-900">
+              {enrollMsg}
+            </div>
+          ) : null}
           {enrollments?.items.length ? (
             <ul className="space-y-2 text-sm">
               {enrollments.items.map((en) => (
-                <li key={en.id} className="flex items-center justify-between gap-2">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                      {humanize(en.state)}
+                <li key={en.id} className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                        {humanize(en.state)}
+                      </span>
+                      <span className="text-slate-700">{en.campaign_name}</span>
+                      {en.exit_reason ? (
+                        <span className="text-slate-400">· {humanize(en.exit_reason)}</span>
+                      ) : null}
                     </span>
-                    <span className="text-slate-700">{en.campaign_name}</span>
-                    {en.exit_reason ? (
-                      <span className="text-slate-400">· {humanize(en.exit_reason)}</span>
-                    ) : null}
-                  </span>
-                  <span className="shrink-0 text-xs text-slate-400">
-                    step {en.current_step_position} · {formatTimestamp(en.enrolled_at)}
-                  </span>
+                    <span className="shrink-0 text-xs text-slate-400">
+                      step {en.current_step_position}
+                      {en.last_step_sent_at
+                        ? ` · last sent ${formatTimestamp(en.last_step_sent_at)}`
+                        : " · not sent yet"}
+                    </span>
+                  </div>
+                  {en.events && en.events.length > 0 ? (
+                    <details className="ml-1 text-xs text-slate-500">
+                      <summary className="cursor-pointer hover:text-slate-700">
+                        {en.events.length} event{en.events.length === 1 ? "" : "s"}
+                      </summary>
+                      <ul className="mt-1 space-y-0.5 pl-3">
+                        {en.events.map((ev, i) => (
+                          <li key={i} className="flex items-baseline justify-between gap-2">
+                            <span className="font-mono">{ev.event_type}</span>
+                            <span className="text-slate-400">
+                              {formatTimestamp(ev.created_at)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -741,6 +839,64 @@ export function ContactRecord({ contactId }: { contactId: string }) {
           </Tile>
         ))}
       </div>
+
+      {/* U7: manual-enroll modal */}
+      {enrollOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-lg bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-slate-900">
+              Enroll {contact?.display_name} in a campaign
+            </h3>
+            {activeCampaigns.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                No active campaigns. Activate one on{" "}
+                <Link href="/campaigns" className="underline">
+                  Campaigns
+                </Link>{" "}
+                first.
+              </p>
+            ) : (
+              <label className="block text-xs text-slate-600">
+                Campaign
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                  value={enrollCampaignId}
+                  onChange={(e) => setEnrollCampaignId(e.target.value)}
+                >
+                  {activeCampaigns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {enrollErr ? (
+              <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                {enrollErr}
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className={BTN}
+                disabled={enrollBusy}
+                onClick={() => setEnrollOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                disabled={enrollBusy || !enrollCampaignId}
+                onClick={submitEnroll}
+              >
+                {enrollBusy ? "Enrolling…" : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* F3: send-email modal */}
       {emailOpen ? (
