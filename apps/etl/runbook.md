@@ -89,7 +89,25 @@ partial index predicate. SQLAlchemy's `on_conflict_do_update` exposes
 this via `index_where=text("source_system IS NOT NULL AND source_id IS NOT NULL")`.
 
 Equivalent partial indexes apply to `activity_log` and
-`staff_identity_link` (both added in 0009).
+`staff_identity_link` (both added in 0009). Migration `0023` adds the
+same shape to `adopter_interest` (`uq_adopter_interest_source_system_source_id`).
+
+## Duplicate emails (DT) vs partial unique index (jp-adopt-core)
+
+DT permits the same email on multiple contacts; jp-adopt-core has a
+partial unique index on `contacts.email_normalized` and does not. The
+orchestrator detects the collision pre-insert by loading the existing
+`(email_normalized → (source_system, source_id))` map, claiming each
+email for the first DT contact that submits it, and for subsequent
+contacts that try to claim the same email:
+
+1. Keep the contact row (so notes/interests/assignments still attach).
+2. Clear `email_normalized` on the colliding row.
+3. Record a `migration_conflicts` row with
+   `conflict_type='duplicate_email'` and `source_value={"email_normalized": "..."}`.
+
+Operators reconcile post-cutover by picking the canonical contact per
+email and re-attaching the duplicate's history if needed.
 
 ## Outbox suppression
 
@@ -123,17 +141,40 @@ import against the target DB inside one transaction, then rolls back the
 data and re-commits just the `etl_run` rows. Safe to point at the real
 target for a rehearsal — it leaves no `source_system='dt'` rows behind.
 
+## Tables and order
+
+The orchestrator runs tables in dependency order so foreign-key
+references resolve. `--table all` is shorthand for:
+
+1. `staff_identity_link` (wp_users) — required before assignment + author
+   resolution.
+2. `contacts` (wp_posts + wp_postmeta) — also populates `contact_profile`
+   and `adopter_interest` (from `fpg_submission_data` JSON) inline.
+3. `contact_assignment` — depends on contacts + staff_identity_link; an
+   assignee without a B2C subject records `assignee_no_subject`.
+4. `activity_log` — wp_comments (notes/emails) and `wp_dt_activity_log`
+   (field-change history) merged into a single target table.
+5. `adopter_interest` — re-runs against `fpg_submission_data` are
+   idempotent via `(source_system, source_id='<contact>:<peopleId3>')`.
+
+On full (non-watermark) contact runs the orchestrator also writes
+`etl_deleted_in_source` rows for contacts that were present on a prior
+run but absent from the current snapshot — no hard delete.
+
 ## Delta vs full ETL
 
 The `--watermark` flag filters source rows to those modified after the
 supplied ISO 8601 timestamp:
 
 - For `contacts`: `wp_posts.post_modified_gmt > watermark`.
-- For `activity_log`: `wp_comments.comment_date_gmt > watermark`.
+- For `activity_log` (comments): `wp_comments.comment_date_gmt > watermark`.
+- For `activity_log` (field changes): `wp_dt_activity_log.hist_time > epoch(watermark)`.
 - For `staff_identity_link`: no watermark (full scan; wp_users is
   small).
-- For `adopter_interest`: not implemented in v1 (p2p resolution
-  deferred to U13).
+- For `contact_assignment`: no watermark (1:1 with contacts; re-resolves
+  on each run).
+- For `adopter_interest`: no watermark; gated by the contact's
+  watermark (interests parse from the contact's postmeta).
 
 The previous run's `etl_run.source_max_modified_at` is the next run's
 watermark. The orchestrator stores this at the end of each table's
@@ -144,8 +185,8 @@ import.
 | Symptom | Diagnosis | Recovery |
 |---------|-----------|----------|
 | `UnmappedStatusError` | New DT enum value | Add to `mappers/status.py`, rebuild, re-run |
-| `OperationalError: wp_p2p` not found | Older DT install without p2p plugin | Warned + skipped; AdopterInterest deferred to U13 |
-| `InvalidColumnReference: no unique constraint` | Migration 0009 not applied | `uv run alembic upgrade head` |
+| `IntegrityError: uq_contacts_email_normalized` | Two DT contacts share an email | Handled — see "Duplicate emails" above; not a failure mode |
+| `InvalidColumnReference: no unique constraint` | Migration 0023 not applied | `uv run alembic upgrade head` |
 | `InFailedSqlTransaction` after an error | Previous statement failed, transaction is aborted | The orchestrator handles per-table; investigate `etl_run.errors > 0` |
 | `migration_conflicts` row with `conflict_type='local_modified_after_import'` | Staff edited the contact between runs | Expected — review post-cutover |
 
@@ -172,19 +213,29 @@ uv run --package jp-adopt-etl dt-etl \
   enum map; every known transition exercised plus dry_run-fails-loud.
 - `tests/test_contacts_mapper.py` — pivot + map tests including
   phpserialize roundtrip and the synthetic-display-name fallback.
+- `tests/test_channels_mapper.py` — `contact_email_<hash>` /
+  `contact_phone_<hash>` extraction with verified-first ordering.
+- `tests/test_profile_mapper.py` — ~30 ContactProfile fields with
+  type coercion and CHECK domain clamping.
+- `tests/test_interests_mapper.py` — `fpg_submission_data` JSON parse.
+- `tests/test_activity_history_mapper.py` — `wp_dt_activity_log`
+  field-change → `kind='field_change'` rendering.
+- `tests/test_assignment_mapper.py` — `assigned_to` (`user-<id>`) parse.
 - `tests/test_comments_mapper.py` — comment → activity_log + author
   resolution, including the legacy-unknown sentinel.
 - `tests/test_users_mapper.py` — wp_users → staff_identity_link.
 - `tests/test_orchestrator_integration.py` — end-to-end with a mocked
   MySQL source against real Postgres. Covers user import (idempotent),
   contact import (postmeta pivot + outbox suppression integration),
-  and the `local_modified_after_import` skip path.
+  `local_modified_after_import` skip path, contact_profile populated
+  from JP-custom postmeta, `fpg_submission_data` interest fan-out,
+  comment threading parent_id resolution, field-change activity_log,
+  assignment with conflict for unmapped assignees, non-mutating
+  dry_run, full-run deletion tracking, and duplicate-email collision
+  handling.
 
 ## Out of scope in v1
 
-- AdopterInterest rop3 resolution (p2p_to → wp_postmeta → rop3): the
-  reader is in place but the mapper records a `migration_conflicts` row
-  rather than attempting the lookup. U13 cutover handles this.
 - Match row import: the matching algorithm in U6 owns Match creation;
   we don't backfill historical DT matches in v1 (Amy will re-run the
   matcher on imported contacts post-cutover).

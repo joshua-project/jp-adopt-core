@@ -206,6 +206,20 @@ def _load_existing_dt_post_id_to_contact(pg_session: Session) -> dict[str, uuid.
     return {row.source_id: row.id for row in rows if row.source_id is not None}
 
 
+def _load_email_owners(
+    pg_session: Session,
+) -> dict[str, tuple[str | None, str | None]]:
+    """Map ``email_normalized`` → the (source_system, source_id) that owns it.
+    Used to honor the partial unique index on contacts.email_normalized: DT
+    permits duplicate emails across contacts, the new system does not."""
+    rows = pg_session.execute(
+        select(
+            Contact.email_normalized, Contact.source_system, Contact.source_id
+        ).where(Contact.email_normalized.is_not(None))
+    ).all()
+    return {r.email_normalized: (r.source_system, r.source_id) for r in rows}
+
+
 def import_contacts(
     *,
     mysql_conn: Connection,
@@ -226,14 +240,17 @@ def import_contacts(
         "rows_out_skipped": 0,
         "rows_in_conflict": 0,
     }
+    email_owner = _load_email_owners(pg_session)
     batch: list[dict[str, Any]] = []
     for post in iter_contacts(mysql_conn, watermark=watermark, batch_size=batch_size):
         batch.append(post)
         if len(batch) >= batch_size:
-            _flush_contact_batch(mysql_conn, pg_session, batch, mode, counts)
+            _flush_contact_batch(
+                mysql_conn, pg_session, batch, mode, counts, email_owner
+            )
             batch.clear()
     if batch:
-        _flush_contact_batch(mysql_conn, pg_session, batch, mode, counts)
+        _flush_contact_batch(mysql_conn, pg_session, batch, mode, counts, email_owner)
     return counts
 
 
@@ -243,6 +260,7 @@ def _flush_contact_batch(
     batch: Iterable[dict[str, Any]],
     mode: Mode,
     counts: dict[str, int],
+    email_owner: dict[str, tuple[str | None, str | None]],
 ) -> None:
     batch_list = list(batch)
     post_ids = [row["ID"] for row in batch_list]
@@ -267,6 +285,25 @@ def _flush_contact_batch(
                 raise
             counts["rows_out_skipped"] += 1
             continue
+        # Honor the partial unique index on email_normalized. DT permits the
+        # same email on multiple contacts; the new system does not. Keep the
+        # contact but drop the colliding email and flag it for review.
+        email = kwargs.get("email_normalized")
+        if email:
+            owner = email_owner.get(email)
+            if owner is not None and owner != ("dt", source_id):
+                counts["rows_in_conflict"] += 1
+                _record_conflict(
+                    pg_session,
+                    source_system="dt",
+                    source_id=source_id,
+                    table_name="contacts",
+                    conflict_type="duplicate_email",
+                    source_value={"email_normalized": email},
+                )
+                kwargs["email_normalized"] = None
+            else:
+                email_owner[email] = ("dt", source_id)
         # ON CONFLICT (source_system, source_id) DO UPDATE … WHERE
         # local_modified_after_import = false. WHERE is on the EXCLUDED
         # row's match against the existing row's flag — Postgres lets us

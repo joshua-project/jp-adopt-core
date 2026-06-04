@@ -799,6 +799,80 @@ def test_import_assignment_resolves_subject_and_records_conflict(
         pg_session.commit()
 
 
+def test_duplicate_email_keeps_contact_clears_email_records_conflict(
+    monkeypatch, pg_engine, pg_session
+):
+    """DT permits multiple contacts to share an email; the new system's
+    partial unique index on contacts.email_normalized does not. The ETL
+    must keep the contact, drop the colliding email, and record a
+    duplicate_email migration_conflicts row for review."""
+    from jp_adopt_api.models import MigrationConflict
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {"ID": 9111, "post_title": "First", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+        {"ID": 9112, "post_title": "Second", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9111: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_aaa", "meta_value": "dup@example.com"},
+        ],
+        9112: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_bbb", "meta_value": "dup@example.com"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_in"] == 2
+        assert result["contacts"]["rows_in_conflict"] >= 1
+
+        # Both contacts persisted; one kept the email, one had it cleared.
+        rows = pg_session.execute(
+            select(Contact).where(Contact.source_id.in_(["9111", "9112"]))
+        ).scalars().all()
+        assert len(rows) == 2
+        emails = sorted(
+            [r.email_normalized for r in rows], key=lambda v: (v is None, v)
+        )
+        assert emails == ["dup@example.com", None]
+
+        # Conflict captured for review.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contacts",
+                MigrationConflict.conflict_type == "duplicate_email",
+                MigrationConflict.source_id.in_(["9111", "9112"]),
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+        assert conflicts[0].source_value == {"email_normalized": "dup@example.com"}
+    finally:
+        pg_session.execute(
+            text(
+                "DELETE FROM migration_conflicts "
+                "WHERE source_id IN ('9111', '9112')"
+            )
+        )
+        pg_session.commit()
+
+
 def test_dry_run_is_non_mutating_but_writes_etl_run(monkeypatch, pg_engine, pg_session):
     """--mode dry_run persists no data rows but still writes an etl_run row."""
     from jp_adopt_etl.orchestrator import run_etl
