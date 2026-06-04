@@ -31,6 +31,7 @@ from sqlalchemy import delete, select
 
 from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.domain.drips import (
+    EMAIL_TEMPLATES_DIR,
     EXIT_REASON_MANUAL,
     enroll_contact_in_campaign,
 )
@@ -126,6 +127,14 @@ class CampaignListResponse(BaseModel):
     total: int
 
 
+class TemplateRead(BaseModel):
+    name: str
+
+
+class TemplateListResponse(BaseModel):
+    items: list[TemplateRead]
+
+
 class ManualEnrollRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -203,6 +212,21 @@ async def list_campaigns(
     ).scalars().all()
     items = [await _serialize_campaign(db, c) for c in rows]
     return CampaignListResponse(items=items, total=len(items))
+
+
+@router.get("/templates", response_model=TemplateListResponse)
+async def list_templates(
+    _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
+) -> TemplateListResponse:
+    """Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step
+    UI can present a dropdown instead of a free-text field, eliminating
+    typo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the
+    directory is missing — a fresh dev environment isn't an error."""
+    try:
+        names = sorted(p.name for p in EMAIL_TEMPLATES_DIR.glob("*.mjml"))
+    except (FileNotFoundError, OSError):
+        names = []
+    return TemplateListResponse(items=[TemplateRead(name=n) for n in names])
 
 
 @router.post(

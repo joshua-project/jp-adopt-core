@@ -712,3 +712,65 @@ async def test_worker_tick_renders_and_advances_enrollment(
     finally:
         await _cleanup_campaign(session, campaign)
         await _cleanup_contact(session, contact)
+
+
+# ─── F3 (#55): GET /v1/drips/templates ────────────────────────────────────
+
+
+def test_list_templates_returns_mjml_filenames_sorted(client: TestClient) -> None:
+    """The real EMAIL_TEMPLATES_DIR ships with two demo MJML files; the
+    endpoint returns them sorted lexicographically. New template additions
+    will extend this list but not break the assertion."""
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    names = [t["name"] for t in r.json()["items"]]
+    assert names == sorted(names)
+    assert "facilitator-welcome.step-0.mjml" in names
+    assert all(n.endswith(".mjml") for n in names)
+
+
+def test_list_templates_excludes_non_mjml(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A stray .md or .txt file in the templates directory is not surfaced."""
+    from jp_adopt_api.routers import drips as drips_router
+
+    (tmp_path / "welcome.mjml").write_text("<mjml></mjml>")
+    (tmp_path / "notes.md").write_text("# notes")
+    (tmp_path / "readme.txt").write_text("readme")
+    monkeypatch.setattr(drips_router, "EMAIL_TEMPLATES_DIR", tmp_path)
+
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    assert [t["name"] for t in r.json()["items"]] == ["welcome.mjml"]
+
+
+def test_list_templates_missing_directory_returns_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A fresh dev environment without the templates directory must not
+    500 — the endpoint degrades to an empty list."""
+    from jp_adopt_api.routers import drips as drips_router
+
+    monkeypatch.setattr(
+        drips_router, "EMAIL_TEMPLATES_DIR", tmp_path / "does-not-exist"
+    )
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    assert r.json() == {"items": []}
+
+
+@pytest.mark.asyncio
+async def test_list_templates_non_staff_returns_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pure facilitator (no staff role) is refused — templates are part of
+    the campaign-management surface."""
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 403, r.text
