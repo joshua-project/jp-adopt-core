@@ -19,6 +19,7 @@ from jp_adopt_api.routers import (
     intake,
     manual_contacts,
     matches,
+    suppression,
     workflow,
 )
 
@@ -112,6 +113,7 @@ app.include_router(matches.router)
 app.include_router(workflow.router)
 app.include_router(admin.router)
 app.include_router(drips.router)
+app.include_router(suppression.router)
 app.include_router(manual_contacts.router)
 
 
