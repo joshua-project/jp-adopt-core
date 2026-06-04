@@ -7,12 +7,12 @@ operator-facing wrapper.
 
 ## Pre-cutover (Friday evening, 5/22)
 
-1. Confirm staging Postgres is at the latest migration (`0023`):
+1. Confirm staging Postgres is at the latest migration (`0024`):
    ```bash
    uv run --package jp-adopt-api alembic current
-   # expect: 0023 (head)
+   # expect: 0024 (head)
    ```
-   `0022` adds `contacts.phone`; `0023` adds `adopter_interest.source_system`/
+   `0023` adds `contacts.phone`; `0024` adds `adopter_interest.source_system`/
    `source_id` plus the partial unique index needed for ETL idempotency.
 2. Dry-run against the latest DT MySQL snapshot:
    ```bash

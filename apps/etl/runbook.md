@@ -89,7 +89,7 @@ partial index predicate. SQLAlchemy's `on_conflict_do_update` exposes
 this via `index_where=text("source_system IS NOT NULL AND source_id IS NOT NULL")`.
 
 Equivalent partial indexes apply to `activity_log` and
-`staff_identity_link` (both added in 0009). Migration `0023` adds the
+`staff_identity_link` (both added in 0009). Migration `0024` adds the
 same shape to `adopter_interest` (`uq_adopter_interest_source_system_source_id`).
 
 ## Duplicate emails (DT) vs partial unique index (jp-adopt-core)
@@ -186,7 +186,7 @@ import.
 |---------|-----------|----------|
 | `UnmappedStatusError` | New DT enum value | Add to `mappers/status.py`, rebuild, re-run |
 | `IntegrityError: uq_contacts_email_normalized` | Two DT contacts share an email | Handled — see "Duplicate emails" above; not a failure mode |
-| `InvalidColumnReference: no unique constraint` | Migration 0023 not applied | `uv run alembic upgrade head` |
+| `InvalidColumnReference: no unique constraint` | Migration 0024 not applied | `uv run alembic upgrade head` |
 | `InFailedSqlTransaction` after an error | Previous statement failed, transaction is aborted | The orchestrator handles per-table; investigate `etl_run.errors > 0` |
 | `migration_conflicts` row with `conflict_type='local_modified_after_import'` | Staff edited the contact between runs | Expected — review post-cutover |
 
