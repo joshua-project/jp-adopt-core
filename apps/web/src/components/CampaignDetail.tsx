@@ -15,6 +15,7 @@ import {
   patchCampaign,
   pauseCampaign,
 } from "../lib/api-client";
+import { BTN_DANGER, BTN_PRIMARY, BTN_SECONDARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
 import { formatTimestamp } from "../lib/vocab";
 import { AddCampaignStepForm } from "./AddCampaignStepForm";
@@ -23,13 +24,6 @@ import { StatusBadge } from "./StatusBadge";
 type CampaignRead =
   paths["/v1/drips/campaigns/{campaign_id}"]["get"]["responses"]["200"]["content"]["application/json"];
 type CampaignStep = NonNullable<CampaignRead["steps"]>[number];
-
-const BTN_PRIMARY =
-  "rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50";
-const BTN_SECONDARY =
-  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
-const BTN_DANGER =
-  "rounded-md border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50";
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
@@ -68,6 +62,10 @@ function MetaPanel({
       setErr("Name is required.");
       return;
     }
+    if (campaign.trigger_type === "event" && !triggerEventType.trim()) {
+      setErr("Event-triggered campaigns require a trigger event type.");
+      return;
+    }
     setErr(null);
     startSave(() => {
       void (async () => {
@@ -77,7 +75,7 @@ function MetaPanel({
             description: description.trim() || null,
             trigger_event_type:
               campaign.trigger_type === "event"
-                ? triggerEventType.trim() || null
+                ? triggerEventType.trim()
                 : null,
             precedence,
           });
@@ -347,7 +345,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const steps = [...(campaign.steps ?? [])].sort(
     (a, b) => a.position - b.position,
   );
-  const nextPosition =
+  const suggestedPosition =
     steps.length > 0 ? Math.max(...steps.map((s) => s.position)) + 1 : 0;
   const canActivate =
     campaign.status === "draft" || campaign.status === "paused";
@@ -405,7 +403,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         )}
         <AddCampaignStepForm
           campaignId={campaign.id}
-          suggestedPosition={nextPosition}
+          suggestedPosition={suggestedPosition}
           onAdded={load}
         />
       </section>
