@@ -7,12 +7,8 @@ import {
   formatApiError,
   listDripTemplates,
 } from "../lib/api-client";
+import { BTN_PRIMARY, BTN_SECONDARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
-
-const BTN_PRIMARY =
-  "rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50";
-const BTN_SECONDARY =
-  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
 
 export function AddCampaignStepForm({
   campaignId,

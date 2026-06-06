@@ -4,10 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { createCampaign, formatApiError } from "../lib/api-client";
+import { BTN, BTN_PRIMARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
-
-const BTN =
-  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
 
 const TRIGGER_TYPES = ["event", "manual"] as const;
 
@@ -97,6 +95,7 @@ export function NewCampaignModal({
               className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
               value={triggerType}
               onChange={(e) =>
+                // Safe cast: options are rendered from TRIGGER_TYPES so e.target.value is always one of its members.
                 setTriggerType(
                   e.target.value as (typeof TRIGGER_TYPES)[number],
                 )
@@ -147,7 +146,7 @@ export function NewCampaignModal({
           </button>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+            className={BTN_PRIMARY}
             disabled={busy || !name.trim()}
             onClick={onSubmit}
           >

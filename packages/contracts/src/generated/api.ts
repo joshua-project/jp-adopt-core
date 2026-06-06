@@ -610,7 +610,8 @@ export interface paths {
          * @description Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step
          *     UI can present a dropdown instead of a free-text field, eliminating
          *     typo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the
-         *     directory is missing — a fresh dev environment isn't an error.
+         *     directory is missing — Path.glob on a missing directory yields an
+         *     empty iterator on Python 3.10+, so no try/except is needed.
          */
         get: operations["list_templates_v1_drips_templates_get"];
         put?: never;
@@ -636,6 +637,12 @@ export interface paths {
          * Archive Campaign
          * @description Soft delete: flip status to ``archived`` so audit history stays
          *     intact. Hard delete is reserved for failed-test cleanup.
+         *
+         *     Refuses with 409 when active enrollments still reference the
+         *     campaign — archiving mid-flight would orphan those enrollments
+         *     relative to the worker's ``Campaign.status == 'active'`` filter.
+         *     Operators should pause + manually exit (or wait for completion)
+         *     before archiving.
          */
         delete: operations["archive_campaign_v1_drips_campaigns__campaign_id__delete"];
         options?: never;
@@ -742,7 +749,9 @@ export interface paths {
         /**
          * Add Suppression
          * @description Add an email to the suppression list. Idempotent — re-adding the same
-         *     address returns the existing row at 200, not 409 (per F3 KTD-4).
+         *     address returns the upserted row at 200, not 409 (per F3 KTD-4). When the
+         *     address is already present the reason and source_metadata are overwritten
+         *     with the new values.
          */
         post: operations["add_suppression_v1_suppression_list_post"];
         delete?: never;
@@ -3613,6 +3622,13 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No suppression entry with the given hash. Detail body carries ``code='suppression_not_found'``. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

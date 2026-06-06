@@ -92,7 +92,8 @@ export function WorkflowTransition({ contactId }: { contactId: string }) {
         setActiveDripCount(
           en.items.filter((row) => row.state === "active").length,
         );
-      } catch {
+      } catch (e) {
+        console.warn("Failed to load contact enrollments for drip summary:", e);
         setActiveDripCount(null);
       }
     } catch (e) {

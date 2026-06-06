@@ -143,3 +143,9 @@ def require_role(
         return user, roles
 
     return _dep
+
+
+# Shared staff role set — used by the contact / drip / suppression /
+# manual-contact routers. Centralized here so a future addition (e.g.
+# data_steward) touches one constant.
+STAFF_ROLES: frozenset[str] = frozenset({"staff_admin", "adoption_manager"})

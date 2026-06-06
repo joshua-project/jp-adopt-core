@@ -17,7 +17,6 @@ admin function, so it does not gate on ``staff_admin`` alone.
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -25,19 +24,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import delete, func, select
 
-from jp_adopt_api.deps import DbSession, require_role
-from jp_adopt_api.domain.drips import (
-    add_to_suppression_list,
-    email_hash as compute_email_hash,
-)
+from jp_adopt_api.deps import STAFF_ROLES, DbSession, require_role
+from jp_adopt_api.domain.drips import add_to_suppression_list
 from jp_adopt_api.models import SuppressionList
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/suppression-list", tags=["suppression"])
 
-_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
-_STAFF_DEP = require_role(*_STAFF_ROLES)
+_STAFF_DEP = require_role(*STAFF_ROLES)
 
 
 class SuppressionRead(BaseModel):
@@ -98,25 +93,31 @@ async def add_suppression(
     _: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
 ) -> SuppressionRead:
     """Add an email to the suppression list. Idempotent — re-adding the same
-    address returns the existing row at 200, not 409 (per F3 KTD-4)."""
-    await add_to_suppression_list(
+    address returns the upserted row at 200, not 409 (per F3 KTD-4). When the
+    address is already present the reason and source_metadata are overwritten
+    with the new values."""
+    row = await add_to_suppression_list(
         db,
         email=body.email,
         reason=body.reason,
         source_metadata=body.source_metadata,
     )
     await db.commit()
-    h = compute_email_hash(body.email)
-    row = await db.get(SuppressionList, h)
-    if row is None:  # pragma: no cover — invariant after the upsert above
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "suppression_insert_failed"},
-        )
     return SuppressionRead.model_validate(row)
 
 
-@router.delete("/{email_hash}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{email_hash}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        404: {
+            "description": (
+                "No suppression entry with the given hash. Detail body "
+                "carries ``code='suppression_not_found'``."
+            ),
+        },
+    },
+)
 async def remove_suppression(
     email_hash: str,
     db: DbSession,

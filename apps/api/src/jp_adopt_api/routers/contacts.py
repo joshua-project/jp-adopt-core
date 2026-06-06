@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 
-from jp_adopt_api.deps import DbSession, SettingsDep, require_role
+from jp_adopt_api.deps import STAFF_ROLES, DbSession, SettingsDep, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
@@ -53,13 +53,11 @@ router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
 EVENT_CONTACT_UPDATED = "jp.adopt.v1.contact.updated"
 
-# Staff roles allowed to read/write contacts. Mirrors `manual_contacts._STAFF_ROLES`
-# — the set of staff users who triage adopter/facilitator records. Without this
-# gate, `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
+# Staff roles allowed to read/write contacts. Without this gate,
+# `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
 # account; the role check (row-level) is the second defense gate (U22 of the
-# Entra direct plan).
-_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
-_STAFF_DEP = require_role(*_STAFF_ROLES)
+# Entra direct plan). `STAFF_ROLES` is centralized in `deps`.
+_STAFF_DEP = require_role(*STAFF_ROLES)
 
 # F3 (#55): per-enrollment event cap on the per-contact drips panel read.
 # An enrollment may accumulate many step_sent / state-change rows over its
@@ -461,6 +459,8 @@ async def get_contact_enrollments(
                     EnrollmentEvent.enrollment_id,
                     EnrollmentEvent.created_at.desc(),
                 )
+                # Bounded fetch: at most _ENROLLMENT_EVENTS_CAP events per enrollment survive the Python cap below.
+                .limit(len(enrollment_ids) * _ENROLLMENT_EVENTS_CAP)
             )
         ).scalars().all()
         for evt in event_rows:

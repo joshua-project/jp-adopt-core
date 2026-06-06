@@ -2306,7 +2306,7 @@
           "drips"
         ],
         "summary": "List Templates",
-        "description": "Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step\nUI can present a dropdown instead of a free-text field, eliminating\ntypo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the\ndirectory is missing \u2014 a fresh dev environment isn't an error.",
+        "description": "Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step\nUI can present a dropdown instead of a free-text field, eliminating\ntypo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the\ndirectory is missing \u2014 Path.glob on a missing directory yields an\nempty iterator on Python 3.10+, so no try/except is needed.",
         "operationId": "list_templates_v1_drips_templates_get",
         "parameters": [
           {
@@ -2480,7 +2480,7 @@
           "drips"
         ],
         "summary": "Archive Campaign",
-        "description": "Soft delete: flip status to ``archived`` so audit history stays\nintact. Hard delete is reserved for failed-test cleanup.",
+        "description": "Soft delete: flip status to ``archived`` so audit history stays\nintact. Hard delete is reserved for failed-test cleanup.\n\nRefuses with 409 when active enrollments still reference the\ncampaign \u2014 archiving mid-flight would orphan those enrollments\nrelative to the worker's ``Campaign.status == 'active'`` filter.\nOperators should pause + manually exit (or wait for completion)\nbefore archiving.",
         "operationId": "archive_campaign_v1_drips_campaigns__campaign_id__delete",
         "parameters": [
           {
@@ -2920,7 +2920,7 @@
           "suppression"
         ],
         "summary": "Add Suppression",
-        "description": "Add an email to the suppression list. Idempotent \u2014 re-adding the same\naddress returns the existing row at 200, not 409 (per F3 KTD-4).",
+        "description": "Add an email to the suppression list. Idempotent \u2014 re-adding the same\naddress returns the upserted row at 200, not 409 (per F3 KTD-4). When the\naddress is already present the reason and source_metadata are overwritten\nwith the new values.",
         "operationId": "add_suppression_v1_suppression_list_post",
         "parameters": [
           {
@@ -3011,6 +3011,9 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No suppression entry with the given hash. Detail body carries ``code='suppression_not_found'``."
           },
           "422": {
             "description": "Validation Error",

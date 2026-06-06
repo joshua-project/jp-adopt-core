@@ -13,10 +13,12 @@ import {
   listCampaigns,
   sendContactEmail,
 } from "../lib/api-client";
+import { BTN, BTN_PRIMARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
 import {
   formatTimestamp,
   humanize,
+  humanizeEnrollReason,
   humanizeOrigin,
   humanizePartyKind,
   humanizeReasonCode,
@@ -47,8 +49,6 @@ type Enrollments =
   paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
 type Profile = NonNullable<Contact["profile"]>;
 
-const BTN =
-  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50";
 const INPUT = "w-full rounded border border-slate-300 px-2 py-1 text-sm";
 
 type Input = "text" | "textarea" | "enum" | "bool" | "date" | "number" | "list" | "readonly";
@@ -228,7 +228,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [editingProfile, setEditingProfile] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
 
-  // F3: send-email modal
+  // send-email modal
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
@@ -236,7 +236,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailErr, setEmailErr] = useState<string | null>(null);
 
-  // U7: manual-enroll affordance
+  // Manual-enroll affordance for #55
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [activeCampaigns, setActiveCampaigns] = useState<
     Array<{ id: string; name: string }>
@@ -266,7 +266,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setActivity(a ?? null);
       setEnrollments(en ?? null);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to load contact");
+      setErr(formatApiError(e));
     }
   }, [ctx, contactId]);
 
@@ -287,7 +287,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setNoteBody("");
       await load();
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "Failed to add note");
+      setActionErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -303,13 +303,11 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         .filter((c) => c.status === "active")
         .map((c) => ({ id: c.id, name: c.name }));
       setActiveCampaigns(active);
-      if (active.length > 0 && !enrollCampaignId) {
-        setEnrollCampaignId(active[0].id);
-      }
+      setEnrollCampaignId(active.length > 0 ? active[0].id : "");
     } catch (e) {
       setEnrollErr(formatApiError(e));
     }
-  }, [ctx, enrollCampaignId]);
+  }, [ctx]);
 
   const submitEnroll = useCallback(async () => {
     if (!enrollCampaignId) return;
@@ -323,15 +321,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         setEnrollOpen(false);
         await load();
       } else {
-        const phrase =
-          res.reason === "already_enrolled"
-            ? "Contact is already enrolled in this campaign."
-            : res.reason === "suppressed"
-              ? "Contact email is on the suppression list."
-              : res.reason === "do_not_engage"
-                ? "Contact is opted out — cannot enroll."
-                : `Not enrolled: ${humanize(res.reason)}`;
-        setEnrollErr(phrase);
+        setEnrollErr(humanizeEnrollReason(res.reason));
       }
     } catch (e) {
       setEnrollErr(formatApiError(e));
@@ -359,7 +349,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       // Refresh so the sent email appears as an `email` note on the timeline.
       await load();
     } catch (e) {
-      setEmailErr(e instanceof Error ? e.message : "Failed to send email");
+      setEmailErr(formatApiError(e));
     } finally {
       setEmailBusy(false);
     }
@@ -378,7 +368,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setEditingName(false);
       await load();
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "Failed to save name");
+      setActionErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -394,7 +384,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       });
       await load();
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "Failed to assign");
+      setActionErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -409,7 +399,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       });
       await load();
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "Failed to unassign");
+      setActionErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -461,7 +451,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setEditingProfile(false);
       await load();
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "Failed to save profile");
+      setActionErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -840,7 +830,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         ))}
       </div>
 
-      {/* U7: manual-enroll modal */}
+      {/* Manual-enroll modal */}
       {enrollOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-md space-y-3 rounded-lg bg-white p-5 shadow-xl">
@@ -881,13 +871,16 @@ export function ContactRecord({ contactId }: { contactId: string }) {
                 type="button"
                 className={BTN}
                 disabled={enrollBusy}
-                onClick={() => setEnrollOpen(false)}
+                onClick={() => {
+                  setEnrollOpen(false);
+                  setEnrollCampaignId("");
+                }}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                className={BTN_PRIMARY}
                 disabled={enrollBusy || !enrollCampaignId}
                 onClick={submitEnroll}
               >
@@ -898,7 +891,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
         </div>
       ) : null}
 
-      {/* F3: send-email modal */}
+      {/* Send-email modal */}
       {emailOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-lg space-y-3 rounded-lg bg-white p-5 shadow-xl">
@@ -952,7 +945,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
               </button>
               <button
                 type="button"
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                className={BTN_PRIMARY}
                 disabled={emailBusy || !emailSubject.trim() || !emailBody.trim()}
                 onClick={sendEmail}
               >

@@ -26,7 +26,12 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from jp_adopt_api.deps import CurrentUserWithRoles, DbSession, require_role
+from jp_adopt_api.deps import (
+    STAFF_ROLES,
+    CurrentUserWithRoles,
+    DbSession,
+    require_role,
+)
 from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     AdopterInterest,
@@ -41,8 +46,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
-_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
-_MANUAL_DEP = require_role(*_STAFF_ROLES)
+_MANUAL_DEP = require_role(*STAFF_ROLES)
 
 
 ORIGIN_VALUES = (

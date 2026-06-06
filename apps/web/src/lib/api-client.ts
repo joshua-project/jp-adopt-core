@@ -319,6 +319,7 @@ type ContactEmailRequestBody =
 type ContactEmailResponseBody =
   paths["/v1/contacts/{contact_id}/emails"]["post"]["responses"]["202"]["content"]["application/json"];
 
+// Targets 202 with a body; _assertPresent is correct because apiFetch only short-circuits on 204.
 export async function sendContactEmail(
   ctx: ApiClientContext,
   contactId: string,

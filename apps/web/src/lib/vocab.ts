@@ -127,6 +127,19 @@ export function humanizeReasonCode(value: string | null | undefined): string {
   return REASON_CODE_LABELS[value] ?? humanize(value);
 }
 
+const ENROLL_REASON_LABELS: Record<string, string> = {
+  created: "Enrolled",
+  already_enrolled: "Contact is already enrolled in this campaign.",
+  suppressed: "Contact email is on the suppression list.",
+  do_not_engage: "Contact is opted out — cannot enroll.",
+  no_campaign: "Campaign not found or not active.",
+  no_contact: "Contact not found.",
+};
+
+export function humanizeEnrollReason(value: string): string {
+  return ENROLL_REASON_LABELS[value] ?? humanize(value);
+}
+
 export function humanize(s: string): string {
   return s
     .replace(/_/g, " ")

@@ -11,6 +11,7 @@ import {
   listSuppression,
   removeSuppression,
 } from "../lib/api-client";
+import { BTN, BTN_PRIMARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
 import { formatTimestamp } from "../lib/vocab";
 import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
@@ -19,10 +20,6 @@ type SuppressionRow =
   paths["/v1/suppression-list"]["get"]["responses"]["200"]["content"]["application/json"]["items"][number];
 
 const PAGE_SIZE = 50;
-const BTN =
-  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
-const BTN_PRIMARY =
-  "rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50";
 
 function shortHash(hash: string): string {
   return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
@@ -95,21 +92,24 @@ export function SuppressionListAdmin() {
     });
   };
 
-  const onRemove = (hash: string) => {
-    if (!window.confirm("Remove this address from the suppression list?")) return;
-    setRemovingHash(hash);
-    setErr(null);
-    void (async () => {
-      try {
-        await removeSuppression(ctx, hash);
-        await load(offset);
-      } catch (e) {
-        setErr(formatApiError(e));
-      } finally {
-        setRemovingHash(null);
-      }
-    })();
-  };
+  const onRemove = useCallback(
+    (hash: string) => {
+      if (!window.confirm("Remove this address from the suppression list?")) return;
+      setRemovingHash(hash);
+      setErr(null);
+      void (async () => {
+        try {
+          await removeSuppression(ctx, hash);
+          await load(offset);
+        } catch (e) {
+          setErr(formatApiError(e));
+        } finally {
+          setRemovingHash(null);
+        }
+      })();
+    },
+    [ctx, load, offset],
+  );
 
   if (forbidden) {
     return (

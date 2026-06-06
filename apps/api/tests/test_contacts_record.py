@@ -463,3 +463,22 @@ def test_enrollments_unknown_contact_returns_404(client: TestClient):
         f"/v1/contacts/{uuid.uuid4()}/enrollments", headers=AUTH
     )
     assert r.status_code == 404, r.text
+
+
+@pytest.mark.asyncio
+async def test_enrollments_non_staff_role_returns_403(
+    client: TestClient,
+    fixture_contact: Contact,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A facilitator (non-staff) caller is rejected by the role gate."""
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.get(
+        f"/v1/contacts/{fixture_contact.id}/enrollments", headers=AUTH
+    )
+    assert r.status_code == 403, r.text

@@ -102,6 +102,42 @@ async def test_post_same_email_twice_is_idempotent(
         await session.commit()
 
 
+@pytest.mark.asyncio
+async def test_post_same_email_with_new_reason_overwrites(
+    client: TestClient, session: AsyncSession
+):
+    """A second POST with a different reason overwrites the prior reason."""
+    email = _fresh_email()
+    h = email_hash(email)
+    try:
+        r1 = client.post(
+            "/v1/suppression-list",
+            headers=AUTH,
+            json={"email": email, "reason": "manual"},
+        )
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["reason"] == "manual"
+        r2 = client.post(
+            "/v1/suppression-list",
+            headers=AUTH,
+            json={"email": email, "reason": "hard_bounce"},
+        )
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["reason"] == "hard_bounce"
+        rows = (
+            await session.execute(
+                select(SuppressionList).where(SuppressionList.email_hash == h)
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].reason == "hard_bounce"
+    finally:
+        await session.execute(
+            delete(SuppressionList).where(SuppressionList.email_hash == h)
+        )
+        await session.commit()
+
+
 def test_post_with_explicit_reason_and_metadata_persists_both(
     client: TestClient,
 ):
