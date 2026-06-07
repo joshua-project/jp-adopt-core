@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 
-from jp_adopt_api.deps import DbSession, SettingsDep, require_role
+from jp_adopt_api.deps import STAFF_ROLES, DbSession, SettingsDep, require_role
 from jp_adopt_api.models import (
     ActivityLog,
     AdopterInterest,
@@ -17,6 +17,7 @@ from jp_adopt_api.models import (
     ContactAssignment,
     ContactProfile,
     Enrollment,
+    EnrollmentEvent,
     FacilitatingOrg,
     Fpg,
     Match,
@@ -29,6 +30,7 @@ from jp_adopt_api.schemas import (
     ContactAssignmentRequest,
     ContactEmailCreate,
     ContactEmailResponse,
+    ContactEnrollmentEventRow,
     ContactEnrollmentRow,
     ContactEnrollmentsResponse,
     ContactListResponse,
@@ -51,13 +53,16 @@ router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
 EVENT_CONTACT_UPDATED = "jp.adopt.v1.contact.updated"
 
-# Staff roles allowed to read/write contacts. Mirrors `manual_contacts._STAFF_ROLES`
-# — the set of staff users who triage adopter/facilitator records. Without this
-# gate, `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
+# Staff roles allowed to read/write contacts. Without this gate,
+# `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
 # account; the role check (row-level) is the second defense gate (U22 of the
-# Entra direct plan).
-_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
-_STAFF_DEP = require_role(*_STAFF_ROLES)
+# Entra direct plan). `STAFF_ROLES` is centralized in `deps`.
+_STAFF_DEP = require_role(*STAFF_ROLES)
+
+# F3 (#55): per-enrollment event cap on the per-contact drips panel read.
+# An enrollment may accumulate many step_sent / state-change rows over its
+# lifetime; the UI only needs the most recent slice to render history.
+_ENROLLMENT_EVENTS_CAP = 20
 
 # Allowed status values per kind — mirrors the CHECK constraints on the
 # ``contacts`` table (see migration 0001 + models.py). Keeping the lists
@@ -438,6 +443,30 @@ async def get_contact_enrollments(
             .limit(limit)
         )
     ).all()
+    # Per-enrollment event cap — keeps the response bounded even when an
+    # enrollment accumulates many step_sent / state-change rows. Most-recent
+    # first; one batched query for the page rather than N+1 per enrollment.
+    enrollment_ids = [e.id for (e, _) in rows]
+    events_by_enrollment: dict[uuid.UUID, list[ContactEnrollmentEventRow]] = {
+        eid: [] for eid in enrollment_ids
+    }
+    if enrollment_ids:
+        event_rows = (
+            await db.execute(
+                select(EnrollmentEvent)
+                .where(EnrollmentEvent.enrollment_id.in_(enrollment_ids))
+                .order_by(
+                    EnrollmentEvent.enrollment_id,
+                    EnrollmentEvent.created_at.desc(),
+                )
+                # Bounded fetch: at most _ENROLLMENT_EVENTS_CAP events per enrollment survive the Python cap below.
+                .limit(len(enrollment_ids) * _ENROLLMENT_EVENTS_CAP)
+            )
+        ).scalars().all()
+        for evt in event_rows:
+            bucket = events_by_enrollment[evt.enrollment_id]
+            if len(bucket) < _ENROLLMENT_EVENTS_CAP:
+                bucket.append(ContactEnrollmentEventRow.model_validate(evt))
     items = [
         ContactEnrollmentRow(
             id=e.id,
@@ -448,6 +477,7 @@ async def get_contact_enrollments(
             enrolled_at=e.enrolled_at,
             last_step_sent_at=e.last_step_sent_at,
             exit_reason=e.exit_reason,
+            events=events_by_enrollment.get(e.id, []),
         )
         for (e, name) in rows
     ]

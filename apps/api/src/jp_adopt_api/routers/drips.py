@@ -27,10 +27,11 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
-from jp_adopt_api.deps import DbSession, require_role
+from jp_adopt_api.deps import STAFF_ROLES, DbSession, require_role
 from jp_adopt_api.domain.drips import (
+    EMAIL_TEMPLATES_DIR,
     EXIT_REASON_MANUAL,
     enroll_contact_in_campaign,
 )
@@ -44,9 +45,6 @@ from jp_adopt_api.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/drips", tags=["drips"])
-
-
-_STAFF_ROLES = frozenset({"staff_admin", "adoption_manager"})
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -126,6 +124,14 @@ class CampaignListResponse(BaseModel):
     total: int
 
 
+class TemplateRead(BaseModel):
+    name: str
+
+
+class TemplateListResponse(BaseModel):
+    items: list[TemplateRead]
+
+
 class ManualEnrollRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,7 +148,7 @@ class ManualEnrollResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────
 
 
-_drips_dep = require_role(*_STAFF_ROLES)
+_drips_dep = require_role(*STAFF_ROLES)
 
 
 async def _load_campaign(db, campaign_id: uuid.UUID) -> Campaign:
@@ -201,8 +207,57 @@ async def list_campaigns(
             select(Campaign).order_by(Campaign.created_at.desc())
         )
     ).scalars().all()
-    items = [await _serialize_campaign(db, c) for c in rows]
+    # Batched step fetch: one SELECT for all campaigns instead of N+1.
+    campaign_ids = [c.id for c in rows]
+    steps_by_campaign: dict[uuid.UUID, list[CampaignStepRead]] = {
+        cid: [] for cid in campaign_ids
+    }
+    if campaign_ids:
+        step_rows = (
+            await db.execute(
+                select(CampaignStep)
+                .where(CampaignStep.campaign_id.in_(campaign_ids))
+                .order_by(
+                    CampaignStep.campaign_id,
+                    CampaignStep.position.asc(),
+                )
+            )
+        ).scalars().all()
+        for s in step_rows:
+            steps_by_campaign[s.campaign_id].append(
+                CampaignStepRead.model_validate(s)
+            )
+    items = [
+        CampaignRead(
+            id=c.id,
+            name=c.name,
+            description=c.description,
+            status=c.status,
+            trigger_type=c.trigger_type,
+            trigger_event_type=c.trigger_event_type,
+            auto_enroll_existing=c.auto_enroll_existing,
+            precedence=c.precedence,
+            version=c.version,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            steps=steps_by_campaign.get(c.id, []),
+        )
+        for c in rows
+    ]
     return CampaignListResponse(items=items, total=len(items))
+
+
+@router.get("/templates", response_model=TemplateListResponse)
+async def list_templates(
+    _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
+) -> TemplateListResponse:
+    """Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step
+    UI can present a dropdown instead of a free-text field, eliminating
+    typo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the
+    directory is missing — Path.glob on a missing directory yields an
+    empty iterator on Python 3.10+, so no try/except is needed."""
+    names = sorted(p.name for p in EMAIL_TEMPLATES_DIR.glob("*.mjml"))
+    return TemplateListResponse(items=[TemplateRead(name=n) for n in names])
 
 
 @router.post(
@@ -285,8 +340,39 @@ async def archive_campaign(
     _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
 ) -> None:
     """Soft delete: flip status to ``archived`` so audit history stays
-    intact. Hard delete is reserved for failed-test cleanup."""
+    intact. Hard delete is reserved for failed-test cleanup.
+
+    Refuses with 409 when active enrollments still reference the
+    campaign — archiving mid-flight would orphan those enrollments
+    relative to the worker's ``Campaign.status == 'active'`` filter.
+    Operators should pause + manually exit (or wait for completion)
+    before archiving.
+    """
     campaign = await _load_campaign(db, campaign_id)
+    active_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Enrollment)
+                .where(
+                    Enrollment.campaign_id == campaign_id,
+                    Enrollment.state == "active",
+                )
+            )
+        ).scalar_one()
+    )
+    if active_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "campaign_has_active_enrollments",
+                "message": (
+                    "Pause and let enrollments complete (or manually "
+                    "exit them) before archiving"
+                ),
+                "active_count": active_count,
+            },
+        )
     campaign.status = "archived"
     campaign.updated_at = datetime.now(UTC)
     await db.commit()
@@ -469,7 +555,7 @@ async def manual_enroll(
     )
 
 
-# Used by the worker's drain to exit enrollments on do_not_engage —
-# imported here only so the symbol is referenced and the lint check
-# doesn't flag the import as unused.
-_ = (Enrollment, EXIT_REASON_MANUAL)
+# EXIT_REASON_MANUAL is used by the worker's drain to exit enrollments
+# on do_not_engage; the import here is for re-export so external callers
+# (and downstream linters) see a stable symbol path.
+_ = EXIT_REASON_MANUAL

@@ -8,6 +8,7 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/matches", label: "Matches" },
   { href: "/adopters", label: "Adopters" },
   { href: "/facilitators", label: "Facilitators" },
+  { href: "/campaigns", label: "Campaigns" },
   { href: "/contacts/new", label: "Add contact" },
   { href: "/facilitator", label: "My contacts" },
   { href: "/admin/users", label: "Admin" },

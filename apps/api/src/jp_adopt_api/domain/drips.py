@@ -34,7 +34,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,19 +127,24 @@ async def add_to_suppression_list(
     email: str,
     reason: str,
     source_metadata: dict[str, Any] | None = None,
-) -> None:
-    """Idempotent insert into the suppression list. Re-suppressing an
-    already-suppressed email is a no-op (no exception)."""
-    stmt = (
-        pg_insert(SuppressionList)
-        .values(
-            email_hash=email_hash(email),
-            reason=reason,
-            source_metadata=source_metadata,
-        )
-        .on_conflict_do_nothing(index_elements=["email_hash"])
+) -> SuppressionList:
+    """Upsert into the suppression list. Re-suppressing the same email
+    overwrites the prior ``reason`` / ``source_metadata`` with the new
+    values; the row is returned in one round-trip via RETURNING."""
+    insert_stmt = pg_insert(SuppressionList).values(
+        email_hash=email_hash(email),
+        reason=reason,
+        source_metadata=source_metadata,
     )
-    await session.execute(stmt)
+    stmt = insert_stmt.on_conflict_do_update(
+        index_elements=["email_hash"],
+        set_={
+            "reason": insert_stmt.excluded.reason,
+            "source_metadata": insert_stmt.excluded.source_metadata,
+        },
+    ).returning(SuppressionList)
+    result = await session.execute(stmt)
+    return result.scalars().one()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -188,12 +193,28 @@ async def enroll_contact_in_campaign(
     if contact_email and await is_suppressed(session, contact_email):
         return EnrollmentOutcome(None, "suppressed")
 
+    # Start at the campaign's lowest step position rather than a hardcoded
+    # 0. Campaigns whose authors deleted the early steps (or whose first
+    # step lives at position=1) still get a sane starting point. The
+    # activate endpoint already refuses campaigns with zero steps, so the
+    # None branch should be unreachable in practice; fall back to 0 in
+    # that case to preserve prior behavior.
+    min_position = (
+        await session.execute(
+            select(CampaignStep.position)
+            .where(CampaignStep.campaign_id == campaign.id)
+            .order_by(CampaignStep.position.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    starting_position = min_position if min_position is not None else 0
+
     enrollment = Enrollment(
         id=uuid.uuid4(),
         campaign_id=campaign.id,
         contact_id=contact.id,
         campaign_version=campaign.version,
-        current_step_position=0,
+        current_step_position=starting_position,
         state="active",
     )
     try:
@@ -328,15 +349,31 @@ async def claim_due_steps(
     if now is None:
         now = datetime.now(UTC)
 
+    # Walk step-position gaps: rather than requiring an exact equality on
+    # ``position == current_step_position`` (which silently drops
+    # enrollments whose step was deleted underneath them), find the
+    # lowest-position step at or above the enrollment's current position
+    # via a correlated scalar subquery. If a step exists exactly at
+    # current_step_position the join behaves as before; if not, the next
+    # step up is picked.
+    next_step_id_subq = (
+        select(CampaignStep.id)
+        .where(
+            CampaignStep.campaign_id == Enrollment.campaign_id,
+            CampaignStep.position >= Enrollment.current_step_position,
+        )
+        .order_by(CampaignStep.position.asc())
+        .limit(1)
+        .correlate(Enrollment)
+        .scalar_subquery()
+    )
+
     rows = await session.execute(
         select(Enrollment, CampaignStep, Campaign, Contact)
         .join(Campaign, Campaign.id == Enrollment.campaign_id)
         .join(
             CampaignStep,
-            and_(
-                CampaignStep.campaign_id == Campaign.id,
-                CampaignStep.position == Enrollment.current_step_position,
-            ),
+            CampaignStep.id == next_step_id_subq,
         )
         .join(Contact, Contact.id == Enrollment.contact_id)
         .where(
@@ -376,25 +413,35 @@ async def advance_enrollment(
     *,
     sent_at: datetime,
 ) -> bool:
-    """Increment ``current_step_position`` and set ``last_step_sent_at``.
-    Returns True if the enrollment advanced; False if this was the last
-    step and the enrollment is now ``completed``.
+    """Advance ``current_step_position`` to the next existing step and
+    set ``last_step_sent_at``. Returns True if the enrollment advanced;
+    False if no higher-position step remains and the enrollment is now
+    ``completed``.
+
+    Finds the next step via ``position > current`` (ordered, limit 1)
+    rather than ``current + 1`` so deleted-step gaps don't strand
+    in-flight enrollments. Authors editing a campaign can remove a
+    middle step and existing enrollments will skip past the gap to the
+    next-higher position on their next tick.
     """
     enrollment.last_step_sent_at = sent_at
-    next_position = enrollment.current_step_position + 1
-    # Is there a next step in this campaign?
-    next_step = await session.execute(
-        select(CampaignStep.id).where(
-            CampaignStep.campaign_id == enrollment.campaign_id,
-            CampaignStep.position == next_position,
+    next_step_position = (
+        await session.execute(
+            select(CampaignStep.position)
+            .where(
+                CampaignStep.campaign_id == enrollment.campaign_id,
+                CampaignStep.position > enrollment.current_step_position,
+            )
+            .order_by(CampaignStep.position.asc())
+            .limit(1)
         )
-    )
-    if next_step.scalar_one_or_none() is None:
+    ).scalar_one_or_none()
+    if next_step_position is None:
         enrollment.state = "completed"
         enrollment.exited_at = sent_at
         enrollment.exit_reason = EXIT_REASON_COMPLETED
         return False
-    enrollment.current_step_position = next_position
+    enrollment.current_step_position = next_step_position
     return True
 
 

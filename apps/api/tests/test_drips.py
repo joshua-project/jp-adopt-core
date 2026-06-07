@@ -512,6 +512,103 @@ async def test_advance_enrollment_marks_completed_on_last_step(
 
 
 @pytest.mark.asyncio
+async def test_advance_enrollment_walks_position_gaps(
+    session: AsyncSession,
+) -> None:
+    """A campaign authored with steps [0,1,2,3] whose middle step (position
+    2) was deleted mid-flight must let an enrollment currently at
+    position 1 advance to position 3 — not be marked completed because
+    position+1 happens to be missing."""
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=0)
+    await _make_step(session, campaign, position=1)
+    # Skip position 2 entirely (simulates a deleted middle step).
+    await _make_step(session, campaign, position=3)
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    try:
+        enrollment = await session.get(Enrollment, outcome.enrollment_id)
+        assert enrollment is not None
+        enrollment.current_step_position = 1
+        await session.commit()
+
+        advanced = await advance_enrollment(
+            session, enrollment, sent_at=datetime.now(UTC)
+        )
+        await session.commit()
+        assert advanced is True
+        assert enrollment.current_step_position == 3
+        assert enrollment.state == "active"
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
+@pytest.mark.asyncio
+async def test_claim_due_steps_walks_gap_when_current_step_deleted(
+    session: AsyncSession,
+) -> None:
+    """An enrollment at current=2 whose step 2 was deleted must still
+    get claimed against the next-higher-position step (e.g. position 3)
+    on the next claim cycle, rather than being silently stranded."""
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=0)
+    await _make_step(session, campaign, position=1)
+    # No step at position 2.
+    step_3 = await _make_step(session, campaign, position=3)
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    try:
+        enrollment = await session.get(Enrollment, outcome.enrollment_id)
+        assert enrollment is not None
+        enrollment.current_step_position = 2
+        # No prior send → null last_step_sent_at means due immediately.
+        enrollment.last_step_sent_at = None
+        await session.commit()
+
+        due = await claim_due_steps(session)
+        ours = [d for d in due if d.enrollment.id == outcome.enrollment_id]
+        assert len(ours) == 1
+        assert ours[0].step.id == step_3.id
+        assert ours[0].step.position == 3
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
+@pytest.mark.asyncio
+async def test_enroll_uses_lowest_step_position_when_steps_skip_zero(
+    session: AsyncSession,
+) -> None:
+    """A campaign whose only steps are [1,2,3] must enroll a contact at
+    current_step_position=1, not the hardcoded 0 that would never match
+    any step."""
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=1)
+    await _make_step(session, campaign, position=2)
+    await _make_step(session, campaign, position=3)
+    try:
+        outcome = await enroll_contact_in_campaign(
+            session, campaign=campaign, contact=contact
+        )
+        await session.commit()
+        assert outcome.reason == "created"
+        enrollment = await session.get(Enrollment, outcome.enrollment_id)
+        assert enrollment is not None
+        assert enrollment.current_step_position == 1
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
+@pytest.mark.asyncio
 async def test_exit_enrollment_is_idempotent(session: AsyncSession) -> None:
     contact = await _make_contact(session)
     campaign = await _make_campaign(session)
@@ -669,6 +766,71 @@ async def test_manual_enroll_rejects_inactive_campaign(
         await _cleanup_contact(session, contact)
 
 
+@pytest.mark.asyncio
+async def test_archive_campaign_blocks_when_active_enrollments_exist(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """Archiving mid-flight would orphan the worker's send loop; the
+    handler must 409 with a clear code so the UI can prompt the operator
+    to pause or exit the open enrollments first."""
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session, status="active")
+    await _make_step(session, campaign)
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    assert outcome.enrollment_id is not None
+    try:
+        r = client.delete(
+            f"/v1/drips/campaigns/{campaign.id}",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "campaign_has_active_enrollments"
+        assert detail["active_count"] == 1
+        # Campaign was not flipped to archived.
+        await session.refresh(campaign)
+        assert campaign.status == "active"
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
+@pytest.mark.asyncio
+async def test_archive_campaign_succeeds_when_no_active_enrollments(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """A campaign whose only open enrollments have been exited (or which
+    has none at all) archives normally."""
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session, status="active")
+    await _make_step(session, campaign)
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    # Exit the enrollment so only non-active rows remain.
+    enrollment = await session.get(Enrollment, outcome.enrollment_id)
+    assert enrollment is not None
+    await exit_enrollment(
+        session, enrollment, reason=EXIT_REASON_DO_NOT_ENGAGE
+    )
+    await session.commit()
+    try:
+        r = client.delete(
+            f"/v1/drips/campaigns/{campaign.id}",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 204, r.text
+        await session.refresh(campaign)
+        assert campaign.status == "archived"
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
 # ─── worker integration: full send tick ────────────────────────────────────
 
 
@@ -712,3 +874,65 @@ async def test_worker_tick_renders_and_advances_enrollment(
     finally:
         await _cleanup_campaign(session, campaign)
         await _cleanup_contact(session, contact)
+
+
+# ─── F3 (#55): GET /v1/drips/templates ────────────────────────────────────
+
+
+def test_list_templates_returns_mjml_filenames_sorted(client: TestClient) -> None:
+    """The real EMAIL_TEMPLATES_DIR ships with two demo MJML files; the
+    endpoint returns them sorted lexicographically. New template additions
+    will extend this list but not break the assertion."""
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    names = [t["name"] for t in r.json()["items"]]
+    assert names == sorted(names)
+    assert "facilitator-welcome.step-0.mjml" in names
+    assert all(n.endswith(".mjml") for n in names)
+
+
+def test_list_templates_excludes_non_mjml(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A stray .md or .txt file in the templates directory is not surfaced."""
+    from jp_adopt_api.routers import drips as drips_router
+
+    (tmp_path / "welcome.mjml").write_text("<mjml></mjml>")
+    (tmp_path / "notes.md").write_text("# notes")
+    (tmp_path / "readme.txt").write_text("readme")
+    monkeypatch.setattr(drips_router, "EMAIL_TEMPLATES_DIR", tmp_path)
+
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    assert [t["name"] for t in r.json()["items"]] == ["welcome.mjml"]
+
+
+def test_list_templates_missing_directory_returns_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A fresh dev environment without the templates directory must not
+    500 — the endpoint degrades to an empty list."""
+    from jp_adopt_api.routers import drips as drips_router
+
+    monkeypatch.setattr(
+        drips_router, "EMAIL_TEMPLATES_DIR", tmp_path / "does-not-exist"
+    )
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    assert r.json() == {"items": []}
+
+
+@pytest.mark.asyncio
+async def test_list_templates_non_staff_returns_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pure facilitator (no staff role) is refused — templates are part of
+    the campaign-management surface."""
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.get("/v1/drips/templates", headers=_auth_headers())
+    assert r.status_code == 403, r.text

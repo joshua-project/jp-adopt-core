@@ -2300,6 +2300,56 @@
         }
       }
     },
+    "/v1/drips/templates": {
+      "get": {
+        "tags": [
+          "drips"
+        ],
+        "summary": "List Templates",
+        "description": "Enumerate ``*.mjml`` files in ``EMAIL_TEMPLATES_DIR`` so the add-step\nUI can present a dropdown instead of a free-text field, eliminating\ntypo-as-silent-send-failure. Returns ``{ items: [] }`` (200) if the\ndirectory is missing \u2014 Path.glob on a missing directory yields an\nempty iterator on Python 3.10+, so no try/except is needed.",
+        "operationId": "list_templates_v1_drips_templates_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns/{campaign_id}": {
       "get": {
         "tags": [
@@ -2430,7 +2480,7 @@
           "drips"
         ],
         "summary": "Archive Campaign",
-        "description": "Soft delete: flip status to ``archived`` so audit history stays\nintact. Hard delete is reserved for failed-test cleanup.",
+        "description": "Soft delete: flip status to ``archived`` so audit history stays\nintact. Hard delete is reserved for failed-test cleanup.\n\nRefuses with 409 when active enrollments still reference the\ncampaign \u2014 archiving mid-flight would orphan those enrollments\nrelative to the worker's ``Campaign.status == 'active'`` filter.\nOperators should pause + manually exit (or wait for completion)\nbefore archiving.",
         "operationId": "archive_campaign_v1_drips_campaigns__campaign_id__delete",
         "parameters": [
           {
@@ -2780,6 +2830,190 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/suppression-list": {
+      "get": {
+        "tags": [
+          "suppression"
+        ],
+        "summary": "List Suppression",
+        "operationId": "list_suppression_v1_suppression_list_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuppressionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "suppression"
+        ],
+        "summary": "Add Suppression",
+        "description": "Add an email to the suppression list. Idempotent \u2014 re-adding the same\naddress returns the upserted row at 200, not 409 (per F3 KTD-4). When the\naddress is already present the reason and source_metadata are overwritten\nwith the new values.",
+        "operationId": "add_suppression_v1_suppression_list_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuppressionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuppressionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/suppression-list/{email_hash}": {
+      "delete": {
+        "tags": [
+          "suppression"
+        ],
+        "summary": "Remove Suppression",
+        "operationId": "remove_suppression_v1_suppression_list__email_hash__delete",
+        "parameters": [
+          {
+            "name": "email_hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Email Hash"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No suppression entry with the given hash. Detail body carries ``code='suppression_not_found'``."
           },
           "422": {
             "description": "Validation Error",
@@ -3421,6 +3655,38 @@
         ],
         "title": "ContactEmailResponse"
       },
+      "ContactEnrollmentEventRow": {
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_type",
+          "created_at"
+        ],
+        "title": "ContactEnrollmentEventRow",
+        "description": "One enrollment_event entry surfaced to the per-contact drips panel."
+      },
       "ContactEnrollmentRow": {
         "properties": {
           "id": {
@@ -3472,6 +3738,13 @@
               }
             ],
             "title": "Exit Reason"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ContactEnrollmentEventRow"
+            },
+            "type": "array",
+            "title": "Events"
           }
         },
         "type": "object",
@@ -5960,6 +6233,127 @@
         },
         "type": "object",
         "title": "ScoreBreakdown"
+      },
+      "SuppressionCreate": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Reason",
+            "default": "manual"
+          },
+          "source_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "SuppressionCreate",
+        "description": "Request body for ``POST /v1/suppression-list``. The server normalizes\nand hashes the email; the raw address is never persisted."
+      },
+      "SuppressionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuppressionRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "SuppressionListResponse"
+      },
+      "SuppressionRead": {
+        "properties": {
+          "email_hash": {
+            "type": "string",
+            "title": "Email Hash"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "suppressed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Suppressed At"
+          },
+          "source_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email_hash",
+          "reason",
+          "suppressed_at"
+        ],
+        "title": "SuppressionRead"
+      },
+      "TemplateListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TemplateListResponse"
+      },
+      "TemplateRead": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TemplateRead"
       },
       "TransitionRequest": {
         "properties": {

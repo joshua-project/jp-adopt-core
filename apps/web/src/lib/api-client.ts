@@ -319,6 +319,7 @@ type ContactEmailRequestBody =
 type ContactEmailResponseBody =
   paths["/v1/contacts/{contact_id}/emails"]["post"]["responses"]["202"]["content"]["application/json"];
 
+// Targets 202 with a body; _assertPresent is correct because apiFetch only short-circuits on 204.
 export async function sendContactEmail(
   ctx: ApiClientContext,
   contactId: string,
@@ -364,4 +365,217 @@ export async function transitionContact(
     ),
     `/v1/contacts/${contactId}/transition`,
   );
+}
+
+// ── Drip campaigns (#55) ─────────────────────────────────────────────────
+
+type CampaignListResponseBody =
+  paths["/v1/drips/campaigns"]["get"]["responses"]["200"]["content"]["application/json"];
+type CampaignReadBody =
+  paths["/v1/drips/campaigns/{campaign_id}"]["get"]["responses"]["200"]["content"]["application/json"];
+type CampaignCreateBody =
+  paths["/v1/drips/campaigns"]["post"]["requestBody"]["content"]["application/json"];
+
+export async function listCampaigns(
+  ctx: ApiClientContext,
+): Promise<CampaignListResponseBody> {
+  return _assertPresent(
+    await apiFetch<CampaignListResponseBody>(ctx, "/v1/drips/campaigns"),
+    "/v1/drips/campaigns",
+  );
+}
+
+export async function createCampaign(
+  ctx: ApiClientContext,
+  body: CampaignCreateBody,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, "/v1/drips/campaigns", {
+      method: "POST",
+      body,
+    }),
+    "/v1/drips/campaigns",
+  );
+}
+
+export async function activateCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/activate`,
+      { method: "POST" },
+    ),
+    `/v1/drips/campaigns/${campaignId}/activate`,
+  );
+}
+
+export async function pauseCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/pause`,
+      { method: "POST" },
+    ),
+    `/v1/drips/campaigns/${campaignId}/pause`,
+  );
+}
+
+type CampaignPatchBody =
+  paths["/v1/drips/campaigns/{campaign_id}"]["patch"]["requestBody"]["content"]["application/json"];
+type CampaignStepCreateBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["requestBody"]["content"]["application/json"];
+type CampaignStepReadBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["responses"]["201"]["content"]["application/json"];
+type TemplateListResponseBody =
+  paths["/v1/drips/templates"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function getCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, `/v1/drips/campaigns/${campaignId}`),
+    `/v1/drips/campaigns/${campaignId}`,
+  );
+}
+
+export async function patchCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+  body: CampaignPatchBody,
+): Promise<CampaignReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignReadBody>(ctx, `/v1/drips/campaigns/${campaignId}`, {
+      method: "PATCH",
+      body,
+    }),
+    `/v1/drips/campaigns/${campaignId}`,
+  );
+}
+
+export async function addCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  body: CampaignStepCreateBody,
+): Promise<CampaignStepReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignStepReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps`,
+      { method: "POST", body },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps`,
+  );
+}
+
+export async function deleteCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+): Promise<void> {
+  await apiFetch<void>(
+    ctx,
+    `/v1/drips/campaigns/${campaignId}/steps/${position}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function archiveCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/drips/campaigns/${campaignId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listDripTemplates(
+  ctx: ApiClientContext,
+): Promise<TemplateListResponseBody> {
+  return _assertPresent(
+    await apiFetch<TemplateListResponseBody>(ctx, "/v1/drips/templates"),
+    "/v1/drips/templates",
+  );
+}
+
+type ContactEnrollmentsResponseBody =
+  paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
+type ManualEnrollResponseBody =
+  paths["/v1/drips/campaigns/{campaign_id}/enroll"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function getContactEnrollments(
+  ctx: ApiClientContext,
+  contactId: string,
+): Promise<ContactEnrollmentsResponseBody> {
+  return _assertPresent(
+    await apiFetch<ContactEnrollmentsResponseBody>(
+      ctx,
+      `/v1/contacts/${contactId}/enrollments`,
+    ),
+    `/v1/contacts/${contactId}/enrollments`,
+  );
+}
+
+export async function enrollInCampaign(
+  ctx: ApiClientContext,
+  campaignId: string,
+  contactId: string,
+): Promise<ManualEnrollResponseBody> {
+  return _assertPresent(
+    await apiFetch<ManualEnrollResponseBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/enroll`,
+      { method: "POST", body: { contact_id: contactId } },
+    ),
+    `/v1/drips/campaigns/${campaignId}/enroll`,
+  );
+}
+
+// ── Suppression (#55) ────────────────────────────────────────────────────
+
+type SuppressionListResponseBody =
+  paths["/v1/suppression-list"]["get"]["responses"]["200"]["content"]["application/json"];
+type SuppressionCreateBody =
+  paths["/v1/suppression-list"]["post"]["requestBody"]["content"]["application/json"];
+type SuppressionReadBody =
+  paths["/v1/suppression-list"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function listSuppression(
+  ctx: ApiClientContext,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<SuppressionListResponseBody> {
+  return _assertPresent(
+    await apiFetch<SuppressionListResponseBody>(ctx, "/v1/suppression-list", {
+      query: { limit: opts.limit, offset: opts.offset },
+    }),
+    "/v1/suppression-list",
+  );
+}
+
+export async function addSuppression(
+  ctx: ApiClientContext,
+  body: SuppressionCreateBody,
+): Promise<SuppressionReadBody> {
+  return _assertPresent(
+    await apiFetch<SuppressionReadBody>(ctx, "/v1/suppression-list", {
+      method: "POST",
+      body,
+    }),
+    "/v1/suppression-list",
+  );
+}
+
+export async function removeSuppression(
+  ctx: ApiClientContext,
+  emailHash: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/suppression-list/${emailHash}`, {
+    method: "DELETE",
+  });
 }

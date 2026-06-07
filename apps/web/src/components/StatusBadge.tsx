@@ -30,6 +30,8 @@ const STATUS_TONE: Record<string, Tone> = {
   declined: "rose",
   do_not_engage: "rose",
   inactive: "rose",
+  paused: "amber",
+  archived: "rose",
 };
 
 const TONE_CLASS: Record<Tone, string> = {
