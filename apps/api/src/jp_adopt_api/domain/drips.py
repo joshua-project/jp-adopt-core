@@ -474,26 +474,35 @@ def render_step_html(
             f"with the API container)"
         )
 
-    raw = path.read_text(encoding="utf-8")
-    try:
-        from jinja2 import Environment, StrictUndefined, select_autoescape
+    # Auto-inject `current_year` for the branded footer (`_base.html.jinja`).
+    # Callers shouldn't have to remember it; it never differs per send.
+    import datetime as _dt
 
+    full_context = {"current_year": _dt.datetime.now(_dt.UTC).year, **context}
+
+    try:
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+
+        # FileSystemLoader lets step templates do `{% extends "_base.html.jinja" %}`.
         env = Environment(
+            loader=FileSystemLoader(str(base)),
             undefined=StrictUndefined,
             autoescape=select_autoescape(["html", "xml", "mjml"]),
         )
-        html = env.from_string(raw).render(**context)
+        html = env.get_template(template_name).render(**full_context)
     except Exception as e:  # pragma: no cover - jinja optional
         # Jinja2 should be available (it's a transitive dep of fastapi);
         # if not, render the raw template with naive {{ key }} substitution
         # so the worker doesn't crash on the dev box. This is a hard
-        # fallback — strict-undefined errors here become silent gaps.
+        # fallback — strict-undefined errors here become silent gaps, and
+        # `{% extends %}` won't resolve, so the branded chrome will be
+        # missing in this degraded path.
         logger.warning(
             "drip.render.jinja2_unavailable using_naive_substitution err=%s",
             e,
         )
-        html = raw
-        for k, v in context.items():
+        html = path.read_text(encoding="utf-8")
+        for k, v in full_context.items():
             html = html.replace("{{ " + k + " }}", str(v))
             html = html.replace("{{" + k + "}}", str(v))
 

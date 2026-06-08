@@ -1,45 +1,48 @@
-<!doctype html>
-<!--
+{#
   daily-digest.mjml — 9am ET roll-up of every recommended/accepted
-  match in the last 24h. Jinja2 substitutions:
+  match in the last 24h.
 
+  Jinja2 substitutions:
     {{ recipient_kind }}   — all_staff | adoption_manager | facilitator
     {{ match_count }}      — count of matches in this digest
     {{ matches }}          — list of dicts with contact_display_name,
                               rop3, facilitator_name, status,
                               recommended_at (ISO 8601)
--->
-<html><body style="font-family: sans-serif; max-width: 620px; margin: 0 auto;">
-  <h2 style="color: #1f2937;">
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">
     {% if recipient_kind == 'facilitator' %}
       Your org's matches today
     {% else %}
       Today's matches across Joshua Project Adoption
     {% endif %}
   </h2>
-  <p>{{ match_count }} match{{ '' if match_count == 1 else 'es' }} in the last 24 hours.</p>
-  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+  <p style="margin:0 0 16px;color:#374151">
+    {{ match_count }} match{{ '' if match_count == 1 else 'es' }} in the last 24 hours.
+  </p>
+  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px">
     <thead>
-      <tr style="background:#f3f4f6; text-align:left;">
-        <th style="padding:8px;">Contact</th>
-        <th style="padding:8px;">FPG</th>
-        <th style="padding:8px;">Facilitator</th>
-        <th style="padding:8px;">Status</th>
+      <tr style="background:#f3f4f6;text-align:left">
+        <th style="padding:8px;color:#374151">Contact</th>
+        <th style="padding:8px;color:#374151">FPG</th>
+        <th style="padding:8px;color:#374151">Facilitator</th>
+        <th style="padding:8px;color:#374151">Status</th>
       </tr>
     </thead>
     <tbody>
       {% for m in matches %}
-      <tr style="border-top:1px solid #e5e7eb;">
-        <td style="padding:8px;">{{ m.contact_display_name }}</td>
-        <td style="padding:8px;">{{ m.rop3 }}</td>
-        <td style="padding:8px;">{{ m.facilitator_name }}</td>
-        <td style="padding:8px;">{{ m.status }}</td>
+      <tr style="border-top:1px solid #e5e7eb">
+        <td style="padding:8px;color:#1f2937">{{ m.contact_display_name }}</td>
+        <td style="padding:8px;color:#1f2937">{{ m.rop3 }}</td>
+        <td style="padding:8px;color:#1f2937">{{ m.facilitator_name }}</td>
+        <td style="padding:8px;color:#1f2937">{{ m.status }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <p style="color: #6b7280; font-size: 12px; margin-top: 24px;">
-    You're receiving this because you have a staff or facilitator role
-    in Joshua Project Adoption. To stop, ask Amy to update your role.
+  <p style="margin:0;font-size:12px;color:#6b7280">
+    You're receiving this because you have a staff or facilitator role in
+    Joshua Project Adoption. To stop, ask Amy to update your role.
   </p>
-</body></html>
+{% endblock %}

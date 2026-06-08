@@ -1,21 +1,21 @@
-<!doctype html>
-<!--
+{#
   facilitator-approved.step-4.mjml — Month 2 after approval:
   reminder of the aspects of facilitating.
   Source: Drip Emails for facilitators Sign-up - Copy.docx (Email 6).
--->
-<html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
-  <h2 style="color: #1f2937;">Reminder of the aspects of Facilitating</h2>
-  <p>Hi {{ contact_display_name }},</p>
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Reminder of the aspects of Facilitating</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     Facilitating Frontier People Group Adoption is an exciting commitment.
     As the key contact person, you have the best view in the room. The
     opportunity to hear the stories of those who are joining your
     organization in reaching the least reached is thrilling.
   </p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     Along with the privilege of this view, there comes a responsibility to
     keep partners informed on any key updates and ways they can be praying.
     We all keep in mind the security of those serving in security-sensitive
@@ -24,7 +24,7 @@
     investment to see them reached.
   </p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     Along with prayers, your partners have gifts and financial support to
     invest. Clear communication on gifts and talents that are needed, as
     well as how financial giving will be used, can go a long way to
@@ -32,7 +32,7 @@
     in FPG adoption.
   </p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     As an organization in this area of ministry, you have a wealth of
     knowledge that can assist others who want to get involved. Why not let
     your partners know of trainings you have available to them, times you
@@ -40,15 +40,11 @@
     deepen their understanding?
   </p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     Above all, we serve together to see God praised and honored. It is a
     privilege for us to serve alongside your organization in reaching the
     frontiers.
   </p>
 
-  <p>In partnership with you,<br/>The Joshua Project Team</p>
-
-  <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
-    Reply "unsubscribe" to stop receiving this series.
-  </p>
-</body></html>
+  <p style="margin:0;color:#374151">In partnership with you,<br/>The Joshua Project Team</p>
+{% endblock %}

@@ -1,19 +1,19 @@
-<!doctype html>
-<!--
+{#
   adopter-welcome.step-6.mjml — Month 3: an offer of self.
   Source: Drip Emails for adopter Sign-up.docx (Email 7).
--->
-<html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
-  <h2 style="color: #1f2937;">An Offer of Self</h2>
-  <p>Hi {{ contact_display_name }},</p>
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">An Offer of Self</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
 
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     God's plan to reach Frontier People Groups is to use Christ followers.
     Where do you fit?
   </p>
 
-  <h3 style="color: #374151;">A Prayer of Love and Belief</h3>
-  <p>
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">A Prayer of Love and Belief</h3>
+  <p style="margin:0 0 16px;color:#374151">
     Lord, I stand before You today and confess that You are good. Your
     heart is merciful. I believe that Jesus is the Way, the Truth, and the
     Life, and that His words are the only hope for a broken world. I believe
@@ -21,13 +21,13 @@
     for all who follow You. Because I love You, I want what You want.
   </p>
 
-  <h3 style="color: #374151;">The "Here I Am" Prayer</h3>
-  <p>
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">The "Here I Am" Prayer</h3>
+  <p style="margin:0 0 16px;color:#374151">
     In Isaiah 6:8, the prophet heard the voice of the Lord saying, "Whom
     shall I send? And who will go for us?" Isaiah responded with five simple
     words: "Here am I. Send me!"
   </p>
-  <p>
+  <p style="margin:0 0 16px;color:#374151">
     Today, I make that same offer. I am not my own; I was bought with a
     price. I lay down my plans, my career goals, and my personal comforts.
     Lord, if You want me to go to the Frontier, I will go. If You want me to
@@ -35,8 +35,8 @@
     mobilizing others, I will speak.
   </p>
 
-  <h3 style="color: #374151;">Inviting the Holy Spirit</h3>
-  <p>
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">Inviting the Holy Spirit</h3>
+  <p style="margin:0 0 16px;color:#374151">
     Holy Spirit, I invite Your conviction. If there is any selfishness in me,
     wash it away. If I have been indifferent to the lost, change my heart. I
     ask for Your direction. Guide my steps and show me exactly how I fit
@@ -44,18 +44,14 @@
     self-seeking to Kingdom-building.
   </p>
 
-  <h3 style="color: #374151;">A Commitment to the Frontier</h3>
-  <p>
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">A Commitment to the Frontier</h3>
+  <p style="margin:0 0 16px;color:#374151">
     I commit to being a part of reaching the Frontier People Groups however
     You see fit. Whether through my prayers, my pockets, or my presence, I
     want to be a vessel of Your light. Let my life be a testimony of Your
     grace until every tribe, tongue, and nation knows that Jesus is Lord.
   </p>
-  <p>Amen.</p>
+  <p style="margin:0 0 16px;color:#374151">Amen.</p>
 
-  <p>The Joshua Project Team</p>
-
-  <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
-    Reply "unsubscribe" to stop receiving this series.
-  </p>
-</body></html>
+  <p style="margin:0;color:#374151">The Joshua Project Team</p>
+{% endblock %}
