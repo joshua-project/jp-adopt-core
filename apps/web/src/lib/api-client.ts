@@ -486,6 +486,24 @@ export async function deleteCampaignStep(
   );
 }
 
+type StepPreviewResponseBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/preview"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function previewCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+): Promise<StepPreviewResponseBody> {
+  return _assertPresent(
+    await apiFetch<StepPreviewResponseBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps/${position}/preview`,
+      { method: "POST" },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps/${position}/preview`,
+  );
+}
+
 export async function archiveCampaign(
   ctx: ApiClientContext,
   campaignId: string,

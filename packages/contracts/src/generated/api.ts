@@ -719,6 +719,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/drips/campaigns/{campaign_id}/steps/{position}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Step
+         * @description Render a campaign step against sample context for UI preview.
+         *
+         *     The sample contact is a stable, recognizable placeholder ("Alex
+         *     Smith") so previews are deterministic across renders. No DB writes;
+         *     no enrollment side effects.
+         */
+        post: operations["preview_step_v1_drips_campaigns__campaign_id__steps__position__preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns/{campaign_id}/enroll": {
         parameters: {
             query?: never;
@@ -1820,6 +1844,35 @@ export interface components {
             fpg_affinity?: number | null;
             /** Theological */
             theological?: number | null;
+        };
+        /**
+         * StepPreviewResponse
+         * @description Rendered preview of a campaign step with sample context.
+         *
+         *     The campaign id, step position, mjml_template_name, and subject are
+         *     echoed back so a UI can display the metadata alongside the rendered
+         *     HTML without round-tripping to the parent campaign endpoint.
+         */
+        StepPreviewResponse: {
+            /**
+             * Campaign Id
+             * Format: uuid
+             */
+            campaign_id: string;
+            /** Position */
+            position: number;
+            /** Mjml Template Name */
+            mjml_template_name: string;
+            /** Subject */
+            subject: string;
+            /** Html */
+            html: string;
+            /** Plain */
+            plain: string;
+            /** Sample Context */
+            sample_context: {
+                [key: string]: string;
+            };
         };
         /**
          * SuppressionCreate
@@ -3485,6 +3538,47 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_step_v1_drips_campaigns__campaign_id__steps__position__preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                campaign_id: string;
+                position: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepPreviewResponse"];
+                };
+            };
+            /** @description Campaign, step at position, or template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
