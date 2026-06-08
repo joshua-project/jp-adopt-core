@@ -39,12 +39,24 @@ def open_engine(mysql_url: str) -> Engine:
     catches connections that the server has timed out since the last
     use — common on a snapshot replica that's been quiet during the
     pre-cutover dry run.
+
+    ``connect_timeout`` + ``read_timeout`` bound the worst-case wait on
+    a hung Azure MySQL flex-server — without them, a stalled TCP
+    handshake would burn the entire 1800s ACA Job replica-timeout, then
+    burn another 1800s on retry, and the next scheduled hour would fire
+    while the prior runs are still hanging. 30s/120s are conservative
+    for a sync ETL doing batched reads.
     """
     return create_engine(
         mysql_url,
         pool_pre_ping=True,
         future=True,
-        connect_args={"charset": "utf8mb4"},
+        connect_args={
+            "charset": "utf8mb4",
+            "connect_timeout": 30,
+            "read_timeout": 120,
+            "write_timeout": 60,
+        },
     )
 
 

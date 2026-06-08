@@ -399,8 +399,15 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   migrate:
     name: Apply Alembic migrations
-    needs: [preflight, build-api]
-    if: needs.preflight.outputs.should_deploy_api == 'true'
+    # `needs: preflight` only — dropped `build-api` so a target=etl deploy
+    # (which skips build-api) still runs migrations. The implicit ordering
+    # "migrate before deploy-api" is preserved by deploy-api's own
+    # `needs: [migrate]`. The "don't migrate against a broken image"
+    # safety previously implied by needing build-api is a minor regression
+    # in exchange for fixing the silent-skip on the etl path; failed API
+    # builds are caught by build-api itself.
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.should_deploy_api == 'true' || needs.preflight.outputs.should_deploy_etl == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

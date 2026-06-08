@@ -1165,13 +1165,22 @@ def run_etl(
                         capture.etl_runs.append(
                             _EtlRunSnapshot.from_row(run_row)
                         )
+                        # In production mode, commit after each table so a
+                        # crash in a later table preserves the audit trail
+                        # AND the data this table already wrote. dry_run
+                        # defers persistence to the snapshot-and-replay
+                        # block below so data writes can still be rolled
+                        # back at the end.
+                        if mode == "production":
+                            pg_session.commit()
                     ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
             except Exception:
                 # On exception in dry_run, replay the audit trail captured so
                 # far so the operator can triage whatever tables completed.
-                # Production-mode exceptions intentionally abort everything;
-                # the per-table audit was committed inline by etl_run() flush
-                # but won't survive the SessionLocal rollback either way.
+                # Production-mode exceptions: per-table commits above mean
+                # tables that completed already have their audit + data
+                # persisted; the failing table's partial writes were rolled
+                # back implicitly when SessionLocal exits on exception.
                 if mode == "dry_run":
                     try:
                         _replay_dry_run_audit(pg_session, capture)
@@ -1297,6 +1306,12 @@ def _resolve_cli_watermark(
     ``None`` → no filter (full scan).
     ``"auto"`` → look up the prior run's high-water mark from etl_run.
     Otherwise: parse as ISO 8601, anchored to UTC.
+
+    Raises :class:`SystemExit` with exit code 2 on malformed input, to
+    match argparse's behavior. The CLI used to put ISO parsing inside
+    ``type=lambda`` so argparse would catch invalid values at parse
+    time; that moved here when ``--watermark auto`` was added, so we
+    have to mirror argparse's error contract by hand.
     """
     if raw is None:
         return None
@@ -1304,13 +1319,23 @@ def _resolve_cli_watermark(
         wm = resolve_auto_watermark(postgres_url)
         if wm is None:
             logger.info(
-                "--watermark auto: no prior successful production run; "
-                "falling back to full scan"
+                "--watermark auto: falling back to full scan (no "
+                "watermark available from prior successful production "
+                "runs — either etl_run is empty or all qualifying rows "
+                "have NULL source_max_modified_at)"
             )
         else:
             logger.info("--watermark auto resolved to %s", wm.isoformat())
         return wm
-    return datetime.fromisoformat(raw).replace(tzinfo=UTC)
+    try:
+        return datetime.fromisoformat(raw).replace(tzinfo=UTC)
+    except ValueError as e:
+        logger.error(
+            "Invalid --watermark value %r: must be ISO 8601 or 'auto' (%s)",
+            raw,
+            e,
+        )
+        raise SystemExit(2) from e
 
 
 def main(argv: list[str] | None = None) -> int:

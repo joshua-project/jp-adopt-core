@@ -10,8 +10,14 @@ manual `--mode dry_run` rehearsal documented in `docs/runbooks/dt-cutover.md`.
   resource group `rg-jp-adopt-core-production`.
 - **Image** `jp-adopt-etl` (`apps/etl/Dockerfile`), built and pushed by
   the deploy workflow (`build-etl` job in `.github/workflows/deploy.yml`).
-- **Schedule** `0 * * * *` (top of every hour, container time =
-  `America/New_York`).
+- **Schedule** `0 * * * *` — top of every UTC hour. Azure Container Apps
+  Job cron expressions are evaluated in **UTC** regardless of the
+  container's `TZ` env var. The `TZ=America/New_York` in the Dockerfile
+  only affects the running process (e.g. `datetime.now()` and log
+  timestamps inside the ETL), NOT the scheduler. Hourly cadence means
+  the timezone choice doesn't affect business logic, but operators
+  comparing log timestamps to scheduled fires should expect the cron's
+  invocation timestamps in UTC.
 - **Command** `./run-cron.sh` → `dt-etl --table all --mode production
   --watermark auto --verbose` (see `apps/etl/run-cron.sh`).
 - **Watermark** the previous successful run's `MIN(MAX(etl_run.source_max_modified_at))`
