@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  facilitator-approved.step-1.mjml — Week 2 after approval: connecting with adopters.
+  Source: Drip Emails for facilitators Sign-up - Copy.docx (Email 3).
+-->
+<html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
+  <h2 style="color: #1f2937;">Connecting with Adopters</h2>
+  <p>Hi {{ contact_display_name }},</p>
+
+  <p>
+    Now is the exciting time to begin the matching process. You will soon be
+    getting to know those who have adopted one or more of the FPGs you are
+    working to reach. In meeting those who have committed to adoption, you
+    will have a wide array of situations. Some of those adopting are
+    individuals who are new to learning about FPGs, while others may be a
+    close-culture organization looking to multiply efforts by working with
+    you. As you can imagine, discretion and wisdom are key to understanding
+    each one.
+  </p>
+
+  <p>
+    We encourage you to use your usual vetting process to assess each
+    adopter. While the matching platform and security system help to make
+    appropriate matches, we all need wisdom for working together. In the
+    case of any matches that do not suit your organization, please send
+    those names back to us and we will re-enter them into the system. If any
+    matches are problematic or found to be false in their claims, please let
+    us know so we can remove them.
+  </p>
+
+  <p>
+    <strong>A helpful tool:</strong> The <em>Global Frontier People Group
+    Manual</em> is here for your free use. It is a stand-alone guide that
+    can be duplicated with your own logo and used to help your adopters and
+    workers better understand the FPG Adoption process.
+  </p>
+
+  <p>With you in the work,<br/>The Joshua Project Team</p>
+
+  <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
+    Reply "unsubscribe" to stop receiving this series.
+  </p>
+</body></html>
