@@ -1290,3 +1290,93 @@ def test_full_run_records_deleted_in_source(monkeypatch, pg_engine, pg_session):
             text("DELETE FROM etl_deleted_in_source WHERE source_id = '9011'")
         )
         pg_session.commit()
+
+
+def test_resolve_auto_watermark(monkeypatch, pg_engine, pg_session):
+    """`resolve_auto_watermark` returns MIN(MAX(source_max_modified_at))
+    per table across prior successful production runs. Failed runs
+    (errors > 0) and dry-runs are excluded.
+    """
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from jp_adopt_etl.orchestrator import resolve_auto_watermark
+
+    # Snapshot of pre-existing watermark, so the test is order-independent
+    # against any rows the rest of the suite happened to leave behind.
+    baseline = resolve_auto_watermark(ETL_TEST_DATABASE_URL)
+
+    t_contacts = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+    t_activity = datetime(2026, 6, 4, 12, 30, tzinfo=UTC)  # later
+    t_failed = datetime(2026, 6, 4, 13, 0, tzinfo=UTC)  # never picked (errors)
+    t_dry = datetime(2026, 6, 4, 14, 0, tzinfo=UTC)  # never picked (mode)
+
+    runs = [
+        # Successful production runs — the MIN(MAX(...)) should be t_contacts.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_a",
+            mode="production", started_at=t_contacts,
+            ended_at=t_contacts, source_max_modified_at=t_contacts,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_activity_a",
+            mode="production", started_at=t_activity,
+            ended_at=t_activity, source_max_modified_at=t_activity,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+        # Should be ignored: errors > 0.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_b",
+            mode="production", started_at=t_failed,
+            ended_at=t_failed, source_max_modified_at=t_failed,
+            rows_in=1, rows_out_inserted=0, rows_out_updated=0,
+            rows_out_skipped=1, rows_in_conflict=0, errors=1,
+        ),
+        # Should be ignored: dry_run.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_c",
+            mode="dry_run", started_at=t_dry,
+            ended_at=t_dry, source_max_modified_at=t_dry,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+    ]
+    pg_session.add_all(runs)
+    pg_session.commit()
+
+    try:
+        watermark = resolve_auto_watermark(ETL_TEST_DATABASE_URL)
+        # If the baseline was earlier than t_contacts (or None), the new MIN
+        # comes from our injected rows. If the baseline is earlier than
+        # t_contacts, the baseline still wins.
+        expected = (
+            min(baseline, t_contacts) if baseline is not None else t_contacts
+        )
+        # Allow microsecond drift from Postgres.
+        assert (
+            abs((watermark - expected).total_seconds()) < 1
+        ), f"got {watermark}, expected ~{expected}"
+    finally:
+        pg_session.execute(
+            text(
+                "DELETE FROM etl_run WHERE table_name "
+                "IN ('test_contacts_a', 'test_activity_a', "
+                "'test_contacts_b', 'test_contacts_c')"
+            )
+        )
+        pg_session.commit()
+
+
+def test_resolve_auto_watermark_returns_none_or_datetime(monkeypatch, pg_engine):
+    """When no prior successful run exists for any table, the auto
+    watermark falls back to None so the caller does a full scan; the
+    function MUST never raise on an empty etl_run."""
+    from datetime import datetime
+
+    from jp_adopt_etl.orchestrator import resolve_auto_watermark
+
+    result = resolve_auto_watermark(ETL_TEST_DATABASE_URL)
+    assert result is None or isinstance(result, datetime)

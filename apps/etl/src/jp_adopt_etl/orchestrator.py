@@ -986,6 +986,52 @@ def _replay_dry_run_audit(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Watermark resolution (for the hourly cron)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def resolve_auto_watermark(postgres_url: str) -> datetime | None:
+    """Return the next-run watermark inferred from prior etl_run rows.
+
+    Strategy: for each watermarked table, find the latest successful
+    ``source_max_modified_at`` (errors=0, mode='production'), then take the
+    MIN across tables. The MIN is the conservative choice — re-reads some
+    rows on the next run for the leading table, but never skips rows in a
+    lagging one. The ON CONFLICT upserts are idempotent so the only cost
+    of re-reading is wall-clock.
+
+    Returns ``None`` when no prior successful production run exists, so
+    the caller falls back to a full scan. Designed for `--watermark auto`
+    in the scheduled cron.
+    """
+    engine = create_engine(postgres_url, future=True)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT MIN(latest_per_table) AS watermark
+                    FROM (
+                      SELECT table_name,
+                             MAX(source_max_modified_at) AS latest_per_table
+                      FROM etl_run
+                      WHERE mode = 'production'
+                        AND errors = 0
+                        AND source_max_modified_at IS NOT NULL
+                      GROUP BY table_name
+                    ) t
+                    """
+                )
+            ).one_or_none()
+    finally:
+        engine.dispose()
+    if row is None or row.watermark is None:
+        return None
+    wm: datetime = row.watermark
+    return wm if wm.tzinfo else wm.replace(tzinfo=UTC)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Public runner
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -1194,11 +1240,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--watermark",
-        type=lambda s: datetime.fromisoformat(s).replace(tzinfo=UTC),
+        type=str,
         default=None,
         help=(
-            "ISO 8601 timestamp; only rows modified after this point are "
-            "imported. Use the prior run's source_max_modified_at value."
+            "ISO 8601 timestamp or the literal 'auto'. With 'auto', the "
+            "orchestrator queries etl_run and computes MIN(MAX("
+            "source_max_modified_at)) per table across prior successful "
+            "production runs. Designed for the hourly cron."
         ),
     )
     parser.add_argument(
@@ -1241,6 +1289,30 @@ def _resolve_tables(table_args: list[str] | None) -> list[str]:
     return ordered
 
 
+def _resolve_cli_watermark(
+    raw: str | None, postgres_url: str
+) -> datetime | None:
+    """Translate the --watermark CLI string into a concrete timestamp.
+
+    ``None`` → no filter (full scan).
+    ``"auto"`` → look up the prior run's high-water mark from etl_run.
+    Otherwise: parse as ISO 8601, anchored to UTC.
+    """
+    if raw is None:
+        return None
+    if raw.strip().lower() == "auto":
+        wm = resolve_auto_watermark(postgres_url)
+        if wm is None:
+            logger.info(
+                "--watermark auto: no prior successful production run; "
+                "falling back to full scan"
+            )
+        else:
+            logger.info("--watermark auto resolved to %s", wm.isoformat())
+        return wm
+    return datetime.fromisoformat(raw).replace(tzinfo=UTC)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -1248,11 +1320,12 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     tables = _resolve_tables(args.table)
+    watermark = _resolve_cli_watermark(args.watermark, args.postgres_url)
     logger.info(
         "Starting ETL: tables=%s mode=%s watermark=%s",
         tables,
         args.mode,
-        args.watermark.isoformat() if args.watermark else None,
+        watermark.isoformat() if watermark else None,
     )
     try:
         results = run_etl(
@@ -1260,7 +1333,7 @@ def main(argv: list[str] | None = None) -> int:
             postgres_url=args.postgres_url,
             tables=tables,
             mode=args.mode,
-            watermark=args.watermark,
+            watermark=watermark,
             batch_size=args.batch_size,
         )
     except UnmappedStatusError as e:
@@ -1284,6 +1357,7 @@ __all__ = [
     "import_interests",
     "import_users",
     "main",
+    "resolve_auto_watermark",
     "run_etl",
     "sweep_deleted_contacts",
 ]

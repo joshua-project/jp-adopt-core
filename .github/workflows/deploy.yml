@@ -42,6 +42,7 @@ on:
           - api
           - worker
           - web
+          - etl
 
 concurrency:
   group: deploy-${{ github.workflow }}-${{ github.ref }}
@@ -70,6 +71,7 @@ jobs:
       should_deploy_api: ${{ steps.scope.outputs.should_deploy_api }}
       should_deploy_worker: ${{ steps.scope.outputs.should_deploy_worker }}
       should_deploy_web: ${{ steps.scope.outputs.should_deploy_web }}
+      should_deploy_etl: ${{ steps.scope.outputs.should_deploy_etl }}
     steps:
       - uses: actions/checkout@v4
 
@@ -91,6 +93,11 @@ jobs:
             echo "should_deploy_web=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_deploy_web=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$target" = "all" ] || [ "$target" = "etl" ]; then
+            echo "should_deploy_etl=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy_etl=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Load deploy secrets from 1Password
@@ -235,6 +242,50 @@ jobs:
             ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:latest
           cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache
           cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:buildcache,mode=max
+
+  build-etl:
+    name: Build & push ETL image
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy_etl == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ env.ACR_LOGIN_SERVER }}"
+
+      - name: Build & push ETL image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/etl/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-etl:${{ github.sha }}
+            ${{ env.ACR_LOGIN_SERVER }}/jp-adopt-etl:latest
+          cache-from: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-etl:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_LOGIN_SERVER }}/jp-adopt-etl:buildcache,mode=max
 
   # ──────────────────────────────────────────────────────────────────────
   # Build + push the web image. The Next.js app builds `output: standalone`
@@ -555,6 +606,99 @@ jobs:
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --image "${{ env.ACR_LOGIN_SERVER }}/jp-adopt-worker:${{ github.sha }}" \
             --set-env-vars "DEPLOY_SHA=${{ github.sha }}"
+
+  deploy-etl-job:
+    name: Deploy ETL cron job to ACA
+    needs: [preflight, build-etl, migrate]
+    if: needs.preflight.outputs.should_deploy_etl == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy secrets from 1Password
+        uses: 1password/load-secrets-action@v4
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          AZURE_TENANT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-tenant-id
+          AZURE_SUBSCRIPTION_ID: op://JP Adopt Platform/Adopt Core - Production/azure-subscription-id
+          AZURE_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-client-id
+          ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
+          ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
+          ACA_ENVIRONMENT_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-environment-name
+          # Connection URLs for the cron. DT credentials live in the
+          # "DT Platform - Production" item, jp-adopt-core's DB URL
+          # lives in "Adopt Core - Production".
+          DT_MYSQL_HOST: op://JP Adopt Platform/DT Platform - Production/mysql-host
+          DT_MYSQL_USERNAME: op://JP Adopt Platform/DT Platform - Production/mysql-app-username
+          DT_MYSQL_PASSWORD: op://JP Adopt Platform/DT Platform - Production/mysql-app-password
+          DT_MYSQL_DATABASE: op://JP Adopt Platform/DT Platform - Production/mysql-database
+          DATABASE_URL: op://JP Adopt Platform/Adopt Core - Production/database-url
+        with:
+          export-env: true
+
+      - name: Azure login via OIDC
+        uses: azure/login@v2
+        with:
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+
+      - name: Compose DT MySQL URL
+        # SQLAlchemy URL that the ETL's pymysql driver accepts. Keep the
+        # composition here (not in the container) so the ACA Job env
+        # carries a single opaque URL rather than 4 sub-secrets.
+        run: |
+          set -euo pipefail
+          # URL-encode the password to survive special chars.
+          PW_ENC=$(python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=''))" "${DT_MYSQL_PASSWORD}")
+          DT_MYSQL_URL="mysql+pymysql://${DT_MYSQL_USERNAME}:${PW_ENC}@${DT_MYSQL_HOST}:3306/${DT_MYSQL_DATABASE}?ssl_mode=REQUIRED"
+          # Mask the URL in workflow logs (password is part of it).
+          echo "::add-mask::${DT_MYSQL_URL}"
+          echo "DT_MYSQL_URL=${DT_MYSQL_URL}" >> "$GITHUB_ENV"
+
+      - name: Ensure secrets on the ETL cron job
+        run: |
+          set -euo pipefail
+          JOB_NAME="jp-adopt-etl-cron-production"
+          # Idempotent: create-or-update. `az containerapp job create`
+          # errors if the job exists; we update afterwards either way.
+          if ! az containerapp job show \
+                --name "${JOB_NAME}" \
+                --resource-group "${ACA_RESOURCE_GROUP}" >/dev/null 2>&1; then
+            az containerapp job create \
+              --name "${JOB_NAME}" \
+              --resource-group "${ACA_RESOURCE_GROUP}" \
+              --environment "${ACA_ENVIRONMENT_NAME}" \
+              --trigger-type "Schedule" \
+              --cron-expression "0 * * * *" \
+              --replica-timeout 1800 \
+              --replica-retry-limit 1 \
+              --replica-completion-count 1 \
+              --parallelism 1 \
+              --image "${ACR_LOGIN_SERVER}/jp-adopt-etl:${{ github.sha }}" \
+              --cpu "0.5" \
+              --memory "1Gi" \
+              --registry-server "${ACR_LOGIN_SERVER}" \
+              --registry-identity "system"
+          fi
+          # Always (re)apply secrets so a rotation flows through.
+          az containerapp job secret set \
+            --name "${JOB_NAME}" \
+            --resource-group "${ACA_RESOURCE_GROUP}" \
+            --secrets \
+              "dt-mysql-url=${DT_MYSQL_URL}" \
+              "database-url=${DATABASE_URL}" \
+            >/dev/null
+          # Always (re)apply the image + env-from-secret bindings.
+          az containerapp job update \
+            --name "${JOB_NAME}" \
+            --resource-group "${ACA_RESOURCE_GROUP}" \
+            --image "${ACR_LOGIN_SERVER}/jp-adopt-etl:${{ github.sha }}" \
+            --replace-env-vars \
+              "DEPLOY_SHA=${{ github.sha }}" \
+              "DT_MYSQL_URL=secretref:dt-mysql-url" \
+              "DATABASE_URL=secretref:database-url" \
+            >/dev/null
 
   deploy-web:
     name: Deploy web to ACA
