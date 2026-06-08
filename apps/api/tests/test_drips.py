@@ -876,6 +876,107 @@ async def test_worker_tick_renders_and_advances_enrollment(
         await _cleanup_contact(session, contact)
 
 
+# ─── Step preview (#55 v2 stretch): POST /campaigns/{id}/steps/{pos}/preview ──
+
+
+@pytest.mark.asyncio
+async def test_preview_step_renders_branded_html(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session, name="Preview Test")
+    await _make_step(
+        session,
+        campaign,
+        position=0,
+        subject="Welcome to preview",
+        template_name="facilitator-welcome.step-0.mjml",
+    )
+    try:
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0/preview",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["campaign_id"] == str(campaign.id)
+        assert body["position"] == 0
+        assert body["subject"] == "Welcome to preview"
+        assert body["mjml_template_name"] == "facilitator-welcome.step-0.mjml"
+        # Branded chrome + sample-context substitution land in `html`.
+        assert "#303030" in body["html"]
+        assert "#eb5f1e" in body["html"]
+        assert "Alex Smith" in body["html"]
+        # Plain text strips tags but keeps content.
+        assert "<html" not in body["plain"]
+        assert "Alex Smith" in body["plain"]
+        # Sample context is echoed for UI surfaces that want to show it.
+        assert body["sample_context"]["contact_display_name"] == "Alex Smith"
+        assert body["sample_context"]["campaign_name"] == "Preview Test"
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_preview_step_unknown_position_returns_404(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=0)
+    try:
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign.id}/steps/99/preview",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"]["code"] == "step_not_found"
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_preview_step_missing_template_returns_404(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session)
+    await _make_step(
+        session, campaign, position=0, template_name="does-not-exist.mjml"
+    )
+    try:
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0/preview",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"]["code"] == "template_not_found"
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_preview_step_non_staff_returns_403(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncSession,
+) -> None:
+    from jp_adopt_api import deps
+
+    async def _facilitator_only(*args, **kwargs) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps, "load_user_roles", _facilitator_only)
+
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=0)
+    try:
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0/preview",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 403, r.text
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
 # ─── F3 (#55): GET /v1/drips/templates ────────────────────────────────────
 
 

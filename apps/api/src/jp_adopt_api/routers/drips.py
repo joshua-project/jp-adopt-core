@@ -33,7 +33,9 @@ from jp_adopt_api.deps import STAFF_ROLES, DbSession, require_role
 from jp_adopt_api.domain.drips import (
     EMAIL_TEMPLATES_DIR,
     EXIT_REASON_MANUAL,
+    TemplateMissingError,
     enroll_contact_in_campaign,
+    render_step_html,
 )
 from jp_adopt_api.models import (
     Campaign,
@@ -141,6 +143,23 @@ class ManualEnrollRequest(BaseModel):
 class ManualEnrollResponse(BaseModel):
     enrollment_id: uuid.UUID | None
     reason: str
+
+
+class StepPreviewResponse(BaseModel):
+    """Rendered preview of a campaign step with sample context.
+
+    The campaign id, step position, mjml_template_name, and subject are
+    echoed back so a UI can display the metadata alongside the rendered
+    HTML without round-tripping to the parent campaign endpoint.
+    """
+
+    campaign_id: uuid.UUID
+    position: int
+    mjml_template_name: str
+    subject: str
+    html: str
+    plain: str
+    sample_context: dict[str, str]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -517,6 +536,71 @@ async def delete_step(
     campaign.updated_at = datetime.now(UTC)
     await db.commit()
     return None
+
+
+@router.post(
+    "/campaigns/{campaign_id}/steps/{position}/preview",
+    response_model=StepPreviewResponse,
+    responses={
+        404: {"description": "Campaign, step at position, or template not found"},
+    },
+)
+async def preview_step(
+    campaign_id: uuid.UUID,
+    position: int,
+    db: DbSession,
+    _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
+) -> StepPreviewResponse:
+    """Render a campaign step against sample context for UI preview.
+
+    The sample contact is a stable, recognizable placeholder ("Alex
+    Smith") so previews are deterministic across renders. No DB writes;
+    no enrollment side effects.
+    """
+    campaign = await _load_campaign(db, campaign_id)
+    step = (
+        await db.execute(
+            select(CampaignStep).where(
+                CampaignStep.campaign_id == campaign_id,
+                CampaignStep.position == position,
+            )
+        )
+    ).scalar_one_or_none()
+    if step is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "step_not_found",
+                "message": f"Campaign has no step at position {position}",
+            },
+        )
+    sample_context: dict[str, str] = {
+        "contact_display_name": "Alex Smith",
+        "campaign_name": campaign.name,
+        "step_position": str(step.position),
+    }
+    try:
+        html, plain = render_step_html(
+            template_name=step.mjml_template_name,
+            context=sample_context,
+        )
+    except TemplateMissingError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "template_not_found",
+                "message": str(e),
+            },
+        ) from e
+    return StepPreviewResponse(
+        campaign_id=campaign_id,
+        position=step.position,
+        mjml_template_name=step.mjml_template_name,
+        subject=step.subject,
+        html=html,
+        plain=plain,
+        sample_context=sample_context,
+    )
 
 
 @router.post(

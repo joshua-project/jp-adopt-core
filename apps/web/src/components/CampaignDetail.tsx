@@ -14,6 +14,7 @@ import {
   getCampaign,
   patchCampaign,
   pauseCampaign,
+  previewCampaignStep,
 } from "../lib/api-client";
 import { BTN_DANGER, BTN_PRIMARY, BTN_SECONDARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
@@ -24,6 +25,8 @@ import { StatusBadge } from "./StatusBadge";
 type CampaignRead =
   paths["/v1/drips/campaigns/{campaign_id}"]["get"]["responses"]["200"]["content"]["application/json"];
 type CampaignStep = NonNullable<CampaignRead["steps"]>[number];
+type StepPreview =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/preview"]["post"]["responses"]["200"]["content"]["application/json"];
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
@@ -213,10 +216,12 @@ function StepRow({
   step,
   busy,
   onDelete,
+  onPreview,
 }: {
   step: CampaignStep;
   busy: boolean;
   onDelete: (position: number) => void;
+  onPreview: (position: number) => void;
 }) {
   return (
     <li className="flex items-start justify-between gap-3 px-4 py-3 text-sm">
@@ -235,15 +240,96 @@ function StepRow({
           </span>
         </div>
       </div>
-      <button
-        type="button"
-        disabled={busy}
-        className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        onClick={() => onDelete(step.position)}
-      >
-        {busy ? "Removing…" : "Remove"}
-      </button>
+      <div className="flex shrink-0 gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          onClick={() => onPreview(step.position)}
+        >
+          Preview
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          onClick={() => onDelete(step.position)}
+        >
+          {busy ? "Removing…" : "Remove"}
+        </button>
+      </div>
     </li>
+  );
+}
+
+function PreviewModal({
+  preview,
+  loading,
+  err,
+  onClose,
+}: {
+  preview: StepPreview | null;
+  loading: boolean;
+  err: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-semibold text-slate-900">
+              {preview ? `Step #${preview.position} preview` : "Step preview"}
+            </h3>
+            {preview ? (
+              <p className="mt-0.5 truncate text-xs text-slate-500">
+                <span className="font-mono">{preview.mjml_template_name}</span>
+                {" · "}
+                Sample contact:{" "}
+                <span className="font-medium">
+                  {preview.sample_context.contact_display_name}
+                </span>
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className={BTN_SECONDARY}
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+        {preview ? (
+          <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
+            <p className="text-xs text-slate-500">Subject</p>
+            <p className="font-medium text-slate-900">{preview.subject}</p>
+          </div>
+        ) : null}
+        <div className="flex-1 overflow-hidden bg-slate-100 p-3">
+          {loading ? (
+            <p className="text-sm text-slate-500">Rendering preview…</p>
+          ) : err ? (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+              {err}
+            </div>
+          ) : preview ? (
+            <iframe
+              title="Step preview"
+              srcDoc={preview.html}
+              sandbox=""
+              className="h-full w-full rounded border border-slate-300 bg-white"
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -254,6 +340,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [stepBusyPos, setStepBusyPos] = useState<number | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<StepPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -331,6 +421,28 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     }
   };
 
+  const onPreviewStep = async (position: number) => {
+    if (!campaign) return;
+    setPreviewOpen(true);
+    setPreview(null);
+    setPreviewErr(null);
+    setPreviewLoading(true);
+    try {
+      const res = await previewCampaignStep(ctx, campaign.id, position);
+      setPreview(res);
+    } catch (e) {
+      setPreviewErr(formatApiError(e));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    setPreviewOpen(false);
+    setPreview(null);
+    setPreviewErr(null);
+  };
+
   if (!campaign) {
     return (
       <div className="text-sm text-slate-500">
@@ -393,6 +505,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                 step={s}
                 busy={stepBusyPos === s.position}
                 onDelete={onDeleteStep}
+                onPreview={onPreviewStep}
               />
             ))}
           </ul>
@@ -443,6 +556,15 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
           </button>
         ) : null}
       </section>
+
+      {previewOpen ? (
+        <PreviewModal
+          preview={preview}
+          loading={previewLoading}
+          err={previewErr}
+          onClose={closePreview}
+        />
+      ) : null}
     </div>
   );
 }
