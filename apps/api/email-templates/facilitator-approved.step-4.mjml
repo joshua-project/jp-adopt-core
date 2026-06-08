@@ -1,0 +1,50 @@
+{#
+  facilitator-approved.step-4.mjml — Month 2 after approval:
+  reminder of the aspects of facilitating.
+  Source: Drip Emails for facilitators Sign-up - Copy.docx (Email 6).
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Reminder of the aspects of Facilitating</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Facilitating Frontier People Group Adoption is an exciting commitment.
+    As the key contact person, you have the best view in the room. The
+    opportunity to hear the stories of those who are joining your
+    organization in reaching the least reached is thrilling.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Along with the privilege of this view, there comes a responsibility to
+    keep partners informed on any key updates and ways they can be praying.
+    We all keep in mind the security of those serving in security-sensitive
+    areas. However, when we can give a fresh story, challenge, or prayer
+    request from those serving directly amidst the FPGs, it inspires deeper
+    investment to see them reached.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Along with prayers, your partners have gifts and financial support to
+    invest. Clear communication on gifts and talents that are needed, as
+    well as how financial giving will be used, can go a long way to
+    activating others within the body of Christ to take their next best step
+    in FPG adoption.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    As an organization in this area of ministry, you have a wealth of
+    knowledge that can assist others who want to get involved. Why not let
+    your partners know of trainings you have available to them, times you
+    may have a speaker visiting their area, or materials you recommend to
+    deepen their understanding?
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Above all, we serve together to see God praised and honored. It is a
+    privilege for us to serve alongside your organization in reaching the
+    frontiers.
+  </p>
+
+  <p style="margin:0;color:#374151">In partnership with you,<br/>The Joshua Project Team</p>
+{% endblock %}

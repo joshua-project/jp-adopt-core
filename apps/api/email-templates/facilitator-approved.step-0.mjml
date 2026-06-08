@@ -1,0 +1,56 @@
+{#
+  facilitator-approved.step-0.mjml — Week 1 after approval: "you're approved."
+  Source: Drip Emails for facilitators Sign-up - Copy.docx (Email 2).
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">You are an approved FPG Adoption Facilitator!</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Congratulations! Your organization has entered into the facilitation part
+    of Frontier People Group Adoption.
+  </p>
+
+  <p style="margin:0 0 12px;color:#374151">A few exciting things to know:</p>
+
+  <ol style="margin:0 0 16px;padding-left:20px;color:#374151">
+    <li style="margin-bottom:12px">
+      <strong>Log in.</strong> You are now able to log in to the matching
+      platform. Instructions on how to use the platform can be found in the
+      Joshua Project Adoption resources.
+    </li>
+    <li style="margin-bottom:12px">
+      <strong>Security matters.</strong> Joshua Project takes security
+      seriously. A white paper is available so you can understand how we are
+      protecting your information.
+      <ul style="margin:6px 0 0;padding-left:20px">
+        <li style="margin-bottom:6px">All matches will be sent to you through the platform. The adopters are not given the name of who they have been matched with. It is up to you to determine the next step of reaching out to them.</li>
+        <li style="margin-bottom:6px">The matching platform will allow you to see adopter information and communicate directly from there if you prefer to keep your emails private. The information can also be exported for use in your own system.</li>
+        <li>
+          As a reminder, facilitating adoption involves the following:
+          <ul style="margin:6px 0 0;padding-left:20px">
+            <li style="margin-bottom:4px">At a minimum, the organization or network is willing to send prayer requests and updates to matched FPG adopters every three months.</li>
+            <li style="margin-bottom:4px">You may also: provide financial giving opportunities; provide further information and resources about the FPG(s); provide service opportunities; provide training opportunities for engaging with the FPG(s).</li>
+            <li>Your organization can receive a customized adoption form link to use on your website that will only include the FPGs for which you can currently or potentially facilitate adoption. Any adopters through your customized form will automatically be assigned to you.</li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+    <li>
+      <strong>Additional tools.</strong>
+      <ul style="margin:6px 0 0;padding-left:20px">
+        <li style="margin-bottom:6px"><em>Light the Nations Prayer Map</em> — While not part of our ADOPT process, this prayer tool is helpful for prayer networks and others who want to pray broadly for people groups around the world. There is an embed code available if your organization wants to place this tool on its own site.</li>
+        <li><em>JP+</em> — Core Joshua Project data remains public and freely accessible. JP+ provides updates on the nuances of people group identities and unreached status, field surveys, movement of people groups out of progress scale tiers, and emerging missiological trends, helping mission leaders align their efforts with rapidly shifting global realities.</li>
+      </ul>
+    </li>
+  </ol>
+
+  <p style="margin:0 0 16px;color:#374151">
+    May the Lord bless you greatly as you get to know the matching platform
+    and continue to serve to reach the frontier peoples.
+  </p>
+
+  <p style="margin:0 0 8px;color:#374151">The Joshua Project Team</p>
+  <p style="margin:0;color:#6b7280;font-style:italic;font-size:13px">"Let the nations be glad…" (Psalm 67:4)</p>
+{% endblock %}

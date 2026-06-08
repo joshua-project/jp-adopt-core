@@ -1,0 +1,53 @@
+{#
+  adopter-welcome.step-0.mjml — Day 1 welcome for a new FPG adopter.
+  Source: SharePoint > AdoptionandEngagement > Adoption > Organizing Adopters
+          > Drip Emails for adopter Sign-up.docx (Email 1).
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Welcome! You've Just Adopted a People Group</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+  <p style="margin:0 0 16px;color:#374151">You've taken a bold and beautiful step.</p>
+  <p style="margin:0 0 16px;color:#374151">
+    By adopting a Frontier People Group, you've joined a growing movement of
+    believers who long to see the Good News reach the ends of the earth,
+    especially where it's never been heard.
+  </p>
+  <p style="margin:0 0 24px;color:#374151">
+    Right now, you're standing in the gap for a community that likely has no
+    access to Scripture, no nearby churches, and no known believers. This act
+    of obedience and love matters more than you may ever know.
+  </p>
+
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">What's Next</h3>
+  <p style="margin:0 0 16px;color:#374151">
+    Over the next few weeks, we'll guide you with helpful resources to pray,
+    learn, and take further steps of action, all at your own pace. Whether
+    you're praying by yourself, with your family, or considering how to
+    mobilize your church, you're not in this alone.
+  </p>
+  <p style="margin:0 0 16px;color:#374151">
+    The <em>Global Frontier People Group Adoption Manual</em> is here for your
+    guidance. It is a stand-alone document that will serve to guide you
+    through FPG adoption. This manual can be printed and used free of charge.
+  </p>
+  <p style="margin:0 0 24px;color:#374151">
+    If you have chosen to collaborate with other adopters or organizations
+    aimed at reaching the same FPG, we hope to match you with those who have
+    committed to seeing them engaged with the Gospel in the months ahead.
+    Matches will be made as they are available and only with those who have
+    agreed to collaborate.
+  </p>
+
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">Your Commitment</h3>
+  <p style="margin:0 0 16px;color:#374151">
+    Here you will find your Adoption Certificate. Please fill it in and post
+    it somewhere that reminds you, and your group, of your commitment to
+    seeing this FPG reached with the Gospel.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">Thank you for saying yes. Eternity will look different because of it.</p>
+
+  <p style="margin:0 0 8px;color:#374151">In hope,<br/>The Joshua Project Team</p>
+  <p style="margin:0;color:#6b7280;font-style:italic;font-size:13px">"Let the nations be glad…" (Psalm 67:4 NIV)</p>
+{% endblock %}

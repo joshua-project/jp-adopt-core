@@ -1,0 +1,58 @@
+{#
+  adopter-welcome.step-7.mjml — Month 4: called to be faithful.
+  Source: Drip Emails for adopter Sign-up.docx (Email 8).
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Called to be Faithful</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Today you have been praying for your adopted people group for over
+    three months! Yet, the work has just begun. Though the challenges of
+    reaching those who have had little to no response to the Gospel are
+    great, we serve our great God who is faithful.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    We here at Joshua Project see every day how the body of Christ is
+    working together to make Him known in some of the hardest places on
+    earth. For those who labor in this, we want to remind you that you are
+    not alone. We join together in prayer for these FPGs.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    As we all seek to be faithful to the commitment of FPG Adoption, a bit
+    of encouragement may be in order. The Light the Nations prayer map is a
+    prayer tool that is helpful for prayer networks and others who want to
+    pray broadly for the people groups of the world. By entering the map,
+    the person can look for FPGs around the world (the dark dots on the
+    map). As each FPG is prayed for, their dot will light up for 24 hours.
+    This interactive tool allows us to see and share the need for prayer
+    for the FPGs around the globe.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    The process of reaching an FPG is a marathon. There are bound to be
+    times of great activity and times of waiting upon the Lord. As you go
+    through this process, Joshua Project will be updating additional
+    resources for you to help refresh and refocus you or your group. The
+    <em>FPG Adoption Resources</em> are here for you.
+  </p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Our prayer for you is that the challenges of the hard work of seeing
+    Frontier Peoples reached with the gospel will strengthen your faith in
+    the toils and help each of us realize that God is the one who determines
+    the outcomes. We continue in faithful efforts together, while our hope
+    is in our God who is faithful.
+  </p>
+
+  <p style="margin:0 0 8px;color:#374151">Many blessings,<br/>The Joshua Project Team</p>
+  <p style="margin:0;color:#6b7280;font-style:italic;font-size:13px">
+    "Now may the God of peace Himself sanctify you completely; and may your
+    whole spirit, soul, and body be preserved blameless at the coming of our
+    Lord Jesus Christ. He who calls you is faithful, who also will do it."
+    (1 Thessalonians 5:23-24 NIV)
+  </p>
+{% endblock %}

@@ -1,0 +1,67 @@
+{#
+  facilitator-approved.step-2.mjml — Week 3 after approval: keep praying for your FPG.
+  Source: Drip Emails for facilitators Sign-up - Copy.docx (Email 4 — "Keep Praying" variant).
+  Note: the doc had a duplicate "Email 4" titled "Keeping current" with no week
+  label; it was omitted pending clarification.
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Keep Praying for your FPG</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+
+  <p style="margin:0 0 16px;color:#374151">
+    God wants all people to be saved and to come to a knowledge of the truth
+    (1 Timothy 2:4). From the beginning of time, His plan wasn't just for
+    one country or one type of person, but for the whole world. Frontier
+    People Groups make up the 1.9 billion people who have the least access
+    to the gospel out of anyone on the planet. In prayer we align our hearts
+    with the very heartbeat of God and stand in agreement with Jesus' Great
+    Commission. Lord, we believe Your promise from Revelation 7:9: that
+    every nation, tribe, people, and language will be standing before the
+    throne and the Lamb.
+  </p>
+
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">The Mission: What to Pray</h3>
+  <p style="margin:0 0 12px;color:#374151">
+    Since adopters will come from a variety of experiences, your organization
+    may want to guide them in ways to pray for the "open door." Even the
+    Apostle Paul asked for prayer that "God may open a door for our message,
+    so that we may proclaim the mystery of Christ" (Colossians 4:3). Your
+    organization may already have developed prayer guides to pass along.
+    Here are just a few ways to consider asking adopters to pray:
+  </p>
+  <ul style="margin:0 0 16px;padding-left:20px;color:#374151">
+    <li style="margin-bottom:6px"><strong>For Access:</strong> Pray that governments and leaders in closed countries will allow believers to enter, and to live peaceful lives (1 Timothy 2:1-4).</li>
+    <li style="margin-bottom:6px"><strong>For Translation:</strong> Pray that the Bible will be translated into every mother tongue so people can hear God speaking their own language.</li>
+    <li style="margin-bottom:6px"><strong>For Power:</strong> Pray that the Gospel would come to them not just with words, but with the power of the Holy Spirit (1 Thessalonians 1:5).</li>
+    <li style="margin-bottom:6px"><strong>For Boldness:</strong> Pray that God would enable His servants to speak His word with clear, powerful, effective witness in Jesus' name (Acts 4:29-30).</li>
+    <li style="margin-bottom:6px"><strong>For Local Leaders:</strong> Pray that God would raise up a "Paul" within these groups — someone from within the culture who will meet Jesus and lead their own people to Him.</li>
+    <li><strong>For Light:</strong> Ask God to shine His light into hearts that have been in spiritual darkness for generations, as promised in 2 Corinthians 4:6.</li>
+  </ul>
+  <p style="margin:0 0 16px;color:#374151">
+    In 1727, a small community of believers in Herrnhut, Germany, began
+    praying wholeheartedly that the darkest places in the world could hear
+    the gospel. It launched a 100-year prayer movement that coincided with
+    the launching of world-changing missionary activity. Spiritual work in
+    missions is supported by faithful prayer warriors. Will you be one?
+  </p>
+
+  <h3 style="margin:0 0 12px;color:#2C474B;font-size:16px">Sample Weekly Prayer Rhythm</h3>
+  <p style="margin:0 0 12px;color:#374151">Pray daily or weekly for the Frontier People Group(s) in various ways. Here is one example:</p>
+  <ol style="margin:0 0 16px;padding-left:20px;color:#374151">
+    <li style="margin-bottom:6px">Holy Spirit's work to be known; hearts being drawn to Christ; dreams and visions of Jesus; spiritual hunger; God's mercy poured out among this group.</li>
+    <li style="margin-bottom:6px">Barriers and spiritual strongholds to be removed; God's favor in overcoming obstacles related to politics, religion, culture, language, and location.</li>
+    <li style="margin-bottom:6px">Workers to be empowered, protected, and strengthened.</li>
+    <li style="margin-bottom:6px">Access to the gospel through digital means, marketplace ministry, Bible translation, creative access, and other means.</li>
+    <li style="margin-bottom:6px">Networks and organizations to collaborate to multiply the ministry engagement among the FPG(s).</li>
+    <li style="margin-bottom:6px">The few global Christians in this people group, once they exist, to share Christ lovingly, boldly, and strategically. Pray for their encouragement.</li>
+    <li>For more people and ministries to pray for, advocate for, and adopt the FPG(s).</li>
+  </ol>
+
+  <p style="margin:0 0 16px;color:#374151">
+    We don't pray perfectly, we just start. May you be greatly blessed as
+    you lift up this FPG to the Lord of the Harvest.
+  </p>
+
+  <p style="margin:0;color:#374151">With you in the work,<br/>The Joshua Project Team</p>
+{% endblock %}

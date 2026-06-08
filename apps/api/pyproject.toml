@@ -10,6 +10,12 @@ dependencies = [
     "email-validator>=2.2.0",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
+    # Email-template rendering for drip and digest emails. Strictly
+    # required: the `_base.html.jinja` shared shell uses Jinja's
+    # `{% extends %}` block, which only works through FileSystemLoader.
+    # When jinja2 is missing the renderer falls back to naive {{ key }}
+    # substitution and the templates lose all branded chrome.
+    "jinja2>=3.1.0",
     # psycopg3 (sync) for Alembic migrations. The runtime app uses
     # asyncpg via SQLAlchemy 2's async engine; Alembic needs a sync
     # driver and connects via the `db-url-migrator` KV secret whose

@@ -1,0 +1,40 @@
+{#
+  adopter-welcome.step-1.mjml — Week 1: orient yourself to the FPG.
+  Source: Drip Emails for adopter Sign-up.docx (Email 2).
+#}
+{% extends "_base.html.jinja" %}
+{% block body %}
+  <h2 style="margin:0 0 16px;color:#2C474B;font-size:18px">Orient Yourself</h2>
+  <p style="margin:0 0 16px;color:#374151">Hi {{ contact_display_name }},</p>
+  <p style="margin:0 0 16px;color:#374151">
+    Orientation is learning the world of your chosen people so you can pray
+    and serve with understanding. It includes learning about their history,
+    identity, language, religion, locations, felt needs, and barriers to the
+    gospel.
+  </p>
+  <p style="margin:0 0 16px;color:#374151">
+    You will be blessed to see the people as future brothers and sisters in
+    Christ as you learn more about them and move to more meaningful prayer.
+  </p>
+
+  <ol style="margin:0 0 16px;padding-left:20px;color:#374151">
+    <li style="margin-bottom:10px"><strong>LEARN ABOUT THE FPG INTENTIONALLY.</strong> Research the FPG's history and worldview, language and identity, family structures, and cultural dynamics. Use digital resources to find facts and key stories. Discover where else in the world this FPG is located — you may be surprised. Diaspora communities may offer greater access than the homeland.</li>
+    <li style="margin-bottom:10px"><strong>UNDERSTAND THEIR RELIGIOUS SYSTEM.</strong> Go beyond just knowing the core beliefs of a religion. Find out what the fears and hopes of the people are and how faith shapes their daily lives.</li>
+    <li style="margin-bottom:10px"><strong>LISTEN TO OTHERS.</strong> Learn from field workers, believers from this group who live in other parts of the world, or researchers who know the people well. Understand the potential harm you could cause, as well as the blessing you could provide, through careful listening.</li>
+    <li style="margin-bottom:10px"><strong>IDENTIFY BRIDGES TO THE GOSPEL.</strong> Look for cultural values, stories, and parables that are bridges to the gospel. Allow yourself to imagine how this background and culture would shape your view of Jesus.</li>
+    <li><strong>TEACH OTHERS WHAT YOU ARE LEARNING.</strong> Learning and advocacy are ongoing. Keep your community updated. As your group learns about FPGs, continue to process what you are learning together and share this knowledge with others to galvanize interest.</li>
+  </ol>
+
+  <p style="margin:0 0 16px;color:#374151">
+    Each aspect of orienting yourself to the FPG's realities allows you
+    better ways to pray for them. You will become more understanding of the
+    barriers to reaching them and the concerns those who do believe will face.
+  </p>
+  <p style="margin:0 0 16px;color:#374151">
+    May the Lord bless you greatly as you get to know and continue to advocate
+    for your adopted Frontier People Group.
+  </p>
+
+  <p style="margin:0 0 8px;color:#374151">The Joshua Project Team</p>
+  <p style="margin:0;color:#6b7280;font-style:italic;font-size:13px">"Let the nations be glad…" (Psalm 67:4 NIV)</p>
+{% endblock %}
