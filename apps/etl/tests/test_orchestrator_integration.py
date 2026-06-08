@@ -1290,3 +1290,150 @@ def test_full_run_records_deleted_in_source(monkeypatch, pg_engine, pg_session):
             text("DELETE FROM etl_deleted_in_source WHERE source_id = '9011'")
         )
         pg_session.commit()
+
+
+def test_resolve_auto_watermark(monkeypatch, pg_engine, pg_session):
+    """`resolve_auto_watermark` returns MIN(MAX(source_max_modified_at))
+    per table across prior successful production runs. Failed runs
+    (errors > 0) and dry-runs are excluded.
+    """
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from jp_adopt_etl.orchestrator import resolve_auto_watermark
+
+    # Snapshot of pre-existing watermark, so the test is order-independent
+    # against any rows the rest of the suite happened to leave behind.
+    baseline = resolve_auto_watermark(ETL_TEST_DATABASE_URL)
+
+    t_contacts = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+    t_activity = datetime(2026, 6, 4, 12, 30, tzinfo=UTC)  # later
+    t_failed = datetime(2026, 6, 4, 13, 0, tzinfo=UTC)  # never picked (errors)
+    t_dry = datetime(2026, 6, 4, 14, 0, tzinfo=UTC)  # never picked (mode)
+
+    runs = [
+        # Successful production runs — the MIN(MAX(...)) should be t_contacts.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_a",
+            mode="production", started_at=t_contacts,
+            ended_at=t_contacts, source_max_modified_at=t_contacts,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_activity_a",
+            mode="production", started_at=t_activity,
+            ended_at=t_activity, source_max_modified_at=t_activity,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+        # Should be ignored: errors > 0.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_b",
+            mode="production", started_at=t_failed,
+            ended_at=t_failed, source_max_modified_at=t_failed,
+            rows_in=1, rows_out_inserted=0, rows_out_updated=0,
+            rows_out_skipped=1, rows_in_conflict=0, errors=1,
+        ),
+        # Should be ignored: dry_run.
+        EtlRun(
+            id=_uuid.uuid4(), table_name="test_contacts_c",
+            mode="dry_run", started_at=t_dry,
+            ended_at=t_dry, source_max_modified_at=t_dry,
+            rows_in=1, rows_out_inserted=1, rows_out_updated=0,
+            rows_out_skipped=0, rows_in_conflict=0, errors=0,
+        ),
+    ]
+    pg_session.add_all(runs)
+    pg_session.commit()
+
+    try:
+        watermark = resolve_auto_watermark(ETL_TEST_DATABASE_URL)
+        # Two paths produce a valid result depending on whether the dev
+        # DB had earlier production-mode rows from other tests:
+        # - baseline is None OR baseline >= t_contacts → expected is t_contacts
+        #   (our injected rows shifted the MIN).
+        # - baseline < t_contacts → baseline stays the MIN regardless of
+        #   what we inserted (the function correctly excluded older
+        #   non-test rows being earlier than the test_contacts_b errors=1
+        #   filter, etc.).
+        expected = (
+            min(baseline, t_contacts) if baseline is not None else t_contacts
+        )
+        # Postgres TIMESTAMPTZ + psycopg2 round-trip preserves microseconds
+        # losslessly; tolerate at most 1ms drift (effectively just floating
+        # point comparison guard).
+        assert (
+            abs((watermark - expected).total_seconds()) < 0.001
+        ), f"got {watermark}, expected {expected}"
+        # Independently assert that the ignored rows (errors=1 + dry_run)
+        # did NOT contribute, regardless of baseline.
+        assert (
+            watermark < t_failed and watermark < t_dry
+        ), f"errors=1 or dry_run row leaked into watermark: {watermark}"
+    finally:
+        pg_session.execute(
+            text(
+                "DELETE FROM etl_run WHERE table_name "
+                "IN ('test_contacts_a', 'test_activity_a', "
+                "'test_contacts_b', 'test_contacts_c')"
+            )
+        )
+        pg_session.commit()
+
+
+def test_resolve_cli_watermark_none_passes_through():
+    """`_resolve_cli_watermark(None, ...)` returns None without touching
+    Postgres (no etl_run lookup needed for the full-scan path)."""
+    from jp_adopt_etl.orchestrator import _resolve_cli_watermark
+
+    # Postgres URL is a placeholder — function MUST NOT connect.
+    assert _resolve_cli_watermark(None, "postgresql://invalid") is None
+
+
+def test_resolve_cli_watermark_iso8601_parses_to_utc():
+    """A valid ISO 8601 string is parsed and anchored to UTC. No DB
+    lookup required for explicit timestamps."""
+    from datetime import UTC, datetime
+
+    from jp_adopt_etl.orchestrator import _resolve_cli_watermark
+
+    result = _resolve_cli_watermark(
+        "2026-06-04T12:00:00", "postgresql://invalid"
+    )
+    assert result == datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+
+
+def test_resolve_cli_watermark_malformed_iso_exits_with_code_2(caplog):
+    """Garbage non-auto, non-ISO input exits with code 2 (mirroring
+    argparse's error contract) and logs a clear error message — NOT a
+    raw traceback with exit code 1."""
+    from jp_adopt_etl.orchestrator import _resolve_cli_watermark
+
+    with pytest.raises(SystemExit) as exc_info:
+        _resolve_cli_watermark("not-a-date", "postgresql://invalid")
+    assert exc_info.value.code == 2
+    assert "Invalid --watermark value" in caplog.text
+
+
+def test_resolve_cli_watermark_auto_delegates_to_resolve_auto_watermark(
+    monkeypatch,
+):
+    """`_resolve_cli_watermark('auto', url)` dispatches to
+    resolve_auto_watermark with the same URL and returns its result.
+    No DB touch required — verify via monkeypatch."""
+    from datetime import UTC, datetime
+
+    from jp_adopt_etl import orchestrator as orch
+
+    received: list[str] = []
+    expected = datetime(2026, 6, 4, 12, 0, tzinfo=UTC)
+
+    def fake(url: str) -> datetime:
+        received.append(url)
+        return expected
+
+    monkeypatch.setattr(orch, "resolve_auto_watermark", fake)
+    result = orch._resolve_cli_watermark("auto", "postgresql://sentinel")
+    assert result == expected
+    assert received == ["postgresql://sentinel"]
