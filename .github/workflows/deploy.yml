@@ -123,6 +123,12 @@ jobs:
           # App soaks (plan Part D retires the SWA). Not in the required list.
           SWA_APP_NAME: op://JP Adopt Platform/Adopt Core - Production/swa-app-name
           SWA_API_TOKEN: op://JP Adopt Platform/Adopt Core - Production/swa-api-token
+          # #97: backend Graph user lookup. AZURE_GRAPH_TENANT_ID
+          # reuses the existing azure-tenant-id field (same tenant).
+          # Required together — when any are absent the API degrades
+          # to OID-only admin output without erroring.
+          AZURE_GRAPH_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-graph-client-id
+          AZURE_GRAPH_CLIENT_SECRET: op://JP Adopt Platform/Adopt Core - Production/azure-graph-client-secret
         with:
           export-env: true
 
@@ -514,7 +520,9 @@ jobs:
           az containerapp secret set \
             --name "${{ env.ACA_API_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
-            --secrets "forms-export-api-key=${{ env.FORMS_EXPORT_API_KEY }}" \
+            --secrets \
+              "forms-export-api-key=${{ env.FORMS_EXPORT_API_KEY }}" \
+              "azure-graph-client-secret=${{ env.AZURE_GRAPH_CLIENT_SECRET }}" \
             >/dev/null
 
       - name: Update API container app
@@ -539,6 +547,9 @@ jobs:
               "ENTRA_DIRECT_AUDIENCE=75edd3b3-90c8-4982-a619-d038ebaa50ea" \
               "FORMS_EXPORT_URL=${{ env.FORMS_EXPORT_URL }}" \
               "FORMS_EXPORT_API_KEY=secretref:forms-export-api-key" \
+              "AZURE_GRAPH_TENANT_ID=${{ env.AZURE_TENANT_ID }}" \
+              "AZURE_GRAPH_CLIENT_ID=${{ env.AZURE_GRAPH_CLIENT_ID }}" \
+              "AZURE_GRAPH_CLIENT_SECRET=secretref:azure-graph-client-secret" \
             --query properties.latestRevisionName -o tsv)
           if [ -z "$new_rev" ]; then echo "::error::could not determine new API revision name"; exit 1; fi
           echo "Rolled API → $new_rev"

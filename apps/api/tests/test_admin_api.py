@@ -292,6 +292,126 @@ async def test_list_user_roles_requires_staff_admin(
     assert r.json()["detail"]["code"] == "role_required"
 
 
+# ─── Graph enrichment (#97) ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_user_roles_unconfigured_graph_returns_oid_only(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """When AZURE_GRAPH_* env vars are unset (the default in CI),
+    list_user_roles still works — display name and UPN are null and
+    graph_enriched is False. No Graph network call is attempted."""
+    user_id = f"oid-{uuid.uuid4()}"
+    session.add(UserRole(user_subject_id=user_id, role_id=STAFF_ADMIN_ROLE_ID))
+    await session.commit()
+    try:
+        r = client.get("/v1/admin/user-roles", headers=_auth_headers())
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["graph_enriched"] is False
+        row = next(item for item in body["items"] if item["user_subject_id"] == user_id)
+        assert row["user_display_name"] is None
+        assert row["user_principal_name"] is None
+    finally:
+        await session.execute(delete(UserRole).where(UserRole.user_subject_id == user_id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_list_user_roles_enriches_when_graph_returns_users(
+    client: TestClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Graph is reachable, each row carries display_name + UPN
+    and graph_enriched is True."""
+    from jp_adopt_api.routers import admin as admin_router
+    from jp_adopt_api.graph import GraphUser
+
+    user_id = f"oid-{uuid.uuid4()}"
+    session.add(UserRole(user_subject_id=user_id, role_id=STAFF_ADMIN_ROLE_ID))
+    await session.commit()
+
+    async def _stub_lookup(ids: list[str]) -> dict[str, GraphUser]:
+        # Echo back a fabricated user for each requested OID.
+        return {
+            oid: GraphUser(
+                id=oid,
+                display_name=f"Display {oid[-8:]}",
+                user_principal_name=f"user-{oid[-8:]}@example.com",
+                mail=f"user-{oid[-8:]}@example.com",
+            )
+            for oid in ids
+        }
+
+    monkeypatch.setattr(admin_router, "lookup_users_by_ids", _stub_lookup)
+    try:
+        r = client.get("/v1/admin/user-roles", headers=_auth_headers())
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["graph_enriched"] is True
+        row = next(item for item in body["items"] if item["user_subject_id"] == user_id)
+        assert row["user_display_name"] == f"Display {user_id[-8:]}"
+        assert row["user_principal_name"] == f"user-{user_id[-8:]}@example.com"
+    finally:
+        await session.execute(delete(UserRole).where(UserRole.user_subject_id == user_id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_search_directory_users_returns_empty_when_unconfigured(
+    client: TestClient,
+) -> None:
+    r = client.get("/v1/admin/users/search?q=amy", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["items"] == []
+    assert body["graph_configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_directory_users_returns_graph_results(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api.routers import admin as admin_router
+    from jp_adopt_api.graph import GraphUser
+
+    async def _stub_search(q: str, *, limit: int = 10) -> list[GraphUser]:
+        if q != "amy":
+            return []
+        return [
+            GraphUser(
+                id="oid-amy",
+                display_name="Amy Adopter",
+                user_principal_name="amy@globalspecifics.com",
+                mail="amy@globalspecifics.com",
+            )
+        ]
+
+    monkeypatch.setattr(admin_router, "search_users", _stub_search)
+    monkeypatch.setattr(admin_router, "graph_configured", lambda: True)
+    r = client.get("/v1/admin/users/search?q=amy", headers=_auth_headers())
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["graph_configured"] is True
+    assert len(body["items"]) == 1
+    assert body["items"][0]["user_subject_id"] == "oid-amy"
+    assert body["items"][0]["display_name"] == "Amy Adopter"
+
+
+@pytest.mark.asyncio
+async def test_search_directory_users_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fake_roles(db: object, user_sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fake_roles)
+    r = client.get("/v1/admin/users/search?q=amy", headers=_auth_headers())
+    assert r.status_code == 403, r.text
+
+
 @pytest.mark.asyncio
 async def test_grant_user_role_happy_path(
     client: TestClient, session: AsyncSession

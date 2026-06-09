@@ -16,6 +16,12 @@ dependencies = [
     # When jinja2 is missing the renderer falls back to naive {{ key }}
     # substitution and the templates lose all branded chrome.
     "jinja2>=3.1.0",
+    # MS Graph user lookup (#97): backend client-credentials token
+    # acquisition for the admin user-roles enrichment + typeahead.
+    # When the AZURE_GRAPH_* env vars are absent the module degrades
+    # gracefully — the admin endpoints still work, they just don't
+    # surface display names / can't search by email.
+    "msal>=1.31.0",
     # psycopg3 (sync) for Alembic migrations. The runtime app uses
     # asyncpg via SQLAlchemy 2's async engine; Alembic needs a sync
     # driver and connects via the `db-url-migrator` KV secret whose

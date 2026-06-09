@@ -145,6 +145,26 @@ class Settings(BaseSettings):
     forms_export_url: str = ""
     forms_export_api_key: str = ""
 
+    # MS Graph user lookup (#97). The API server uses
+    # client-credentials to call Graph and enrich the admin
+    # ``/v1/admin/user-roles`` response with display name + UPN, and
+    # to power the ``/v1/admin/users/search`` typeahead.
+    #
+    # All three are required together. When any are unset, the graph
+    # module skips its lookups and the admin endpoints fall back to
+    # OID-only responses (no error). This lets dev environments run
+    # without the Graph permission grant.
+    #
+    # The tenant id is the same Entra tenant the API JWTs are minted
+    # in — reuses the value from the existing 1Password
+    # `azure-tenant-id` field. The client id is the API app
+    # registration (the same `aud` we accept on JWTs). The secret
+    # carries the client credential; rotate via 1P + container app
+    # secret reset.
+    azure_graph_tenant_id: str = ""
+    azure_graph_client_id: str = ""
+    azure_graph_client_secret: str = ""
+
     @property
     def intake_api_keys_list(self) -> list[str]:
         """Parsed list of acceptable intake bearer tokens.

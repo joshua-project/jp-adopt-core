@@ -543,6 +543,11 @@ export interface paths {
         /**
          * List User Roles
          * @description List all ``user_roles`` grants joined with role names.
+         *
+         *     When Graph is configured (#97), each row is enriched with the
+         *     ``user_display_name`` and ``user_principal_name`` fields via a
+         *     single batched Graph call. Failures (timeout, missing user,
+         *     unconfigured) degrade silently to OID-only output.
          */
         get: operations["list_user_roles_v1_admin_user_roles_get"];
         put?: never;
@@ -554,6 +559,31 @@ export interface paths {
          *     state changes, not request attempts).
          */
         post: operations["grant_user_role_v1_admin_user_roles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/users/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Directory Users
+         * @description Typeahead search for Entra users by name / email prefix.
+         *
+         *     Used by the admin UI's grant form so operators can type a name
+         *     instead of pasting an OID. Returns ``[]`` (with ``graph_configured=False``)
+         *     in dev environments where the AZURE_GRAPH_* env vars aren't set,
+         *     so the UI can fall back to the raw OID input gracefully.
+         */
+        get: operations["search_directory_users_v1_admin_users_search_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1963,6 +1993,11 @@ export interface components {
             items: components["schemas"]["UserRoleRead"][];
             /** Total */
             total: number;
+            /**
+             * Graph Enriched
+             * @default false
+             */
+            graph_enriched: boolean;
         };
         /** UserRoleRead */
         UserRoleRead: {
@@ -1980,6 +2015,31 @@ export interface components {
              * Format: date-time
              */
             granted_at: string;
+            /** User Display Name */
+            user_display_name?: string | null;
+            /** User Principal Name */
+            user_principal_name?: string | null;
+        };
+        /**
+         * UserSearchHit
+         * @description One row in the admin user-search typeahead response.
+         */
+        UserSearchHit: {
+            /** User Subject Id */
+            user_subject_id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** User Principal Name */
+            user_principal_name: string | null;
+            /** Mail */
+            mail: string | null;
+        };
+        /** UserSearchResponse */
+        UserSearchResponse: {
+            /** Items */
+            items: components["schemas"]["UserSearchHit"][];
+            /** Graph Configured */
+            graph_configured: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -3176,6 +3236,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserRoleRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_directory_users_v1_admin_users_search_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSearchResponse"];
                 };
             };
             /** @description Validation Error */
