@@ -426,9 +426,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install API dependencies
+      - name: Install API dependencies for migration
+        # #65: --package jp-adopt-api scopes the resolve to the API
+        # package only (NOT the full workspace — the worker and ETL
+        # don't need to run inside a job that only runs `alembic
+        # upgrade head`). --extra migrate pulls in the sync psycopg
+        # driver Alembic needs.
         working-directory: apps/api
-        run: uv sync --extra dev
+        run: uv sync --package jp-adopt-api --extra migrate
 
       - name: Load Azure identity from 1Password
         uses: 1password/load-secrets-action@v4
