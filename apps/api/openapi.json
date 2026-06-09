@@ -2791,6 +2791,167 @@
         }
       }
     },
+    "/v1/admin/intake-keys": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Intake Keys",
+        "description": "List all intake API keys (active + revoked).\n\nPlaintext keys are NEVER returned \u2014 only their metadata. The\none-time plaintext is shown on the POST response and lost\nforever after.",
+        "operationId": "list_intake_keys_v1_admin_intake_keys_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeApiKeyListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mint Intake Key",
+        "description": "Mint a fresh intake API key. The plaintext is returned ONCE in\nthe response \u2014 there's no way to recover it later. Hash-at-rest\nmeans even DB exfiltration doesn't leak the credential.",
+        "operationId": "mint_intake_key_v1_admin_intake_keys_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeApiKeyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeApiKeyCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/intake-keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke Intake Key",
+        "description": "Soft-delete a key by stamping ``revoked_at``. The row stays so\nthe audit trail (``last_used_*``) survives; the auth path\nfilters on ``revoked_at IS NULL`` so the key stops working\nimmediately.",
+        "operationId": "revoke_intake_key_v1_admin_intake_keys__key_id__delete",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Key Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns": {
       "get": {
         "tags": [
@@ -6623,6 +6784,190 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IntakeApiKeyCreate": {
+        "properties": {
+          "consumer_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Consumer Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "consumer_label"
+        ],
+        "title": "IntakeApiKeyCreate"
+      },
+      "IntakeApiKeyCreated": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "consumer_label": {
+            "type": "string",
+            "title": "Consumer Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "plaintext": {
+            "type": "string",
+            "title": "Plaintext"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "consumer_label",
+          "note",
+          "created_at",
+          "plaintext"
+        ],
+        "title": "IntakeApiKeyCreated",
+        "description": "One-time response on mint \u2014 ``plaintext`` is shown only here."
+      },
+      "IntakeApiKeyListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntakeApiKeyRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "IntakeApiKeyListResponse"
+      },
+      "IntakeApiKeyRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "consumer_label": {
+            "type": "string",
+            "title": "Consumer Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_by_user_id": {
+            "type": "string",
+            "title": "Created By User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "last_used_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used Ip"
+          },
+          "last_used_user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used User Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "consumer_label",
+          "note",
+          "created_by_user_id",
+          "created_at",
+          "revoked_at",
+          "last_used_at",
+          "last_used_ip",
+          "last_used_user_agent"
+        ],
+        "title": "IntakeApiKeyRead"
       },
       "IntakeError": {
         "properties": {

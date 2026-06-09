@@ -37,7 +37,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,22 +171,60 @@ def _success_response(
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def _authenticate(authorization: str | None, settings: Settings) -> str | None:
+async def _authenticate(
+    authorization: str | None,
+    settings: Settings,
+    session: AsyncSession,
+    request: Request,
+) -> str | None:
     """Return the api_key_id label on success, else None.
 
-    Multi-key support: any matching configured key is valid. The returned
-    label is the SHA-256/16-hex of the matched configured key — NEVER the
-    raw bearer. This means the api_idempotency_keys table never persists
-    a usable credential, so a leaked DB does not leak the bearer secret.
-    Production rotation is unaffected: sending the new key as the first
-    list entry shifts which hash gets written; the old hash remains valid
-    until the old key is removed from the list.
+    #59: look-up order is DB-first, env-var-fallback. This lets the
+    self-managed key store coexist with the legacy
+    ``INTAKE_API_KEYS`` allowlist during the rotation window. The
+    fallback path will be removed once every consumer is on a
+    DB-issued key.
+
+    DB-hit side effect: record ``last_used_at`` + IP + UA on the
+    matched row. Errors during this update are swallowed — auth
+    should not fail because the audit trail couldn't be written.
+
+    The returned label is the SHA-256/16-hex of the matched key
+    (NOT the raw bearer), so the ``api_idempotency_keys`` table
+    never persists a usable credential.
     """
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
     if not token:
         return None
+
+    # 1) DB lookup: hash the token and check for an unrevoked match.
+    from jp_adopt_api.models import IntakeApiKey  # local import — avoid cycle
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    row = (
+        await session.execute(
+            select(IntakeApiKey).where(
+                IntakeApiKey.key_hash == token_hash,
+                IntakeApiKey.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        try:
+            row.last_used_at = datetime.now(UTC)
+            row.last_used_ip = (
+                request.client.host if request.client is not None else None
+            )
+            row.last_used_user_agent = request.headers.get("user-agent")
+            await session.flush()
+        except Exception as e:  # noqa: BLE001 — audit miss must not break auth
+            logger.warning("intake_last_used_update_failed err=%s", e)
+        return token_hash[:16]
+
+    # 2) Env-var fallback: legacy allowlist (deprecated; remove once
+    #    every consumer is on a DB-issued key).
     accepted = settings.intake_api_keys_list
     if not accepted:
         # Empty allowlist + production = the API would silently accept anything.
@@ -864,18 +902,31 @@ async def _handle(
     request_id = _request_id()
 
     # Production startup guard: refuse to accept any submission when no key
-    # is configured, no matter the bearer the caller sent. (The dev-friendly
-    # path is to seed at least one key in `.env`.)
+    # is configured (env-var allowlist empty AND no active DB key), no
+    # matter the bearer the caller sent. With #59's self-managed keys,
+    # we now check both sources before returning 503 — staff can mint
+    # one through the admin UI to bring intake back online without an
+    # infra-team round-trip.
     if settings.is_production and not settings.intake_api_keys_list:
-        logger.error("intake_no_api_keys_configured_in_production")
-        return _error_response(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            code="intake_disabled",
-            request_id=request_id,
-            message="Intake endpoint is not configured.",
-        )
+        from jp_adopt_api.models import IntakeApiKey
 
-    api_key_id = _authenticate(authorization, settings)
+        active_db_key_count = (
+            await session.execute(
+                select(func.count(IntakeApiKey.id)).where(
+                    IntakeApiKey.revoked_at.is_(None)
+                )
+            )
+        ).scalar_one()
+        if not active_db_key_count:
+            logger.error("intake_no_api_keys_configured_in_production")
+            return _error_response(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                code="intake_disabled",
+                request_id=request_id,
+                message="Intake endpoint is not configured.",
+            )
+
+    api_key_id = await _authenticate(authorization, settings, session, request)
     if api_key_id is None:
         return _error_response(
             status.HTTP_401_UNAUTHORIZED,

@@ -13,6 +13,7 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/facilitator", label: "My contacts" },
   { href: "/admin/users", label: "Admin" },
   { href: "/admin/orgs", label: "Orgs" },
+  { href: "/admin/intake-keys", label: "Keys" },
 ];
 
 const AUTH_EXEMPT_PATHS = new Set(["/signin", "/auth/callback"]);

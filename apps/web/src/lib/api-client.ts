@@ -560,6 +560,46 @@ export async function searchAdminUsers(
   );
 }
 
+// ── Admin: Intake API keys (#59) ─────────────────────────────────────────
+
+type IntakeKeyListBody =
+  paths["/v1/admin/intake-keys"]["get"]["responses"]["200"]["content"]["application/json"];
+type IntakeKeyCreatedBody =
+  paths["/v1/admin/intake-keys"]["post"]["responses"]["201"]["content"]["application/json"];
+type IntakeKeyCreateBody =
+  paths["/v1/admin/intake-keys"]["post"]["requestBody"]["content"]["application/json"];
+
+export async function listIntakeKeys(
+  ctx: ApiClientContext,
+): Promise<IntakeKeyListBody> {
+  return _assertPresent(
+    await apiFetch<IntakeKeyListBody>(ctx, "/v1/admin/intake-keys"),
+    "/v1/admin/intake-keys",
+  );
+}
+
+export async function mintIntakeKey(
+  ctx: ApiClientContext,
+  body: IntakeKeyCreateBody,
+): Promise<IntakeKeyCreatedBody> {
+  return _assertPresent(
+    await apiFetch<IntakeKeyCreatedBody>(ctx, "/v1/admin/intake-keys", {
+      method: "POST",
+      body,
+    }),
+    "/v1/admin/intake-keys",
+  );
+}
+
+export async function revokeIntakeKey(
+  ctx: ApiClientContext,
+  keyId: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/admin/intake-keys/${keyId}`, {
+    method: "DELETE",
+  });
+}
+
 // ── Admin: Facilitating org management (#57) ─────────────────────────────
 
 type OrgAdminListBody =

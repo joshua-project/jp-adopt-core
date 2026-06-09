@@ -722,6 +722,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/intake-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Intake Keys
+         * @description List all intake API keys (active + revoked).
+         *
+         *     Plaintext keys are NEVER returned — only their metadata. The
+         *     one-time plaintext is shown on the POST response and lost
+         *     forever after.
+         */
+        get: operations["list_intake_keys_v1_admin_intake_keys_get"];
+        put?: never;
+        /**
+         * Mint Intake Key
+         * @description Mint a fresh intake API key. The plaintext is returned ONCE in
+         *     the response — there's no way to recover it later. Hash-at-rest
+         *     means even DB exfiltration doesn't leak the credential.
+         */
+        post: operations["mint_intake_key_v1_admin_intake_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/intake-keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Intake Key
+         * @description Soft-delete a key by stamping ``revoked_at``. The row stays so
+         *     the audit trail (``last_used_*``) survives; the auth path
+         *     filters on ``revoked_at IS NULL`` so the key stops working
+         *     immediately.
+         */
+        delete: operations["revoke_intake_key_v1_admin_intake_keys__key_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns": {
         parameters: {
             query?: never;
@@ -1833,6 +1886,69 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IntakeApiKeyCreate */
+        IntakeApiKeyCreate: {
+            /** Consumer Label */
+            consumer_label: string;
+            /** Note */
+            note?: string | null;
+        };
+        /**
+         * IntakeApiKeyCreated
+         * @description One-time response on mint — ``plaintext`` is shown only here.
+         */
+        IntakeApiKeyCreated: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Consumer Label */
+            consumer_label: string;
+            /** Note */
+            note: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Plaintext */
+            plaintext: string;
+        };
+        /** IntakeApiKeyListResponse */
+        IntakeApiKeyListResponse: {
+            /** Items */
+            items: components["schemas"]["IntakeApiKeyRead"][];
+            /** Total */
+            total: number;
+        };
+        /** IntakeApiKeyRead */
+        IntakeApiKeyRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Consumer Label */
+            consumer_label: string;
+            /** Note */
+            note: string | null;
+            /** Created By User Id */
+            created_by_user_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Last Used Ip */
+            last_used_ip: string | null;
+            /** Last Used User Agent */
+            last_used_user_agent: string | null;
         };
         /** IntakeError */
         IntakeError: {
@@ -3864,6 +3980,103 @@ export interface operations {
             path: {
                 org_id: string;
                 people_id3: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_intake_keys_v1_admin_intake_keys_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeApiKeyListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mint_intake_key_v1_admin_intake_keys_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntakeApiKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeApiKeyCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_intake_key_v1_admin_intake_keys__key_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                key_id: string;
             };
             cookie?: never;
         };
