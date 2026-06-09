@@ -632,6 +632,12 @@ jobs:
           ACR_LOGIN_SERVER: op://JP Adopt Platform/Adopt Core - Production/acr-login-server
           ACA_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-resource-group
           ACA_ENVIRONMENT_NAME: op://JP Adopt Platform/Adopt Core - Production/aca-environment-name
+          # The ACA managed environment lives in a SHARED resource group
+          # (rg-jp-shared-production), not the same RG as the API/web/
+          # worker apps. `az containerapp job create --environment` will
+          # default to looking in --resource-group; pass the full
+          # resource ID to disambiguate.
+          ACA_ENVIRONMENT_RESOURCE_GROUP: op://JP Adopt Platform/Adopt Core - Production/aca-environment-resource-group
           # Connection URLs for the cron. DT credentials live in the
           # "DT Platform - Production" item, jp-adopt-core's DB URL
           # lives in "Adopt Core - Production".
@@ -669,13 +675,17 @@ jobs:
           JOB_NAME="jp-adopt-etl-cron-production"
           # Idempotent: create-or-update. `az containerapp job create`
           # errors if the job exists; we update afterwards either way.
+          # Resolve the ACA managed environment's full resource ID so
+          # `--environment` doesn't try to look it up in --resource-group
+          # (which is the per-service RG, not the shared env RG).
+          ENV_ID="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${ACA_ENVIRONMENT_RESOURCE_GROUP}/providers/Microsoft.App/managedEnvironments/${ACA_ENVIRONMENT_NAME}"
           if ! az containerapp job show \
                 --name "${JOB_NAME}" \
                 --resource-group "${ACA_RESOURCE_GROUP}" >/dev/null 2>&1; then
             az containerapp job create \
               --name "${JOB_NAME}" \
               --resource-group "${ACA_RESOURCE_GROUP}" \
-              --environment "${ACA_ENVIRONMENT_NAME}" \
+              --environment "${ENV_ID}" \
               --trigger-type "Schedule" \
               --cron-expression "0 * * * *" \
               --replica-timeout 1800 \
