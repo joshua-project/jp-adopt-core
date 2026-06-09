@@ -522,6 +522,25 @@ export async function listDripTemplates(
   );
 }
 
+// ── Admin: Graph user lookup (#97) ───────────────────────────────────────
+
+type UserSearchResponseBody =
+  paths["/v1/admin/users/search"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function searchAdminUsers(
+  ctx: ApiClientContext,
+  q: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<UserSearchResponseBody> {
+  return _assertPresent(
+    await apiFetch<UserSearchResponseBody>(ctx, "/v1/admin/users/search", {
+      query: { q },
+      signal: opts.signal,
+    }),
+    "/v1/admin/users/search",
+  );
+}
+
 type ContactEnrollmentsResponseBody =
   paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
 type ManualEnrollResponseBody =
