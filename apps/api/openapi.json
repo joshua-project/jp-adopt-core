@@ -2253,6 +2253,544 @@
         }
       }
     },
+    "/v1/admin/facilitating-orgs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin List Facilitating Orgs",
+        "description": "List every org (including inactive) for the admin surface.\n\nOrdering: active first, then name ascending. The public\n`/v1/facilitating-orgs` endpoint excludes inactive rows; this\nadmin variant returns the whole table so staff can reactivate.",
+        "operationId": "admin_list_facilitating_orgs_v1_admin_facilitating_orgs_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgAdminListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Create Facilitating Org",
+        "operationId": "admin_create_facilitating_org_v1_admin_facilitating_orgs_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacilitatingOrgCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitating-orgs/{org_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Get Facilitating Org",
+        "operationId": "admin_get_facilitating_org_v1_admin_facilitating_orgs__org_id__get",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Patch Facilitating Org",
+        "operationId": "admin_patch_facilitating_org_v1_admin_facilitating_orgs__org_id__patch",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacilitatingOrgPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitating-orgs/{org_id}/deactivate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Deactivate Facilitating Org",
+        "operationId": "admin_deactivate_facilitating_org_v1_admin_facilitating_orgs__org_id__deactivate_post",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitating-orgs/{org_id}/activate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Activate Facilitating Org",
+        "operationId": "admin_activate_facilitating_org_v1_admin_facilitating_orgs__org_id__activate_post",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitating-orgs/{org_id}/coverage": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin List Coverage",
+        "operationId": "admin_list_coverage_v1_admin_facilitating_orgs__org_id__coverage_get",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FpgCoverageListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Add Coverage",
+        "operationId": "admin_add_coverage_v1_admin_facilitating_orgs__org_id__coverage_post",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FpgCoverageAddRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FpgCoverageRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/facilitating-orgs/{org_id}/coverage/{people_id3}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Remove Coverage",
+        "operationId": "admin_remove_coverage_v1_admin_facilitating_orgs__org_id__coverage__people_id3__delete",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "people_id3",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "People Id3"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns": {
       "get": {
         "tags": [
@@ -5451,6 +5989,209 @@
         ],
         "title": "DecideResponse"
       },
+      "FacilitatingOrgAdminListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "FacilitatingOrgAdminListResponse"
+      },
+      "FacilitatingOrgAdminRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "language_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Codes"
+          },
+          "capacity_total": {
+            "type": "integer",
+            "title": "Capacity Total"
+          },
+          "capacity_committed": {
+            "type": "integer",
+            "title": "Capacity Committed"
+          },
+          "capacity_remaining": {
+            "type": "integer",
+            "title": "Capacity Remaining"
+          },
+          "accepting_potential_adopters": {
+            "type": "boolean",
+            "title": "Accepting Potential Adopters"
+          },
+          "is_triage_org": {
+            "type": "boolean",
+            "title": "Is Triage Org"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "source_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source System"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "capacity_total",
+          "capacity_committed",
+          "capacity_remaining",
+          "accepting_potential_adopters",
+          "is_triage_org",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FacilitatingOrgAdminRead",
+        "description": "Full admin view of a facilitating org row.\n\n`capacity_remaining` is derived; the matching algorithm owns\n`capacity_committed` and rejects external writes (see\nPATCH below)."
+      },
+      "FacilitatingOrgCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "capacity_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Capacity Total",
+            "default": 0
+          },
+          "accepting_potential_adopters": {
+            "type": "boolean",
+            "title": "Accepting Potential Adopters",
+            "default": false
+          },
+          "is_triage_org": {
+            "type": "boolean",
+            "title": "Is Triage Org",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "FacilitatingOrgCreate"
+      },
+      "FacilitatingOrgDetail": {
+        "properties": {
+          "org": {
+            "$ref": "#/components/schemas/FacilitatingOrgAdminRead"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/FpgCoverageRead"
+            },
+            "type": "array",
+            "title": "Coverage"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/FacilitatorMembershipRead"
+            },
+            "type": "array",
+            "title": "Memberships"
+          }
+        },
+        "type": "object",
+        "required": [
+          "org",
+          "coverage",
+          "memberships"
+        ],
+        "title": "FacilitatingOrgDetail",
+        "description": "Single-org view: row + FPG coverage + memberships in one trip."
+      },
       "FacilitatingOrgListResponse": {
         "properties": {
           "items": {
@@ -5471,6 +6212,73 @@
           "total"
         ],
         "title": "FacilitatingOrgListResponse"
+      },
+      "FacilitatingOrgPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "capacity_total": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Total"
+          },
+          "accepting_potential_adopters": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepting Potential Adopters"
+          },
+          "is_triage_org": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Triage Org"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FacilitatingOrgPatch",
+        "description": "Patch payload. `capacity_committed` is *intentionally* absent \u2014\nthe matching algorithm is the only writer for that column."
       },
       "FacilitatingOrgRead": {
         "properties": {
@@ -5573,6 +6381,74 @@
           "role_in_org"
         ],
         "title": "FacilitatorMembershipRead"
+      },
+      "FpgCoverageAddRequest": {
+        "properties": {
+          "people_id3": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "People Id3"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "people_id3"
+        ],
+        "title": "FpgCoverageAddRequest"
+      },
+      "FpgCoverageListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FpgCoverageRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "FpgCoverageListResponse"
+      },
+      "FpgCoverageRead": {
+        "properties": {
+          "people_id3": {
+            "type": "string",
+            "title": "People Id3"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "people_id3"
+        ],
+        "title": "FpgCoverageRead",
+        "description": "One row in the `facilitator_fpg_coverage` join table, with the\nFPG name pre-resolved so the UI doesn't have to round-trip."
       },
       "HTTPValidationError": {
         "properties": {

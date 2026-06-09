@@ -541,6 +541,141 @@ export async function searchAdminUsers(
   );
 }
 
+// ── Admin: Facilitating org management (#57) ─────────────────────────────
+
+type OrgAdminListBody =
+  paths["/v1/admin/facilitating-orgs"]["get"]["responses"]["200"]["content"]["application/json"];
+type OrgAdminReadBody =
+  paths["/v1/admin/facilitating-orgs/{org_id}"]["get"]["responses"]["200"]["content"]["application/json"]["org"];
+type OrgDetailBody =
+  paths["/v1/admin/facilitating-orgs/{org_id}"]["get"]["responses"]["200"]["content"]["application/json"];
+type OrgCreateBody =
+  paths["/v1/admin/facilitating-orgs"]["post"]["requestBody"]["content"]["application/json"];
+type OrgPatchBody =
+  paths["/v1/admin/facilitating-orgs/{org_id}"]["patch"]["requestBody"]["content"]["application/json"];
+type CoverageListBody =
+  paths["/v1/admin/facilitating-orgs/{org_id}/coverage"]["get"]["responses"]["200"]["content"]["application/json"];
+type CoverageReadBody =
+  paths["/v1/admin/facilitating-orgs/{org_id}/coverage"]["post"]["responses"]["201"]["content"]["application/json"];
+
+export async function listAdminFacilitatingOrgs(
+  ctx: ApiClientContext,
+): Promise<OrgAdminListBody> {
+  return _assertPresent(
+    await apiFetch<OrgAdminListBody>(ctx, "/v1/admin/facilitating-orgs"),
+    "/v1/admin/facilitating-orgs",
+  );
+}
+
+export async function createAdminFacilitatingOrg(
+  ctx: ApiClientContext,
+  body: OrgCreateBody,
+): Promise<OrgAdminReadBody> {
+  return _assertPresent(
+    await apiFetch<OrgAdminReadBody>(ctx, "/v1/admin/facilitating-orgs", {
+      method: "POST",
+      body,
+    }),
+    "/v1/admin/facilitating-orgs",
+  );
+}
+
+export async function getAdminFacilitatingOrg(
+  ctx: ApiClientContext,
+  orgId: string,
+): Promise<OrgDetailBody> {
+  return _assertPresent(
+    await apiFetch<OrgDetailBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}`,
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}`,
+  );
+}
+
+export async function patchAdminFacilitatingOrg(
+  ctx: ApiClientContext,
+  orgId: string,
+  body: OrgPatchBody,
+): Promise<OrgAdminReadBody> {
+  return _assertPresent(
+    await apiFetch<OrgAdminReadBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}`,
+      { method: "PATCH", body },
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}`,
+  );
+}
+
+export async function deactivateAdminFacilitatingOrg(
+  ctx: ApiClientContext,
+  orgId: string,
+): Promise<OrgAdminReadBody> {
+  return _assertPresent(
+    await apiFetch<OrgAdminReadBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}/deactivate`,
+      { method: "POST" },
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}/deactivate`,
+  );
+}
+
+export async function activateAdminFacilitatingOrg(
+  ctx: ApiClientContext,
+  orgId: string,
+): Promise<OrgAdminReadBody> {
+  return _assertPresent(
+    await apiFetch<OrgAdminReadBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}/activate`,
+      { method: "POST" },
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}/activate`,
+  );
+}
+
+export async function listAdminCoverage(
+  ctx: ApiClientContext,
+  orgId: string,
+): Promise<CoverageListBody> {
+  return _assertPresent(
+    await apiFetch<CoverageListBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}/coverage`,
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}/coverage`,
+  );
+}
+
+export async function addAdminCoverage(
+  ctx: ApiClientContext,
+  orgId: string,
+  peopleId3: string,
+): Promise<CoverageReadBody> {
+  return _assertPresent(
+    await apiFetch<CoverageReadBody>(
+      ctx,
+      `/v1/admin/facilitating-orgs/${orgId}/coverage`,
+      { method: "POST", body: { people_id3: peopleId3 } },
+    ),
+    `/v1/admin/facilitating-orgs/${orgId}/coverage`,
+  );
+}
+
+export async function removeAdminCoverage(
+  ctx: ApiClientContext,
+  orgId: string,
+  peopleId3: string,
+): Promise<void> {
+  await apiFetch<void>(
+    ctx,
+    `/v1/admin/facilitating-orgs/${orgId}/coverage/${encodeURIComponent(peopleId3)}`,
+    { method: "DELETE" },
+  );
+}
+
 type ContactEnrollmentsResponseBody =
   paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
 type ManualEnrollResponseBody =

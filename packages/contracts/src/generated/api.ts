@@ -610,6 +610,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/facilitating-orgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Facilitating Orgs
+         * @description List every org (including inactive) for the admin surface.
+         *
+         *     Ordering: active first, then name ascending. The public
+         *     `/v1/facilitating-orgs` endpoint excludes inactive rows; this
+         *     admin variant returns the whole table so staff can reactivate.
+         */
+        get: operations["admin_list_facilitating_orgs_v1_admin_facilitating_orgs_get"];
+        put?: never;
+        /** Admin Create Facilitating Org */
+        post: operations["admin_create_facilitating_org_v1_admin_facilitating_orgs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/facilitating-orgs/{org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Facilitating Org */
+        get: operations["admin_get_facilitating_org_v1_admin_facilitating_orgs__org_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Admin Patch Facilitating Org */
+        patch: operations["admin_patch_facilitating_org_v1_admin_facilitating_orgs__org_id__patch"];
+        trace?: never;
+    };
+    "/v1/admin/facilitating-orgs/{org_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Deactivate Facilitating Org */
+        post: operations["admin_deactivate_facilitating_org_v1_admin_facilitating_orgs__org_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/facilitating-orgs/{org_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Activate Facilitating Org */
+        post: operations["admin_activate_facilitating_org_v1_admin_facilitating_orgs__org_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/facilitating-orgs/{org_id}/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin List Coverage */
+        get: operations["admin_list_coverage_v1_admin_facilitating_orgs__org_id__coverage_get"];
+        put?: never;
+        /** Admin Add Coverage */
+        post: operations["admin_add_coverage_v1_admin_facilitating_orgs__org_id__coverage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/facilitating-orgs/{org_id}/coverage/{people_id3}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Admin Remove Coverage */
+        delete: operations["admin_remove_coverage_v1_admin_facilitating_orgs__org_id__coverage__people_id3__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns": {
         parameters: {
             query?: never;
@@ -1506,12 +1618,116 @@ export interface components {
             /** New Match Id */
             new_match_id?: string | null;
         };
+        /** FacilitatingOrgAdminListResponse */
+        FacilitatingOrgAdminListResponse: {
+            /** Items */
+            items: components["schemas"]["FacilitatingOrgAdminRead"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * FacilitatingOrgAdminRead
+         * @description Full admin view of a facilitating org row.
+         *
+         *     `capacity_remaining` is derived; the matching algorithm owns
+         *     `capacity_committed` and rejects external writes (see
+         *     PATCH below).
+         */
+        FacilitatingOrgAdminRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Country Code */
+            country_code?: string | null;
+            /** Language Codes */
+            language_codes?: string[] | null;
+            /** Capacity Total */
+            capacity_total: number;
+            /** Capacity Committed */
+            capacity_committed: number;
+            /** Capacity Remaining */
+            capacity_remaining: number;
+            /** Accepting Potential Adopters */
+            accepting_potential_adopters: boolean;
+            /** Is Triage Org */
+            is_triage_org: boolean;
+            /** Active */
+            active: boolean;
+            /** Source System */
+            source_system?: string | null;
+            /** Source Id */
+            source_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** FacilitatingOrgCreate */
+        FacilitatingOrgCreate: {
+            /** Name */
+            name: string;
+            /** Country Code */
+            country_code?: string | null;
+            /**
+             * Capacity Total
+             * @default 0
+             */
+            capacity_total: number;
+            /**
+             * Accepting Potential Adopters
+             * @default false
+             */
+            accepting_potential_adopters: boolean;
+            /**
+             * Is Triage Org
+             * @default false
+             */
+            is_triage_org: boolean;
+        };
+        /**
+         * FacilitatingOrgDetail
+         * @description Single-org view: row + FPG coverage + memberships in one trip.
+         */
+        FacilitatingOrgDetail: {
+            org: components["schemas"]["FacilitatingOrgAdminRead"];
+            /** Coverage */
+            coverage: components["schemas"]["FpgCoverageRead"][];
+            /** Memberships */
+            memberships: components["schemas"]["FacilitatorMembershipRead"][];
+        };
         /** FacilitatingOrgListResponse */
         FacilitatingOrgListResponse: {
             /** Items */
             items: components["schemas"]["FacilitatingOrgRead"][];
             /** Total */
             total: number;
+        };
+        /**
+         * FacilitatingOrgPatch
+         * @description Patch payload. `capacity_committed` is *intentionally* absent —
+         *     the matching algorithm is the only writer for that column.
+         */
+        FacilitatingOrgPatch: {
+            /** Name */
+            name?: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** Capacity Total */
+            capacity_total?: number | null;
+            /** Accepting Potential Adopters */
+            accepting_potential_adopters?: boolean | null;
+            /** Is Triage Org */
+            is_triage_org?: boolean | null;
         };
         /** FacilitatingOrgRead */
         FacilitatingOrgRead: {
@@ -1559,6 +1775,29 @@ export interface components {
             facilitator_org_id: string;
             /** Role In Org */
             role_in_org: string;
+        };
+        /** FpgCoverageAddRequest */
+        FpgCoverageAddRequest: {
+            /** People Id3 */
+            people_id3: string;
+        };
+        /** FpgCoverageListResponse */
+        FpgCoverageListResponse: {
+            /** Items */
+            items: components["schemas"]["FpgCoverageRead"][];
+        };
+        /**
+         * FpgCoverageRead
+         * @description One row in the `facilitator_fpg_coverage` join table, with the
+         *     FPG name pre-resolved so the UI doesn't have to round-trip.
+         */
+        FpgCoverageRead: {
+            /** People Id3 */
+            people_id3: string;
+            /** Name */
+            name?: string | null;
+            /** Country Code */
+            country_code?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3291,6 +3530,310 @@ export interface operations {
             path: {
                 user_subject_id: string;
                 role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_facilitating_orgs_v1_admin_facilitating_orgs_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgAdminListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_create_facilitating_org_v1_admin_facilitating_orgs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FacilitatingOrgCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgAdminRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_facilitating_org_v1_admin_facilitating_orgs__org_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_patch_facilitating_org_v1_admin_facilitating_orgs__org_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FacilitatingOrgPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgAdminRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_deactivate_facilitating_org_v1_admin_facilitating_orgs__org_id__deactivate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgAdminRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_activate_facilitating_org_v1_admin_facilitating_orgs__org_id__activate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacilitatingOrgAdminRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_coverage_v1_admin_facilitating_orgs__org_id__coverage_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FpgCoverageListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_add_coverage_v1_admin_facilitating_orgs__org_id__coverage_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FpgCoverageAddRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FpgCoverageRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_remove_coverage_v1_admin_facilitating_orgs__org_id__coverage__people_id3__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+                people_id3: string;
             };
             cookie?: never;
         };
