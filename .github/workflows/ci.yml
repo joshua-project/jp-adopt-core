@@ -75,7 +75,7 @@ jobs:
           DATABASE_URL: ${{ env.DATABASE_URL }}
 
   node:
-    name: pnpm (contracts, web build)
+    name: pnpm (contracts, web build + test)
     runs-on: ubuntu-latest
 
     steps:
@@ -126,3 +126,6 @@ jobs:
 
       - name: Build web
         run: pnpm --filter web build
+
+      - name: Test web
+        run: pnpm --filter web test

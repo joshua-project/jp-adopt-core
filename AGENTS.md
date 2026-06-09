@@ -54,6 +54,19 @@ Postgres on host `:5434`, Redis on `:6379`. Auth in dev: paste
 the API accept it. See `docs/runbooks/local-dev.md` for the docker
 compose + Tailscale paths.
 
+**Tests:**
+
+```bash
+cd apps/api && uv run --extra dev pytest        # API tests (Postgres required)
+pnpm --filter web test                          # Web tests (vitest + RTL)
+pnpm --filter web test:watch                    # Web tests in watch mode
+```
+
+Vitest config lives at `apps/web/vitest.config.ts`; global setup
+(jest-dom matchers, cleanup) at `apps/web/src/test/setup.ts`. Tests
+go in `__tests__/` folders next to the code, or as `*.test.ts(x)`
+siblings. CI runs both suites on every PR.
+
 ## Conventions specific to this codebase
 
 - **State-machine via HTTP, not generic PATCH.** `adopter_status` and
