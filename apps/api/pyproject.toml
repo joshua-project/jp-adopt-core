@@ -22,14 +22,6 @@ dependencies = [
     # gracefully — the admin endpoints still work, they just don't
     # surface display names / can't search by email.
     "msal>=1.31.0",
-    # psycopg3 (sync) for Alembic migrations. The runtime app uses
-    # asyncpg via SQLAlchemy 2's async engine; Alembic needs a sync
-    # driver and connects via the `db-url-migrator` KV secret whose
-    # scheme is `postgresql+psycopg://` (the SQLAlchemy v2 psycopg3
-    # dialect). Required by .github/workflows/deploy.yml's `migrate`
-    # job; without this, `uv run alembic upgrade head` errors with
-    # `ModuleNotFoundError: No module named 'psycopg'`.
-    "psycopg[binary]>=3.2.0",
     "pydantic-settings>=2.7.0",
     "pyjwt[crypto]>=2.10.0",
     "sqlalchemy[asyncio]>=2.0.36",
@@ -41,6 +33,18 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.8.0",
+]
+# #65 (P1): psycopg3 (sync) is only needed by Alembic migrations.
+# The runtime app uses asyncpg via SQLAlchemy 2's async engine;
+# Alembic needs a sync driver and connects via the
+# ``db-url-migrator`` KV secret whose scheme is
+# ``postgresql+psycopg://`` (the SQLAlchemy v2 psycopg3 dialect).
+# Keeping psycopg in a `migrate` extra strips ~5-7 MB of unused
+# binary deps out of the production container image. The migrate
+# CI job installs with ``uv sync --package jp-adopt-api --extra
+# migrate``; the API runtime container does NOT install this extra.
+migrate = [
+    "psycopg[binary]>=3.2.0",
 ]
 
 [build-system]

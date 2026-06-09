@@ -7,6 +7,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 
+import type { ReactNode } from "react";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
@@ -35,8 +36,7 @@ vi.mock("@azure/msal-browser", () => ({
 }));
 vi.mock("@azure/msal-react", () => ({
   useMsal: () => ({ instance: null, accounts: [] }),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  MsalProvider: ({ children }: { children: any }) => children,
+  MsalProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
 afterEach(() => {
