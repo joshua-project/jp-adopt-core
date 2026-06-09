@@ -6,6 +6,7 @@ import type { paths } from "@jp-adopt/contracts";
 
 import { ApiError, apiFetch, formatApiError } from "../lib/api-client";
 import { useApiContext } from "../lib/useApiContext";
+import { AdminUserTypeahead } from "./AdminUserTypeahead";
 
 type UserRoleListResponse =
   paths["/v1/admin/user-roles"]["get"]["responses"]["200"]["content"]["application/json"];
@@ -23,6 +24,11 @@ export function AdminUserRoles() {
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [userSubjectId, setUserSubjectId] = useState("");
+  // Display name + UPN for the currently-selected user (when a Graph
+  // search result is picked). Used for friendlier toast text on grant.
+  const [pickedDisplay, setPickedDisplay] = useState<
+    { name: string | null; upn: string | null } | null
+  >(null);
   const [roleId, setRoleId] = useState("");
   const [isSubmitting, startSubmit] = useTransition();
   const [revokingKey, setRevokingKey] = useState<string | null>(null);
@@ -65,10 +71,13 @@ export function AdminUserRoles() {
       return;
     }
     const selectedRole = roles.find((r) => r.id === roleId);
+    // Friendlier label in the confirm + toast when we have it.
+    const friendlyTarget =
+      pickedDisplay?.name ?? pickedDisplay?.upn ?? oid;
     if (
       selectedRole?.name === "staff_admin" &&
       !window.confirm(
-        `Grant staff_admin to ${oid}? This grants full platform admin access.`,
+        `Grant staff_admin to ${friendlyTarget}? This grants full platform admin access.`,
       )
     ) {
       return;
@@ -82,17 +91,18 @@ export function AdminUserRoles() {
           });
           setMsg(
             granted
-              ? `Granted ${granted.role_name} to ${granted.user_subject_id}.`
+              ? `Granted ${granted.role_name} to ${friendlyTarget}.`
               : "Role granted.",
           );
           setUserSubjectId("");
+          setPickedDisplay(null);
           await load();
         } catch (e) {
           setErr(formatApiError(e));
         }
       })();
     });
-  }, [ctx, load, roleId, roles, userSubjectId]);
+  }, [ctx, load, pickedDisplay, roleId, roles, userSubjectId]);
 
   const revoke = useCallback(
     (row: UserRoleListResponse["items"][number]) => {
@@ -170,18 +180,14 @@ export function AdminUserRoles() {
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-900">Grant role</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="block text-sm">
-            <span className="text-slate-600">Entra user OID (UUID)</span>
-            <input
-              type="text"
+          <div className="block text-sm">
+            <AdminUserTypeahead
               value={userSubjectId}
-              onChange={(e) => setUserSubjectId(e.target.value)}
-              placeholder="e.g. 546dce1f-9e3b-422d-a938-f5a9437f164e"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-              autoComplete="off"
-              spellCheck={false}
+              onChange={setUserSubjectId}
+              onDisplayChange={setPickedDisplay}
+              disabled={isSubmitting}
             />
-          </label>
+          </div>
           <label className="block text-sm">
             <span className="text-slate-600">Role</span>
             <select
@@ -220,7 +226,7 @@ export function AdminUserRoles() {
             <table className="min-w-full text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50/50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-4 py-2 font-medium">User subject ID</th>
+                  <th className="px-4 py-2 font-medium">User</th>
                   <th className="px-4 py-2 font-medium">Role</th>
                   <th className="px-4 py-2 font-medium">Granted at</th>
                   <th className="px-4 py-2 font-medium">
@@ -231,8 +237,23 @@ export function AdminUserRoles() {
               <tbody className="divide-y divide-slate-100">
                 {items.map((row) => (
                   <tr key={`${row.user_subject_id}-${row.role_id}`}>
-                    <td className="max-w-xs truncate px-4 py-3 font-mono text-xs text-slate-800">
-                      {row.user_subject_id}
+                    <td className="max-w-xs px-4 py-3 text-slate-800">
+                      <div className="font-medium text-slate-900">
+                        {row.user_display_name ??
+                          row.user_principal_name ??
+                          row.user_subject_id}
+                      </div>
+                      {row.user_principal_name && row.user_display_name ? (
+                        <div className="text-xs text-slate-500">
+                          {row.user_principal_name}
+                        </div>
+                      ) : null}
+                      <div
+                        className="truncate font-mono text-[11px] text-slate-400"
+                        title={row.user_subject_id}
+                      >
+                        {row.user_subject_id}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-800">{row.role_name}</td>
                     <td className="px-4 py-3 text-slate-600">
