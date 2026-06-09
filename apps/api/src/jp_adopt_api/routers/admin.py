@@ -15,7 +15,7 @@ gated on ``require_role('staff_admin')``:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 import sqlalchemy
@@ -36,6 +36,7 @@ from jp_adopt_api.models import (
     FacilitatorFpgCoverage,
     FacilitatorOrgMembership,
     Fpg,
+    IntakeApiKey,
     Match,
     Role,
     UserRole,
@@ -1014,4 +1015,164 @@ async def admin_remove_coverage(
         },
     )
     await db.commit()
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# #59: Admin intake API key management
+# ──────────────────────────────────────────────────────────────────────────
+
+import hashlib as _hashlib
+import secrets as _secrets
+
+
+class IntakeApiKeyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    consumer_label: str
+    note: str | None
+    created_by_user_id: str
+    created_at: datetime
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+    last_used_ip: str | None
+    last_used_user_agent: str | None
+
+
+class IntakeApiKeyListResponse(BaseModel):
+    items: list[IntakeApiKeyRead]
+    total: int
+
+
+class IntakeApiKeyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consumer_label: str = Field(min_length=1, max_length=128)
+    note: str | None = Field(default=None, max_length=2048)
+
+
+class IntakeApiKeyCreated(BaseModel):
+    """One-time response on mint — ``plaintext`` is shown only here."""
+
+    id: uuid.UUID
+    consumer_label: str
+    note: str | None
+    created_at: datetime
+    plaintext: str
+
+
+@router.get(
+    "/v1/admin/intake-keys",
+    response_model=IntakeApiKeyListResponse,
+)
+async def list_intake_keys(
+    db: DbSession,
+    _: Annotated[
+        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> IntakeApiKeyListResponse:
+    """List all intake API keys (active + revoked).
+
+    Plaintext keys are NEVER returned — only their metadata. The
+    one-time plaintext is shown on the POST response and lost
+    forever after.
+    """
+    rows = (
+        await db.execute(
+            select(IntakeApiKey).order_by(
+                IntakeApiKey.revoked_at.asc().nulls_first(),
+                IntakeApiKey.created_at.desc(),
+            )
+        )
+    ).scalars().all()
+    items = [IntakeApiKeyRead.model_validate(r) for r in rows]
+    return IntakeApiKeyListResponse(items=items, total=len(items))
+
+
+@router.post(
+    "/v1/admin/intake-keys",
+    response_model=IntakeApiKeyCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+async def mint_intake_key(
+    body: IntakeApiKeyCreate,
+    db: DbSession,
+    auth: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> IntakeApiKeyCreated:
+    """Mint a fresh intake API key. The plaintext is returned ONCE in
+    the response — there's no way to recover it later. Hash-at-rest
+    means even DB exfiltration doesn't leak the credential."""
+    user, _ = auth
+    # 32 bytes of entropy as urlsafe base64, ~43 chars — long enough
+    # that brute-force is infeasible, short enough to paste cleanly.
+    plaintext = _secrets.token_urlsafe(32)
+    key_hash = _hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+    row = IntakeApiKey(
+        id=uuid.uuid4(),
+        key_hash=key_hash,
+        consumer_label=body.consumer_label.strip(),
+        note=(body.note.strip() if body.note else None),
+        created_by_user_id=user.sub,
+    )
+    db.add(row)
+    await db.flush()
+    emit_outbox(
+        db,
+        event_type="jp.adopt.v1.intake_key.created",
+        payload={
+            "actor_subject_id": user.sub,
+            "intake_api_key_id": str(row.id),
+            "consumer_label": row.consumer_label,
+        },
+    )
+    await db.commit()
+    await db.refresh(row)
+    return IntakeApiKeyCreated(
+        id=row.id,
+        consumer_label=row.consumer_label,
+        note=row.note,
+        created_at=row.created_at,
+        plaintext=plaintext,
+    )
+
+
+@router.delete(
+    "/v1/admin/intake-keys/{key_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_intake_key(
+    key_id: uuid.UUID,
+    db: DbSession,
+    auth: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> None:
+    """Soft-delete a key by stamping ``revoked_at``. The row stays so
+    the audit trail (``last_used_*``) survives; the auth path
+    filters on ``revoked_at IS NULL`` so the key stops working
+    immediately."""
+    user, _ = auth
+    row = (
+        await db.execute(select(IntakeApiKey).where(IntakeApiKey.id == key_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "intake_key_not_found", "message": "No such key"},
+        )
+    if row.revoked_at is None:
+        row.revoked_at = datetime.now(UTC)
+        emit_outbox(
+            db,
+            event_type="jp.adopt.v1.intake_key.revoked",
+            payload={
+                "actor_subject_id": user.sub,
+                "intake_api_key_id": str(row.id),
+                "consumer_label": row.consumer_label,
+            },
+        )
+        await db.commit()
     return None

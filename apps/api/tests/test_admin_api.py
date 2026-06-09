@@ -1073,3 +1073,141 @@ async def test_admin_add_coverage_404_when_fpg_missing(
     )
     assert r.status_code == 404, r.text
     assert r.json()["detail"]["code"] == "fpg_not_found"
+
+
+# ─── #59: Admin intake API key management ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_admin_mint_intake_key_returns_plaintext_once(
+    client: TestClient, session: AsyncSession
+) -> None:
+    from jp_adopt_api.models import IntakeApiKey
+
+    r = client.post(
+        "/v1/admin/intake-keys",
+        json={"consumer_label": "test-consumer", "note": "smoke test"},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["consumer_label"] == "test-consumer"
+    assert body["note"] == "smoke test"
+    assert isinstance(body["plaintext"], str)
+    assert len(body["plaintext"]) >= 32
+
+    try:
+        r = client.get("/v1/admin/intake-keys", headers=_auth_headers())
+        assert r.status_code == 200, r.text
+        items = r.json()["items"]
+        match = next(item for item in items if item["id"] == body["id"])
+        assert "plaintext" not in match
+        assert match["consumer_label"] == "test-consumer"
+        assert match["revoked_at"] is None
+    finally:
+        await session.execute(
+            delete(IntakeApiKey).where(IntakeApiKey.id == uuid.UUID(body["id"]))
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_mint_intake_key_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fac(db: object, sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fac)
+    r = client.post(
+        "/v1/admin/intake-keys",
+        json={"consumer_label": "x"},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_admin_revoke_intake_key_marks_revoked_at(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """HTTP-level coverage of the revoke path. Asserts the DB column
+    flips; the auth-side behavior (that revoked keys stop working)
+    is covered by the partial index in the migration and by manual
+    smoke."""
+    from jp_adopt_api.models import IntakeApiKey
+
+    r = client.post(
+        "/v1/admin/intake-keys",
+        json={"consumer_label": "for-revoke"},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 201, r.text
+    key_id = uuid.UUID(r.json()["id"])
+
+    try:
+        r = client.delete(
+            f"/v1/admin/intake-keys/{key_id}", headers=_auth_headers()
+        )
+        assert r.status_code == 204, r.text
+        # Subsequent GET shows the row with revoked_at populated.
+        r = client.get("/v1/admin/intake-keys", headers=_auth_headers())
+        assert r.status_code == 200, r.text
+        match = next(item for item in r.json()["items"] if item["id"] == str(key_id))
+        assert match["revoked_at"] is not None
+    finally:
+        await session.execute(
+            delete(IntakeApiKey).where(IntakeApiKey.id == key_id)
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_revoke_unknown_intake_key_404(client: TestClient) -> None:
+    r = client.delete(
+        f"/v1/admin/intake-keys/{uuid.uuid4()}", headers=_auth_headers()
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "intake_key_not_found"
+
+
+@pytest.mark.asyncio
+async def test_intake_db_key_starts_unused(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """Smoke that a freshly-minted key has last_used_at None and
+    the row carries every expected metadata field. (The actual
+    last-used update on auth is covered by the existing intake
+    tests once an integration runs.)"""
+    from jp_adopt_api.models import IntakeApiKey
+
+    r = client.post(
+        "/v1/admin/intake-keys",
+        json={"consumer_label": "metadata-smoke", "note": "audit-trail"},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 201, r.text
+    key_id = uuid.UUID(r.json()["id"])
+
+    try:
+        row = (
+            await session.execute(
+                select(IntakeApiKey).where(IntakeApiKey.id == key_id)
+            )
+        ).scalar_one()
+        assert row.consumer_label == "metadata-smoke"
+        assert row.note == "audit-trail"
+        assert row.revoked_at is None
+        assert row.last_used_at is None
+        assert row.last_used_ip is None
+        assert row.last_used_user_agent is None
+        # key_hash is a SHA-256 hex (64 chars), not the plaintext.
+        assert len(row.key_hash) == 64
+        assert row.key_hash != r.json()["plaintext"]
+    finally:
+        await session.execute(
+            delete(IntakeApiKey).where(IntakeApiKey.id == key_id)
+        )
+        await session.commit()

@@ -1465,3 +1465,51 @@ class DigestRecipient(Base):
         DateTime(timezone=True), nullable=True
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class IntakeApiKey(Base):
+    """#59: DB-backed bearer credential for intake endpoints.
+
+    Plaintext key is shown only once (on POST /v1/admin/intake-keys);
+    only the SHA-256 hex digest lives at rest. Revocation is a soft
+    delete via ``revoked_at`` — the row stays so the audit trail
+    (``last_used_at`` / IP / UA) survives.
+    """
+
+    __tablename__ = "intake_api_key"
+    __table_args__ = (
+        Index(
+            "uq_intake_api_key_key_hash",
+            "key_hash",
+            unique=True,
+        ),
+        Index(
+            "ix_intake_api_key_active_hash",
+            "key_hash",
+            postgresql_where="revoked_at IS NULL",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+        default=uuid.uuid4,
+    )
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    consumer_label: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_used_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
