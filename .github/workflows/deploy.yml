@@ -664,7 +664,12 @@ jobs:
           set -euo pipefail
           # URL-encode the password to survive special chars.
           PW_ENC=$(python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=''))" "${DT_MYSQL_PASSWORD}")
-          DT_MYSQL_URL="mysql+pymysql://${DT_MYSQL_USERNAME}:${PW_ENC}@${DT_MYSQL_HOST}:3306/${DT_MYSQL_DATABASE}?ssl_mode=REQUIRED"
+          # `?ssl_mode=REQUIRED` is a MySQL CLI/connector flag — pymysql
+          # ignores it as a URL query param and SQLAlchemy then errors
+          # with `Connection.__init__() got an unexpected keyword
+          # argument 'ssl_mode'`. Azure MySQL Flex enforces SSL
+          # server-side regardless; pymysql negotiates it automatically.
+          DT_MYSQL_URL="mysql+pymysql://${DT_MYSQL_USERNAME}:${PW_ENC}@${DT_MYSQL_HOST}:3306/${DT_MYSQL_DATABASE}"
           # Mask the URL in workflow logs (password is part of it).
           echo "::add-mask::${DT_MYSQL_URL}"
           echo "DT_MYSQL_URL=${DT_MYSQL_URL}" >> "$GITHUB_ENV"
