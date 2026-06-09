@@ -7,8 +7,37 @@
  */
 import "@testing-library/jest-dom/vitest";
 
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+
+// #106: MSAL pins the Node event loop when loaded under jsdom — its
+// constructor schedules background work that the vitest worker can't
+// reclaim, so a test file that transitively imports api-client (which
+// imports msalConfig which imports @azure/msal-browser) hangs at
+// worker teardown. Globally mocking both MSAL packages here prevents
+// the real ones from loading in any test, no matter how they get
+// pulled in.
+vi.mock("@azure/msal-browser", () => ({
+  InteractionRequiredAuthError: class InteractionRequiredAuthError extends Error {},
+  PublicClientApplication: class {
+    initialize = async () => {};
+    getActiveAccount = () => null;
+    setActiveAccount = () => {};
+    addEventCallback = () => "";
+    removeEventCallback = () => {};
+    acquireTokenSilent = async () => ({ accessToken: "test-token" });
+    acquireTokenRedirect = async () => {};
+    logoutRedirect = async () => {};
+    getAllAccounts = () => [];
+  },
+  EventType: {},
+  LogLevel: {},
+}));
+vi.mock("@azure/msal-react", () => ({
+  useMsal: () => ({ instance: null, accounts: [] }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  MsalProvider: ({ children }: { children: any }) => children,
+}));
 
 afterEach(() => {
   cleanup();

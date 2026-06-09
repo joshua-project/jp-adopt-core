@@ -10,7 +10,7 @@ import { useApiContext } from "../lib/useApiContext";
 type Hit =
   paths["/v1/admin/users/search"]["get"]["responses"]["200"]["content"]["application/json"]["items"][number];
 
-const DEBOUNCE_MS = 250;
+const DEFAULT_DEBOUNCE_MS = 250;
 const _ENTRA_OID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -28,17 +28,50 @@ const _ENTRA_OID_PATTERN =
  * (an OID). This component reports it via ``onChange`` whenever the
  * user types a literal OID or picks a search result.
  */
+/**
+ * Default search backend — wraps the typed api-client helper.
+ * Extracted so tests can inject their own without pulling MSAL
+ * transitively through `searchAdminUsers`'s module graph (which
+ * was the root cause of #106's vitest worker hang).
+ */
+type SearchFn = (
+  ctx: ReturnType<typeof useApiContext>,
+  q: string,
+  opts: { signal: AbortSignal },
+) => Promise<{
+  items: Array<{
+    user_subject_id: string;
+    display_name: string | null;
+    user_principal_name: string | null;
+    mail: string | null;
+  }>;
+  graph_configured: boolean;
+}>;
+
 export function AdminUserTypeahead({
   value,
   onChange,
   onDisplayChange,
   disabled,
+  debounceMs = DEFAULT_DEBOUNCE_MS,
+  searchFn = searchAdminUsers as unknown as SearchFn,
 }: {
   value: string;
   onChange: (oid: string) => void;
   /** Reported back so the grant button can render "Grant to Amy Adopter". */
   onDisplayChange?: (display: { name: string | null; upn: string | null } | null) => void;
   disabled?: boolean;
+  /**
+   * Injectable so unit tests can pass `0` and skip the debounce timer
+   * entirely. The default 250ms is what real users see.
+   */
+  debounceMs?: number;
+  /**
+   * Injectable search backend. Tests pass a synchronous fake to avoid
+   * loading the real api-client (which transitively imports MSAL —
+   * the root cause of #106's vitest worker-teardown hang).
+   */
+  searchFn?: SearchFn;
 }) {
   const ctx = useApiContext();
   const listboxId = useId();
@@ -76,10 +109,10 @@ export function AdminUserTypeahead({
     const ctrl = new AbortController();
     abortRef.current?.abort();
     abortRef.current = ctrl;
-    const t = window.setTimeout(() => {
+    const fire = () => {
       setLoading(true);
       setErr(null);
-      searchAdminUsers(ctx, trimmed, { signal: ctrl.signal })
+      searchFn(ctx, trimmed, { signal: ctrl.signal })
         .then((res) => {
           if (ctrl.signal.aborted) return;
           setHits(res.items);
@@ -93,12 +126,21 @@ export function AdminUserTypeahead({
         .finally(() => {
           if (!ctrl.signal.aborted) setLoading(false);
         });
-    }, DEBOUNCE_MS);
+    };
+    // debounceMs=0 skips the timer entirely — used by unit tests so
+    // there's no setTimeout to keep the test worker alive (see #106).
+    if (debounceMs === 0) {
+      fire();
+      return () => {
+        ctrl.abort();
+      };
+    }
+    const t = window.setTimeout(fire, debounceMs);
     return () => {
       window.clearTimeout(t);
       ctrl.abort();
     };
-  }, [query, ctx, picked]);
+  }, [query, ctx, picked, debounceMs, searchFn]);
 
   const onPick = (hit: Hit) => {
     setPicked(hit);
