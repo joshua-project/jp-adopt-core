@@ -2030,7 +2030,7 @@
           "admin"
         ],
         "summary": "List User Roles",
-        "description": "List all ``user_roles`` grants joined with role names.",
+        "description": "List all ``user_roles`` grants joined with role names.\n\nWhen Graph is configured (#97), each row is enriched with the\n``user_display_name`` and ``user_principal_name`` fields via a\nsingle batched Graph call. Failures (timeout, missing user,\nunconfigured) degrade silently to OID-only output.",
         "operationId": "list_user_roles_v1_admin_user_roles_get",
         "parameters": [
           {
@@ -2115,6 +2115,65 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserRoleRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users/search": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Search Directory Users",
+        "description": "Typeahead search for Entra users by name / email prefix.\n\nUsed by the admin UI's grant form so operators can type a name\ninstead of pasting an OID. Returns ``[]`` (with ``graph_configured=False``)\nin dev environments where the AZURE_GRAPH_* env vars aren't set,\nso the UI can fall back to the raw OID input gracefully.",
+        "operationId": "search_directory_users_v1_admin_users_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSearchResponse"
                 }
               }
             }
@@ -6574,6 +6633,11 @@
           "total": {
             "type": "integer",
             "title": "Total"
+          },
+          "graph_enriched": {
+            "type": "boolean",
+            "title": "Graph Enriched",
+            "default": false
           }
         },
         "type": "object",
@@ -6602,6 +6666,28 @@
             "type": "string",
             "format": "date-time",
             "title": "Granted At"
+          },
+          "user_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Display Name"
+          },
+          "user_principal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Principal Name"
           }
         },
         "type": "object",
@@ -6612,6 +6698,77 @@
           "granted_at"
         ],
         "title": "UserRoleRead"
+      },
+      "UserSearchHit": {
+        "properties": {
+          "user_subject_id": {
+            "type": "string",
+            "title": "User Subject Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "user_principal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Principal Name"
+          },
+          "mail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_subject_id",
+          "display_name",
+          "user_principal_name",
+          "mail"
+        ],
+        "title": "UserSearchHit",
+        "description": "One row in the admin user-search typeahead response."
+      },
+      "UserSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserSearchHit"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "graph_configured": {
+            "type": "boolean",
+            "title": "Graph Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "graph_configured"
+        ],
+        "title": "UserSearchResponse"
       },
       "ValidationError": {
         "properties": {

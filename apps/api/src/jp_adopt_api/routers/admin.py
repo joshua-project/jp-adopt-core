@@ -26,6 +26,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.deps import DbSession, require_role
+from jp_adopt_api.graph import (
+    graph_configured,
+    lookup_users_by_ids,
+    search_users,
+)
 from jp_adopt_api.models import FacilitatingOrg, FacilitatorOrgMembership, Role, UserRole
 from jp_adopt_api.outbox_suppression import emit_outbox
 
@@ -91,11 +96,38 @@ class UserRoleRead(BaseModel):
     role_id: uuid.UUID
     role_name: str
     granted_at: datetime
+    # Graph enrichment (#97). Both are best-effort: when Graph is
+    # unconfigured or the OID isn't resolvable they stay None and
+    # the UI falls back to displaying the OID.
+    user_display_name: str | None = None
+    user_principal_name: str | None = None
 
 
 class UserRoleListResponse(BaseModel):
     items: list[UserRoleRead]
     total: int
+    # `True` when the Graph backend is wired and was reachable for
+    # this response. UI surfaces use this to decide whether to show
+    # an "enable Graph for friendlier names" hint or just render
+    # OIDs silently. False here is not an error.
+    graph_enriched: bool = False
+
+
+class UserSearchHit(BaseModel):
+    """One row in the admin user-search typeahead response."""
+
+    user_subject_id: str
+    display_name: str | None
+    user_principal_name: str | None
+    mail: str | None
+
+
+class UserSearchResponse(BaseModel):
+    items: list[UserSearchHit]
+    # `graph_configured` is False in dev where the AZURE_GRAPH_*
+    # env vars aren't set. The UI shows an inline notice in that
+    # case rather than a flat empty result.
+    graph_configured: bool
 
 
 _ENTRA_OID_PATTERN = (
@@ -262,7 +294,13 @@ async def list_user_roles(
         tuple[object, frozenset[str]], Depends(_staff_admin_dep)
     ],
 ) -> UserRoleListResponse:
-    """List all ``user_roles`` grants joined with role names."""
+    """List all ``user_roles`` grants joined with role names.
+
+    When Graph is configured (#97), each row is enriched with the
+    ``user_display_name`` and ``user_principal_name`` fields via a
+    single batched Graph call. Failures (timeout, missing user,
+    unconfigured) degrade silently to OID-only output.
+    """
     rows = (
         await db.execute(
             select(UserRole, Role.name)
@@ -270,16 +308,62 @@ async def list_user_roles(
             .order_by(UserRole.granted_at.desc())
         )
     ).all()
+    oids = list({ur.user_subject_id for ur, _name in rows if ur.user_subject_id})
+    graph_users = await lookup_users_by_ids(oids) if oids else {}
     items = [
         UserRoleRead(
             user_subject_id=ur.user_subject_id,
             role_id=ur.role_id,
             role_name=role_name,
             granted_at=ur.granted_at,
+            user_display_name=(
+                graph_users[ur.user_subject_id].display_name
+                if ur.user_subject_id in graph_users
+                else None
+            ),
+            user_principal_name=(
+                graph_users[ur.user_subject_id].user_principal_name
+                if ur.user_subject_id in graph_users
+                else None
+            ),
         )
         for ur, role_name in rows
     ]
-    return UserRoleListResponse(items=items, total=len(items))
+    return UserRoleListResponse(
+        items=items,
+        total=len(items),
+        graph_enriched=bool(graph_users),
+    )
+
+
+@router.get(
+    "/v1/admin/users/search",
+    response_model=UserSearchResponse,
+)
+async def search_directory_users(
+    q: str,
+    _: Annotated[
+        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> UserSearchResponse:
+    """Typeahead search for Entra users by name / email prefix.
+
+    Used by the admin UI's grant form so operators can type a name
+    instead of pasting an OID. Returns ``[]`` (with ``graph_configured=False``)
+    in dev environments where the AZURE_GRAPH_* env vars aren't set,
+    so the UI can fall back to the raw OID input gracefully.
+    """
+    hits = await search_users(q)
+    items = [
+        UserSearchHit(
+            user_subject_id=u.id,
+            display_name=u.display_name,
+            user_principal_name=u.user_principal_name,
+            mail=u.mail,
+        )
+        for u in hits
+    ]
+    return UserSearchResponse(items=items, graph_configured=graph_configured())
 
 
 @router.post(
