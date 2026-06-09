@@ -507,6 +507,12 @@ jobs:
           # secret-ref on the container app.
           FORMS_EXPORT_URL: op://JP Adopt Platform/Adopt Core - Production/forms-export-url
           FORMS_EXPORT_API_KEY: op://JP Adopt Platform/Adopt Core - Production/forms-export-api-key
+          # #97: Graph user-lookup secrets — loaded here (not just preflight)
+          # because the per-deploy `az containerapp secret set` and
+          # `--set-env-vars` calls below resolve ${{ env.AZURE_GRAPH_* }} in
+          # THIS job's env, not preflight's.
+          AZURE_GRAPH_CLIENT_ID: op://JP Adopt Platform/Adopt Core - Production/azure-graph-client-id
+          AZURE_GRAPH_CLIENT_SECRET: op://JP Adopt Platform/Adopt Core - Production/azure-graph-client-secret
         with:
           export-env: true
 
