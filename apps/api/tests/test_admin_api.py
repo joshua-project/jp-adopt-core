@@ -27,7 +27,9 @@ from jp_adopt_api.config import get_settings
 from jp_adopt_api.main import app
 from jp_adopt_api.models import (
     FacilitatingOrg,
+    FacilitatorFpgCoverage,
     FacilitatorOrgMembership,
+    Fpg,
     Outbox,
     Role,
     UserRole,
@@ -703,3 +705,371 @@ async def test_revoke_own_staff_admin_forbidden(
         delete(UserRole).where(UserRole.user_subject_id == admin_sub)
     )
     await session.commit()
+
+
+# ─── #57: Admin facilitating-org management ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_admin_list_facilitating_orgs_includes_inactive(
+    client: TestClient, session: AsyncSession
+) -> None:
+    inactive = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Inactive {uuid.uuid4().hex[:6]}",
+        capacity_total=0,
+        active=False,
+    )
+    session.add(inactive)
+    await session.commit()
+    try:
+        r = client.get("/v1/admin/facilitating-orgs", headers=_auth_headers())
+        assert r.status_code == 200, r.text
+        ids = {item["id"] for item in r.json()["items"]}
+        assert str(inactive.id) in ids
+        row = next(item for item in r.json()["items"] if item["id"] == str(inactive.id))
+        # capacity_remaining is derived.
+        assert row["capacity_remaining"] == 0
+        assert row["active"] is False
+    finally:
+        await session.execute(
+            delete(FacilitatingOrg).where(FacilitatingOrg.id == inactive.id)
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_list_facilitating_orgs_requires_staff_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jp_adopt_api import deps as deps_module
+
+    async def _fac(db: object, sub: str) -> frozenset[str]:
+        return frozenset({"facilitator"})
+
+    monkeypatch.setattr(deps_module, "load_user_roles", _fac)
+    r = client.get("/v1/admin/facilitating-orgs", headers=_auth_headers())
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_admin_create_org(
+    client: TestClient, session: AsyncSession
+) -> None:
+    payload = {
+        "name": f"TST Create {uuid.uuid4().hex[:6]}",
+        "country_code": "US",
+        "capacity_total": 10,
+        "accepting_potential_adopters": True,
+    }
+    r = client.post(
+        "/v1/admin/facilitating-orgs", json=payload, headers=_auth_headers()
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == payload["name"]
+    assert body["capacity_total"] == 10
+    assert body["capacity_remaining"] == 10
+    assert body["active"] is True
+    try:
+        # Idempotent re-creation by name is NOT supported — the second
+        # POST creates a second org. This test confirms the create path
+        # works; uniqueness on name is enforced at the application
+        # layer if needed by callers.
+        await session.execute(
+            delete(FacilitatingOrg).where(FacilitatingOrg.id == uuid.UUID(body["id"]))
+        )
+        await session.commit()
+    except Exception:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_admin_create_org_rejects_second_triage(
+    client: TestClient, session: AsyncSession
+) -> None:
+    existing_triage = (
+        await session.execute(
+            select(FacilitatingOrg.id).where(FacilitatingOrg.is_triage_org.is_(True))
+        )
+    ).scalar_one_or_none()
+    # If there's no triage org yet, create one for the duration of this test.
+    cleanup_id: uuid.UUID | None = None
+    if existing_triage is None:
+        triage = FacilitatingOrg(
+            id=uuid.uuid4(),
+            name=f"TST Triage {uuid.uuid4().hex[:6]}",
+            capacity_total=0,
+            is_triage_org=True,
+            active=True,
+        )
+        session.add(triage)
+        await session.commit()
+        cleanup_id = triage.id
+
+    try:
+        r = client.post(
+            "/v1/admin/facilitating-orgs",
+            json={
+                "name": f"TST Second Triage {uuid.uuid4().hex[:6]}",
+                "is_triage_org": True,
+            },
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "triage_org_exists"
+    finally:
+        if cleanup_id is not None:
+            await session.execute(
+                delete(FacilitatingOrg).where(FacilitatingOrg.id == cleanup_id)
+            )
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_get_org_includes_coverage_and_memberships(
+    client: TestClient, session: AsyncSession, _seeded_org: FacilitatingOrg
+) -> None:
+    # Seed an FPG + coverage row + a membership so the detail view has all
+    # three slots populated.
+    fpg = Fpg(
+        people_id3=f"T{uuid.uuid4().hex[:5].upper()}",
+        name="Test FPG",
+        country_code="US",
+    )
+    session.add(fpg)
+    await session.flush()
+    session.add(
+        FacilitatorFpgCoverage(
+            facilitator_org_id=_seeded_org.id, people_id3=fpg.people_id3
+        )
+    )
+    membership = FacilitatorOrgMembership(
+        user_subject_id=f"mem-{uuid.uuid4().hex[:8]}",
+        facilitator_org_id=_seeded_org.id,
+        role_in_org="member",
+    )
+    session.add(membership)
+    await session.commit()
+    try:
+        r = client.get(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["org"]["id"] == str(_seeded_org.id)
+        assert any(c["people_id3"] == fpg.people_id3 for c in body["coverage"])
+        assert any(
+            m["user_subject_id"] == membership.user_subject_id
+            for m in body["memberships"]
+        )
+    finally:
+        await session.execute(
+            delete(FacilitatorFpgCoverage).where(
+                FacilitatorFpgCoverage.facilitator_org_id == _seeded_org.id
+            )
+        )
+        await session.execute(delete(Fpg).where(Fpg.people_id3 == fpg.people_id3))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_get_org_404_when_missing(client: TestClient) -> None:
+    r = client.get(
+        f"/v1/admin/facilitating-orgs/{uuid.uuid4()}", headers=_auth_headers()
+    )
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.asyncio
+async def test_admin_patch_org_updates_fields(
+    client: TestClient, session: AsyncSession, _seeded_org: FacilitatingOrg
+) -> None:
+    r = client.patch(
+        f"/v1/admin/facilitating-orgs/{_seeded_org.id}",
+        json={"name": "Renamed", "capacity_total": 25},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "Renamed"
+    assert body["capacity_total"] == 25
+
+
+@pytest.mark.asyncio
+async def test_admin_patch_org_rejects_capacity_total_below_committed(
+    client: TestClient, session: AsyncSession
+) -> None:
+    org = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Committed {uuid.uuid4().hex[:6]}",
+        capacity_total=5,
+        capacity_committed=3,
+        active=True,
+    )
+    session.add(org)
+    await session.commit()
+    try:
+        r = client.patch(
+            f"/v1/admin/facilitating-orgs/{org.id}",
+            json={"capacity_total": 1},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "capacity_below_committed"
+    finally:
+        await session.execute(
+            delete(FacilitatingOrg).where(FacilitatingOrg.id == org.id)
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_patch_org_rejects_capacity_committed(
+    client: TestClient, _seeded_org: FacilitatingOrg
+) -> None:
+    """The PATCH schema is strict (`extra='forbid'`), so attempting to
+    write `capacity_committed` returns 422."""
+    r = client.patch(
+        f"/v1/admin/facilitating-orgs/{_seeded_org.id}",
+        json={"capacity_committed": 99},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_admin_deactivate_org_blocked_by_open_match(
+    client: TestClient, session: AsyncSession, _seeded_org: FacilitatingOrg
+) -> None:
+    # Manufacture an open match referencing the org. AdopterInterest is
+    # the FK target; we need one with a valid contact.
+    from jp_adopt_api.models import (
+        AdopterInterest,
+        Contact,
+        Match as MatchModel,
+    )
+
+    contact = Contact(
+        id=uuid.uuid4(),
+        display_name=f"TST Contact {uuid.uuid4().hex[:6]}",
+        party_kind="adopter",
+        origin="manual_entry",
+    )
+    session.add(contact)
+    await session.flush()
+    interest = AdopterInterest(
+        id=uuid.uuid4(),
+        contact_id=contact.id,
+    )
+    session.add(interest)
+    await session.flush()
+    match = MatchModel(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=_seeded_org.id,
+        status="recommended",
+    )
+    session.add(match)
+    await session.commit()
+    try:
+        r = client.post(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}/deactivate",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 409, r.text
+        body = r.json()
+        assert body["detail"]["code"] == "org_has_open_matches"
+        assert body["detail"]["open_match_count"] == 1
+    finally:
+        await session.execute(
+            delete(MatchModel).where(MatchModel.id == match.id)
+        )
+        await session.execute(
+            delete(AdopterInterest).where(AdopterInterest.id == interest.id)
+        )
+        await session.execute(delete(Contact).where(Contact.id == contact.id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_deactivate_then_activate(
+    client: TestClient, session: AsyncSession, _seeded_org: FacilitatingOrg
+) -> None:
+    r = client.post(
+        f"/v1/admin/facilitating-orgs/{_seeded_org.id}/deactivate",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["active"] is False
+    r = client.post(
+        f"/v1/admin/facilitating-orgs/{_seeded_org.id}/activate",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["active"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_add_and_remove_coverage(
+    client: TestClient, session: AsyncSession, _seeded_org: FacilitatingOrg
+) -> None:
+    fpg = Fpg(
+        people_id3=f"T{uuid.uuid4().hex[:5].upper()}",
+        name="Coverage FPG",
+        country_code="UA",
+    )
+    session.add(fpg)
+    await session.commit()
+    try:
+        r = client.post(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}/coverage",
+            json={"people_id3": fpg.people_id3},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["people_id3"] == fpg.people_id3
+        assert body["name"] == "Coverage FPG"
+
+        r = client.get(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}/coverage",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        assert any(c["people_id3"] == fpg.people_id3 for c in r.json()["items"])
+
+        r = client.delete(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}/coverage/{fpg.people_id3}",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 204, r.text
+
+        r = client.delete(
+            f"/v1/admin/facilitating-orgs/{_seeded_org.id}/coverage/{fpg.people_id3}",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 404, r.text
+    finally:
+        await session.execute(
+            delete(FacilitatorFpgCoverage).where(
+                FacilitatorFpgCoverage.facilitator_org_id == _seeded_org.id,
+                FacilitatorFpgCoverage.people_id3 == fpg.people_id3,
+            )
+        )
+        await session.execute(delete(Fpg).where(Fpg.people_id3 == fpg.people_id3))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_add_coverage_404_when_fpg_missing(
+    client: TestClient, _seeded_org: FacilitatingOrg
+) -> None:
+    r = client.post(
+        f"/v1/admin/facilitating-orgs/{_seeded_org.id}/coverage",
+        json={"people_id3": "ZZZ999"},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "fpg_not_found"
