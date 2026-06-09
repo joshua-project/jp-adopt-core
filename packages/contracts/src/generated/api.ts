@@ -858,7 +858,13 @@ export interface paths {
         delete: operations["delete_step_v1_drips_campaigns__campaign_id__steps__position__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Patch Step
+         * @description Edit a step in place — subject, delay, template, send time, or
+         *     position. Position change to an occupied slot swaps with the
+         *     incumbent in a single transaction.
+         */
+        patch: operations["patch_step_v1_drips_campaigns__campaign_id__steps__position__patch"];
         trace?: never;
     };
     "/v1/drips/campaigns/{campaign_id}/steps/{position}/preview": {
@@ -1095,6 +1101,30 @@ export interface components {
              * @default 0
              */
             send_at_minute: number;
+        };
+        /**
+         * CampaignStepPatch
+         * @description In-place edit of a step. All fields optional; only supplied
+         *     fields are updated.
+         *
+         *     Changing ``position`` to a value already occupied by another
+         *     step is treated as a swap (transactional). This is how the UI's
+         *     up/down reorder buttons work — they PATCH with the neighbor's
+         *     position and let the server do the dance.
+         */
+        CampaignStepPatch: {
+            /** Position */
+            position?: number | null;
+            /** Delay Days */
+            delay_days?: number | null;
+            /** Mjml Template Name */
+            mjml_template_name?: string | null;
+            /** Subject */
+            subject?: string | null;
+            /** Send At Hour */
+            send_at_hour?: number | null;
+            /** Send At Minute */
+            send_at_minute?: number | null;
         };
         /** CampaignStepRead */
         CampaignStepRead: {
@@ -4178,6 +4208,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_step_v1_drips_campaigns__campaign_id__steps__position__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                campaign_id: string;
+                position: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignStepPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignStepRead"];
+                };
             };
             /** @description Validation Error */
             422: {

@@ -12,7 +12,9 @@ import {
   deleteCampaignStep,
   formatApiError,
   getCampaign,
+  listDripTemplates,
   patchCampaign,
+  patchCampaignStep,
   pauseCampaign,
   previewCampaignStep,
 } from "../lib/api-client";
@@ -215,16 +217,46 @@ function MetaPanel({
 function StepRow({
   step,
   busy,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onEdit,
   onDelete,
   onPreview,
 }: {
   step: CampaignStep;
   busy: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: (position: number) => void;
+  onMoveDown: (position: number) => void;
+  onEdit: (position: number) => void;
   onDelete: (position: number) => void;
   onPreview: (position: number) => void;
 }) {
   return (
     <li className="flex items-start justify-between gap-3 px-4 py-3 text-sm">
+      <div className="flex shrink-0 flex-col gap-0.5">
+        <button
+          type="button"
+          disabled={busy || !canMoveUp}
+          onClick={() => onMoveUp(step.position)}
+          aria-label="Move up"
+          className="rounded border border-slate-200 bg-white px-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-30"
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          disabled={busy || !canMoveDown}
+          onClick={() => onMoveDown(step.position)}
+          aria-label="Move down"
+          className="rounded border border-slate-200 bg-white px-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-30"
+        >
+          ▼
+        </button>
+      </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-xs text-slate-500">
@@ -253,9 +285,175 @@ function StepRow({
           type="button"
           disabled={busy}
           className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          onClick={() => onEdit(step.position)}
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           onClick={() => onDelete(step.position)}
         >
           {busy ? "Removing…" : "Remove"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function StepEditForm({
+  step,
+  campaignId,
+  onSaved,
+  onCancel,
+}: {
+  step: CampaignStep;
+  campaignId: string;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const ctx = useApiContext();
+  const [subject, setSubject] = useState(step.subject);
+  const [delayDays, setDelayDays] = useState(step.delay_days);
+  const [template, setTemplate] = useState(step.mjml_template_name);
+  const [sendAtHour, setSendAtHour] = useState(step.send_at_hour);
+  const [sendAtMinute, setSendAtMinute] = useState(step.send_at_minute);
+  const [templates, setTemplates] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, startSave] = useTransition();
+
+  useEffect(() => {
+    listDripTemplates(ctx)
+      .then((res) => setTemplates(res.items.map((t) => t.name)))
+      .catch(() => setTemplates([]));
+  }, [ctx]);
+
+  const onSave = () => {
+    const trimmedSubject = subject.trim();
+    if (!trimmedSubject) {
+      setErr("Subject is required.");
+      return;
+    }
+    if (!template) {
+      setErr("Pick a template.");
+      return;
+    }
+    setErr(null);
+    startSave(() => {
+      void (async () => {
+        try {
+          await patchCampaignStep(ctx, campaignId, step.position, {
+            subject: trimmedSubject,
+            delay_days: delayDays,
+            mjml_template_name: template,
+            send_at_hour: sendAtHour,
+            send_at_minute: sendAtMinute,
+          });
+          onSaved();
+        } catch (e) {
+          setErr(formatApiError(e));
+        }
+      })();
+    });
+  };
+
+  return (
+    <li className="space-y-3 bg-slate-50 px-4 py-3 text-sm">
+      <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        Edit step #{step.position}
+      </h4>
+      <label className="block text-xs text-slate-600">
+        Subject
+        <input
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          value={subject}
+          maxLength={512}
+          onChange={(e) => setSubject(e.target.value)}
+        />
+      </label>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <label className="block text-xs text-slate-600">
+          Delay (days)
+          <input
+            type="number"
+            min={0}
+            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            value={delayDays}
+            onChange={(e) =>
+              setDelayDays(Math.max(0, Number(e.target.value) || 0))
+            }
+          />
+        </label>
+        <label className="block text-xs text-slate-600">
+          Hour
+          <input
+            type="number"
+            min={0}
+            max={23}
+            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            value={sendAtHour}
+            onChange={(e) =>
+              setSendAtHour(Math.max(0, Math.min(23, Number(e.target.value) || 0)))
+            }
+          />
+        </label>
+        <label className="block text-xs text-slate-600">
+          Minute
+          <input
+            type="number"
+            min={0}
+            max={59}
+            className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            value={sendAtMinute}
+            onChange={(e) =>
+              setSendAtMinute(
+                Math.max(0, Math.min(59, Number(e.target.value) || 0)),
+              )
+            }
+          />
+        </label>
+      </div>
+      <label className="block text-xs text-slate-600">
+        Template
+        <select
+          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono"
+          value={template}
+          onChange={(e) => setTemplate(e.target.value)}
+        >
+          {/* Always include the current template so we don't silently
+              drop it if it's missing from the filesystem listing. */}
+          {!templates.includes(template) ? (
+            <option value={template}>{template} (current)</option>
+          ) : null}
+          {templates.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      {err ? (
+        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+          {err}
+        </div>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          className={BTN_SECONDARY}
+          disabled={busy}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={BTN_PRIMARY}
+          disabled={busy || !subject.trim() || !template}
+          onClick={onSave}
+        >
+          {busy ? "Saving…" : "Save"}
         </button>
       </div>
     </li>
@@ -344,6 +542,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [preview, setPreview] = useState<StepPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const [editingPos, setEditingPos] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -443,6 +642,24 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     setPreviewErr(null);
   };
 
+  // Reorder uses PATCH with the target position. The server swaps with
+  // the incumbent in a single transaction; the UI just refetches.
+  const onMoveStep = async (currentPos: number, targetPos: number) => {
+    if (!campaign) return;
+    setStepBusyPos(currentPos);
+    setErr(null);
+    try {
+      await patchCampaignStep(ctx, campaign.id, currentPos, {
+        position: targetPos,
+      });
+      await load();
+    } catch (e) {
+      setErr(formatApiError(e));
+    } finally {
+      setStepBusyPos(null);
+    }
+  };
+
   if (!campaign) {
     return (
       <div className="text-sm text-slate-500">
@@ -499,15 +716,43 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         </div>
         {steps.length > 0 ? (
           <ul className="divide-y divide-slate-100 rounded border border-slate-200">
-            {steps.map((s) => (
-              <StepRow
-                key={s.id}
-                step={s}
-                busy={stepBusyPos === s.position}
-                onDelete={onDeleteStep}
-                onPreview={onPreviewStep}
-              />
-            ))}
+            {steps.map((s, idx) => {
+              if (editingPos === s.position) {
+                return (
+                  <StepEditForm
+                    key={s.id}
+                    step={s}
+                    campaignId={campaign.id}
+                    onSaved={async () => {
+                      setEditingPos(null);
+                      await load();
+                    }}
+                    onCancel={() => setEditingPos(null)}
+                  />
+                );
+              }
+              const above = idx > 0 ? steps[idx - 1]!.position : null;
+              const below =
+                idx < steps.length - 1 ? steps[idx + 1]!.position : null;
+              return (
+                <StepRow
+                  key={s.id}
+                  step={s}
+                  busy={stepBusyPos === s.position}
+                  canMoveUp={above !== null}
+                  canMoveDown={below !== null}
+                  onMoveUp={() =>
+                    above !== null && onMoveStep(s.position, above)
+                  }
+                  onMoveDown={() =>
+                    below !== null && onMoveStep(s.position, below)
+                  }
+                  onEdit={() => setEditingPos(s.position)}
+                  onDelete={onDeleteStep}
+                  onPreview={onPreviewStep}
+                />
+              );
+            })}
           </ul>
         ) : (
           <p className="text-sm text-slate-500">
