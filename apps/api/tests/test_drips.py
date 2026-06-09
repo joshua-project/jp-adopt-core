@@ -876,6 +876,121 @@ async def test_worker_tick_renders_and_advances_enrollment(
         await _cleanup_contact(session, contact)
 
 
+# ─── Step PATCH + reorder ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_step_updates_fields(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session, name="Step Edit")
+    await _make_step(
+        session, campaign, position=0, subject="Old", delay_days=3
+    )
+    try:
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0",
+            json={"subject": "New", "delay_days": 7, "send_at_hour": 14},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["subject"] == "New"
+        assert body["delay_days"] == 7
+        assert body["send_at_hour"] == 14
+        assert body["position"] == 0
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_patch_step_404_when_position_missing(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session)
+    try:
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0",
+            json={"subject": "x"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"]["code"] == "step_not_found"
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_patch_step_moves_to_empty_position(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session)
+    step_a = await _make_step(
+        session, campaign, position=0, subject="A"
+    )
+    try:
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0",
+            json={"position": 5},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["position"] == 5
+        # Verify in the DB.
+        await session.refresh(step_a)
+        assert step_a.position == 5
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_patch_step_swaps_with_occupied_position(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign = await _make_campaign(session)
+    step_a = await _make_step(
+        session, campaign, position=0, subject="A"
+    )
+    step_b = await _make_step(
+        session, campaign, position=1, subject="B"
+    )
+    try:
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0",
+            json={"position": 1},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["subject"] == "A"
+        assert body["position"] == 1
+        # After swap: A at 1, B at 0.
+        await session.refresh(step_a)
+        await session.refresh(step_b)
+        assert step_a.position == 1
+        assert step_b.position == 0
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
+@pytest.mark.asyncio
+async def test_patch_step_rejects_capacity_committed_no_unknown_fields(
+    client: TestClient, session: AsyncSession
+) -> None:
+    """extra='forbid' rejects unrecognized fields with 422."""
+    campaign = await _make_campaign(session)
+    await _make_step(session, campaign, position=0)
+    try:
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign.id}/steps/0",
+            json={"bogus_field": "x"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        await _cleanup_campaign(session, campaign)
+
+
 # ─── Step preview (#55 v2 stretch): POST /campaigns/{id}/steps/{pos}/preview ──
 
 

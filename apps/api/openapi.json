@@ -3312,6 +3312,83 @@
       }
     },
     "/v1/drips/campaigns/{campaign_id}/steps/{position}": {
+      "patch": {
+        "tags": [
+          "drips"
+        ],
+        "summary": "Patch Step",
+        "description": "Edit a step in place \u2014 subject, delay, template, send time, or\nposition. Position change to an occupied slot swaps with the\nincumbent in a single transaction.",
+        "operationId": "patch_step_v1_drips_campaigns__campaign_id__steps__position__patch",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "position",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Position"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignStepPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignStepRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "drips"
@@ -4121,6 +4198,90 @@
           "subject"
         ],
         "title": "CampaignStepIn"
+      },
+      "CampaignStepPatch": {
+        "properties": {
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "delay_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delay Days"
+          },
+          "mjml_template_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mjml Template Name"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "send_at_hour": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 23.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send At Hour"
+          },
+          "send_at_minute": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 59.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send At Minute"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CampaignStepPatch",
+        "description": "In-place edit of a step. All fields optional; only supplied\nfields are updated.\n\nChanging ``position`` to a value already occupied by another\nstep is treated as a swap (transactional). This is how the UI's\nup/down reorder buttons work \u2014 they PATCH with the neighbor's\nposition and let the server do the dance."
       },
       "CampaignStepRead": {
         "properties": {

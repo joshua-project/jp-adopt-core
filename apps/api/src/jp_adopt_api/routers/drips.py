@@ -69,6 +69,28 @@ class CampaignStepIn(BaseModel):
     send_at_minute: int = Field(ge=0, le=59, default=0)
 
 
+class CampaignStepPatch(BaseModel):
+    """In-place edit of a step. All fields optional; only supplied
+    fields are updated.
+
+    Changing ``position`` to a value already occupied by another
+    step is treated as a swap (transactional). This is how the UI's
+    up/down reorder buttons work — they PATCH with the neighbor's
+    position and let the server do the dance.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    position: int | None = Field(default=None, ge=0)
+    delay_days: int | None = Field(default=None, ge=0)
+    mjml_template_name: str | None = Field(
+        default=None, min_length=1, max_length=512
+    )
+    subject: str | None = Field(default=None, min_length=1, max_length=512)
+    send_at_hour: int | None = Field(default=None, ge=0, le=23)
+    send_at_minute: int | None = Field(default=None, ge=0, le=59)
+
+
 class CampaignStepRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -503,6 +525,95 @@ async def add_step(
         send_at_minute=body.send_at_minute,
     )
     db.add(step)
+    _bump_version_if_published(campaign)
+    campaign.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(step)
+    return CampaignStepRead.model_validate(step)
+
+
+@router.patch(
+    "/campaigns/{campaign_id}/steps/{position}",
+    response_model=CampaignStepRead,
+)
+async def patch_step(
+    campaign_id: uuid.UUID,
+    position: int,
+    body: CampaignStepPatch,
+    db: DbSession,
+    _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
+) -> CampaignStepRead:
+    """Edit a step in place — subject, delay, template, send time, or
+    position. Position change to an occupied slot swaps with the
+    incumbent in a single transaction."""
+    campaign = await _load_campaign(db, campaign_id)
+    step = (
+        await db.execute(
+            select(CampaignStep).where(
+                CampaignStep.campaign_id == campaign_id,
+                CampaignStep.position == position,
+            )
+        )
+    ).scalar_one_or_none()
+    if step is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "step_not_found",
+                "message": f"Campaign has no step at position {position}",
+            },
+        )
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        return CampaignStepRead.model_validate(step)
+
+    # Position swap is the only field that needs special handling —
+    # the unique (campaign_id, position) index forbids two rows in
+    # the same slot. We park the swapped-with row at a temporary
+    # negative position, move step into its slot, then move the
+    # parked row to step's old slot. All in one transaction.
+    new_position = updates.pop("position", None)
+    if new_position is not None and new_position != step.position:
+        other = (
+            await db.execute(
+                select(CampaignStep).where(
+                    CampaignStep.campaign_id == campaign_id,
+                    CampaignStep.position == new_position,
+                )
+            )
+        ).scalar_one_or_none()
+        old_position = step.position
+        if other is not None:
+            # Park `other` out of the way. -1 is illegal for CHECK; use
+            # a large negative computed from the IDs to stay unique
+            # across concurrent edits (the row is briefly invisible to
+            # SELECTs filtered by position >= 0). Then commit the
+            # swap. CHECK is `position >= 0` so we MUST flush an
+            # intermediate value the constraint will accept... but
+            # CHECK rejects negatives. Workaround: park at
+            # max(position)+1 which is always >= 0 and won't collide.
+            highest = (
+                await db.execute(
+                    select(func.max(CampaignStep.position)).where(
+                        CampaignStep.campaign_id == campaign_id
+                    )
+                )
+            ).scalar_one()
+            park_at = (highest or 0) + 1
+            other.position = park_at
+            await db.flush()
+            step.position = new_position
+            await db.flush()
+            other.position = old_position
+            await db.flush()
+        else:
+            step.position = new_position
+            await db.flush()
+
+    # Other field updates are straight setattr.
+    for k, v in updates.items():
+        setattr(step, k, v)
+
     _bump_version_if_published(campaign)
     campaign.updated_at = datetime.now(UTC)
     await db.commit()

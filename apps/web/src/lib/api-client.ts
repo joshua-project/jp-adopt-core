@@ -486,6 +486,25 @@ export async function deleteCampaignStep(
   );
 }
 
+type CampaignStepPatchBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}"]["patch"]["requestBody"]["content"]["application/json"];
+
+export async function patchCampaignStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+  body: CampaignStepPatchBody,
+): Promise<CampaignStepReadBody> {
+  return _assertPresent(
+    await apiFetch<CampaignStepReadBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps/${position}`,
+      { method: "PATCH", body },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps/${position}`,
+  );
+}
+
 type StepPreviewResponseBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/preview"]["post"]["responses"]["200"]["content"]["application/json"];
 
