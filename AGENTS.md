@@ -114,8 +114,9 @@ category (`conventions/`, `database-issues/`, etc.) with searchable
 YAML frontmatter (`module`, `tags`, `problem_type`). Also
 `docs/runbooks/` for operator-facing how-tos: `local-dev.md`,
 `drip-engine.md`, `daily-digest.md`, `deploy.md`, `secret-rotation.md`,
-`matching-algorithm-v1.md`, `dt-cutover.md`, `operator-handbook.md`,
-`quick-start.md`, `user-testing-walkthrough.md`, `amy-walkthrough.md`,
+`matching-algorithm-v1.md`, `dt-cutover.md`, `dt-cron-sync.md`,
+`etl-postgres-role-split.md`, `operator-handbook.md`, `quick-start.md`,
+`user-testing-walkthrough.md`, `amy-walkthrough.md`,
 `magic-link-side-car.md`, `multi-idp-b2c.md`.
 
 If you solve a new non-trivial problem, run `/ce-compound` to capture
