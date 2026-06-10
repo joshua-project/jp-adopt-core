@@ -79,6 +79,15 @@ from jp_adopt_etl.mappers.users import map_user
 logger = logging.getLogger(__name__)
 
 
+# Postgres advisory-lock key for serializing dt-etl runs (concurrency
+# guard against hour-N runs that overrun into hour-N+1's schedule).
+# Signed int64; arbitrary but persistent. Derived from
+# `int.from_bytes(hashlib.sha256(b"jp_adopt_dt_etl").digest()[:8], "big",
+# signed=True)` = -5_472_812_309_482_873_348. Hardcoded so it's stable
+# across deploys and visible in `pg_locks` for operator inspection.
+_ETL_ADVISORY_LOCK_KEY: int = -5472812309482873348
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Dry-run snapshot dataclasses
 # ──────────────────────────────────────────────────────────────────────────
@@ -1056,6 +1065,23 @@ def run_etl(
     async def _drive() -> dict[str, dict[str, int]]:
         results: dict[str, dict[str, int]] = {}
         with SessionLocal() as pg_session, mysql_engine.connect() as mysql_conn:
+            # Concurrency guard: a long-running hour-N invocation must not
+            # race with the hour-N+1 scheduled fire. Postgres advisory locks
+            # are session-scoped and released automatically when the
+            # connection closes — robust against crash-while-running. The
+            # key is an arbitrary persistent int64; any other process using
+            # the same key would conflict, so it's namespaced by the
+            # 'dt_etl' identifier.
+            locked = pg_session.execute(
+                text("SELECT pg_try_advisory_lock(:k)"),
+                {"k": _ETL_ADVISORY_LOCK_KEY},
+            ).scalar()
+            if not locked:
+                logger.warning(
+                    "dt-etl: another run already holds the advisory lock; "
+                    "exiting cleanly. The next scheduled hour will retry."
+                )
+                return {}
             capture = (
                 _capture_dry_run_pre_state(pg_session)
                 if mode == "dry_run"
@@ -1190,9 +1216,30 @@ def run_etl(
                             "dry-run audit replay failed on exception path"
                         )
                         pg_session.rollback()
+                # Release the lock even on exception so the next
+                # scheduled run isn't blocked. Best-effort: the session
+                # may be aborted from the original exception.
+                try:
+                    pg_session.execute(
+                        text("SELECT pg_advisory_unlock(:k)"),
+                        {"k": _ETL_ADVISORY_LOCK_KEY},
+                    )
+                    pg_session.commit()
+                except Exception:
+                    pg_session.rollback()
                 raise
             if mode == "dry_run":
                 _replay_dry_run_audit(pg_session, capture)
+            pg_session.commit()
+            # Release the advisory lock explicitly. Postgres releases
+            # session-scoped locks on connection close, but engine pools
+            # may reuse the underlying TCP connection — an explicit
+            # unlock avoids stale-lock hangs in test suites that share
+            # the engine across runs.
+            pg_session.execute(
+                text("SELECT pg_advisory_unlock(:k)"),
+                {"k": _ETL_ADVISORY_LOCK_KEY},
+            )
             pg_session.commit()
         mysql_engine.dispose()
         pg_engine.dispose()

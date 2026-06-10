@@ -1437,3 +1437,41 @@ def test_resolve_cli_watermark_auto_delegates_to_resolve_auto_watermark(
     result = orch._resolve_cli_watermark("auto", "postgresql://sentinel")
     assert result == expected
     assert received == ["postgresql://sentinel"]
+
+
+def test_concurrent_run_yields_empty_dict(monkeypatch, pg_engine, pg_session):
+    """A second run_etl invocation while a first is still inside its
+    advisory-lock window exits cleanly with `{}` instead of doing
+    duplicate work. Simulated by acquiring the lock in this test, then
+    invoking run_etl.
+    """
+    from jp_adopt_etl.orchestrator import _ETL_ADVISORY_LOCK_KEY, run_etl
+
+    # Hold the lock on a separate connection that simulates a long
+    # in-progress run. Acquired in our session, NOT released by the SUT.
+    with pg_engine.connect() as held:
+        held.execute(
+            text("SELECT pg_advisory_lock(:k)"),
+            {"k": _ETL_ADVISORY_LOCK_KEY},
+        )
+        try:
+            mock = _MockedDtSource()
+            _patch_dt_source(monkeypatch, mock)
+            _open_engine_returns_pg(monkeypatch, pg_engine)
+
+            # SUT: tries to acquire the lock, fails, returns {} without
+            # touching MySQL or running per-table imports.
+            result = run_etl(
+                mysql_url="mysql+pymysql://ignored",
+                postgres_url=ETL_TEST_DATABASE_URL,
+                tables=["contacts"],
+                mode="production",
+                watermark=None,
+            )
+            assert result == {}
+        finally:
+            held.execute(
+                text("SELECT pg_advisory_unlock(:k)"),
+                {"k": _ETL_ADVISORY_LOCK_KEY},
+            )
+            held.commit()
