@@ -506,7 +506,9 @@ jobs:
           # key is a CONCEALED 1P field that the deploy passes through as a
           # secret-ref on the container app.
           FORMS_EXPORT_URL: op://JP Adopt Platform/Adopt Core - Production/forms-export-url
-          FORMS_EXPORT_API_KEY: op://JP Adopt Platform/Adopt Core - Production/forms-export-api-key
+          # forms-export-api-key is TF-managed end-to-end (jp-infrastructure#205) —
+          # no longer loaded here; the env-var binding below uses the
+          # container-app-level `secretref:forms-export-api-key` directly.
           # #97: Graph user-lookup secrets — loaded here (not just preflight)
           # because the per-deploy `az containerapp secret set` and
           # `--set-env-vars` calls below resolve ${{ env.AZURE_GRAPH_* }} in
@@ -523,16 +525,17 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           client-id: ${{ env.AZURE_CLIENT_ID }}
 
-      - name: Ensure container-app secret for forms-export-api-key
-        # Re-applied each deploy so a token rotation in 1P propagates without
-        # an out-of-band `az containerapp secret set`. Idempotent.
+      - name: Ensure container-app secret for azure-graph-client-secret
+        # Re-applied each deploy so a Graph client-secret rotation in 1P
+        # propagates without an out-of-band `az containerapp secret set`.
+        # forms-export-api-key is TF-managed end-to-end (jp-infrastructure#205),
+        # so we no longer set it here.
         run: |
           set -euo pipefail
           az containerapp secret set \
             --name "${{ env.ACA_API_APP_NAME }}" \
             --resource-group "${{ env.ACA_RESOURCE_GROUP }}" \
             --secrets \
-              "forms-export-api-key=${{ env.FORMS_EXPORT_API_KEY }}" \
               "azure-graph-client-secret=${{ env.AZURE_GRAPH_CLIENT_SECRET }}" \
             >/dev/null
 
