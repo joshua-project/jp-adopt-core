@@ -108,6 +108,26 @@ Setting `--trigger-type Manual` disables the schedule. Restore with
 
 ## Verification queries (run any time)
 
+Both SQL (direct DB access) and API (staff_admin-gated, agent-callable)
+shapes are supported. The API endpoints query the same three tables but
+require no firewall rule or Postgres credentials:
+
+```http
+GET /v1/admin/etl-runs?has_errors=false&limit=10
+GET /v1/admin/migration-conflicts?summary=true
+GET /v1/admin/etl-deleted-in-source
+```
+
+The `summary=true` query param on `migration-conflicts` returns aggregate
+counts grouped by `(table_name, conflict_type)` — directly equivalent to
+the `SELECT conflict_type, COUNT(*) GROUP BY 1` shape below. Other
+filters: `?source_system=`, `?table_name=`, `?conflict_type=`, `?since=`
+(ISO 8601). For etl-runs: `?mode=`, `?has_errors=true|false`, `?since=`.
+
+For agents using a Bearer token, no further setup is needed. For raw
+HTTP from a script, hit the production API at `<api-base>/v1/admin/...`
+with `Authorization: Bearer <token>`.
+
 ```sql
 -- Last successful run per table
 SELECT table_name, MAX(started_at) AS last_run,

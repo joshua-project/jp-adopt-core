@@ -775,6 +775,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/etl-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Etl Runs
+         * @description List ETL audit-run rows, newest first.
+         *
+         *     All filters are optional and AND-combined. ``has_errors=true`` keeps
+         *     only rows with ``errors > 0``; ``has_errors=false`` keeps only
+         *     ``errors = 0`` rows. ``since`` filters by ``started_at >= since``.
+         *     ``total`` is the count BEFORE the limit was applied so a paginated
+         *     client can show "M of N".
+         */
+        get: operations["list_etl_runs_v1_admin_etl_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/migration-conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Migration Conflicts
+         * @description List migration_conflicts rows.
+         *
+         *     With ``summary=true`` returns aggregate counts grouped by
+         *     ``(table_name, conflict_type)`` — matching the
+         *     ``SELECT conflict_type, COUNT(*) GROUP BY 1`` shape from the cron
+         *     runbook. Filters still apply to the aggregation.
+         *
+         *     Without ``summary``, returns the full rows newest-first.
+         */
+        get: operations["list_migration_conflicts_v1_admin_migration_conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/etl-deleted-in-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Etl Deleted In Source
+         * @description List rows that vanished from the source on a prior full ETL run.
+         *
+         *     These rows were never hard-deleted in jp-adopt-core — Amy reviews
+         *     each one and decides per case. Filters mirror the cron runbook's
+         *     reconciliation query.
+         */
+        get: operations["list_etl_deleted_in_source_v1_admin_etl_deleted_in_source_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns": {
         parameters: {
             query?: never;
@@ -1701,6 +1778,81 @@ export interface components {
             /** New Match Id */
             new_match_id?: string | null;
         };
+        /** EtlDeletedInSourceListResponse */
+        EtlDeletedInSourceListResponse: {
+            /** Items */
+            items: components["schemas"]["EtlDeletedInSourceRead"][];
+            /** Total */
+            total: number;
+        };
+        /** EtlDeletedInSourceRead */
+        EtlDeletedInSourceRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Etl Run Id
+             * Format: uuid
+             */
+            etl_run_id: string;
+            /** Table Name */
+            table_name: string;
+            /** Source System */
+            source_system: string;
+            /** Source Id */
+            source_id: string;
+            /** Last Seen At */
+            last_seen_at: string | null;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+        };
+        /** EtlRunListResponse */
+        EtlRunListResponse: {
+            /** Items */
+            items: components["schemas"]["EtlRunRead"][];
+            /** Total */
+            total: number;
+        };
+        /** EtlRunRead */
+        EtlRunRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Table Name */
+            table_name: string;
+            /** Mode */
+            mode: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Watermark From */
+            watermark_from: string | null;
+            /** Source Max Modified At */
+            source_max_modified_at: string | null;
+            /** Rows In */
+            rows_in: number;
+            /** Rows Out Inserted */
+            rows_out_inserted: number;
+            /** Rows Out Updated */
+            rows_out_updated: number;
+            /** Rows Out Skipped */
+            rows_out_skipped: number;
+            /** Rows In Conflict */
+            rows_in_conflict: number;
+            /** Errors */
+            errors: number;
+        };
         /** FacilitatingOrgAdminListResponse */
         FacilitatingOrgAdminListResponse: {
             /** Items */
@@ -2190,6 +2342,65 @@ export interface components {
             decided_at: string | null;
             /** Candidates */
             candidates?: components["schemas"]["MatchCandidate"][];
+        };
+        /** MigrationConflictListResponse */
+        MigrationConflictListResponse: {
+            /** Items */
+            items: components["schemas"]["MigrationConflictRead"][];
+            /** Total */
+            total: number;
+        };
+        /** MigrationConflictRead */
+        MigrationConflictRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Source System */
+            source_system: string;
+            /** Source Id */
+            source_id: string;
+            /** Table Name */
+            table_name: string;
+            /** Conflict Type */
+            conflict_type: string;
+            /** Source Value */
+            source_value?: {
+                [key: string]: unknown;
+            } | null;
+            /** Local Value */
+            local_value?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+        };
+        /** MigrationConflictSummaryResponse */
+        MigrationConflictSummaryResponse: {
+            /** Items */
+            items: components["schemas"]["MigrationConflictSummaryRow"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * MigrationConflictSummaryRow
+         * @description One ``(table_name, conflict_type)`` bucket plus its count.
+         *
+         *     Cheaper than the full list when an agent or operator only wants the
+         *     breakdown (matches the ``SELECT conflict_type, COUNT(*) ... GROUP BY``
+         *     runbook query).
+         */
+        MigrationConflictSummaryRow: {
+            /** Table Name */
+            table_name: string;
+            /** Conflict Type */
+            conflict_type: string;
+            /** Count */
+            count: number;
         };
         /** QueueResponse */
         QueueResponse: {
@@ -4088,6 +4299,117 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_etl_runs_v1_admin_etl_runs_get: {
+        parameters: {
+            query?: {
+                table_name?: string | null;
+                mode?: string | null;
+                since?: string | null;
+                has_errors?: boolean | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EtlRunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_migration_conflicts_v1_admin_migration_conflicts_get: {
+        parameters: {
+            query?: {
+                source_system?: string | null;
+                table_name?: string | null;
+                conflict_type?: string | null;
+                since?: string | null;
+                summary?: boolean;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationConflictListResponse"] | components["schemas"]["MigrationConflictSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_etl_deleted_in_source_v1_admin_etl_deleted_in_source_get: {
+        parameters: {
+            query?: {
+                source_system?: string | null;
+                table_name?: string | null;
+                since?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EtlDeletedInSourceListResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
