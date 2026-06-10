@@ -235,3 +235,74 @@ DNS TTL is short on Cloudflare; rollback is live within minutes.
 - Unblocks #90 (flipping the API to `external: false`) — the web's
   `/api/*` proxy is the only public entrypoint after the rebind,
   which is the architectural goal
+
+---
+
+## Post-soak SWA decommission
+
+The SWA `jp-adopt-core-production` in `rg-jp-adopt-core-production`
+keeps existing after the rebind. It serves zero production traffic but
+costs ~$10/month and accumulates as infrastructure drift. Decommission
+it after the rebind has soaked.
+
+### When it's safe
+
+All of:
+- Rebind has been live for **at least 14 days** without any rollback
+  trigger.
+- Production smoke against `adoption.joshuaproject.net` passes daily.
+- API ingress flip (#90, `api-external-false.md`) has also completed
+  — otherwise you'd still want the SWA available for a recovery path.
+- No external systems still reference the SWA FQDN
+  (`ambitious-pebble-07e6a6210.7.azurestaticapps.net`). Grep monitoring
+  configs, customer integrations, partner docs.
+
+### What happens in `jp-infrastructure`
+
+jp-infrastructure#203 removes:
+- The `azurerm_static_web_app` resource for `jp-adopt-core-production`
+- The `azurerm_static_web_app_custom_domain` for the canonical
+  hostname (already moved to ACA in the rebind)
+- Any linked-backend resource pinning the SWA to the API container
+
+That PR is owned by the infrastructure repo; this section exists so
+the core-side cleanup tracks alongside it.
+
+### What changes in `jp-adopt-core` after #203 merges
+
+The SWA references in this repo are no longer load-bearing. Land a
+small cleanup PR removing:
+
+| File | Change |
+|---|---|
+| `.github/workflows/deploy.yml` | Drop `SWA_APP_NAME` and `SWA_API_TOKEN` from the preflight 1P load block (lines ~124-125). The comment "retained as a rollback escape hatch" no longer applies — SWA is gone. |
+| `docs/runbooks/deploy.md` | Remove `swa-app-name` / `swa-api-token` from the required-secrets list; remove the "idle SWA still exists" paragraph from the rollback section. |
+| `docs/runbooks/dns-rebind.md` (this file) | Update the **Rollback** section above: cutting back to the SWA is no longer an option. The new rollback path is restoring from Postgres backup (`postgres-backup-restore.md`) + re-deploying a prior known-good API revision via `gh workflow run deploy.yml -f target=api`. |
+| `docs/runbooks/quick-start.md` | Drop the "(or wherever the SWA points)" parenthetical in the sign-in instructions. |
+| `1Password vault: Adopt Core - Production` | Delete the `swa-app-name` and `swa-api-token` fields. Recovery from a deleted 1P field is harder than from a deleted Azure SWA — do this **last**, after the deploy.yml PR merges and a deploy is green. |
+
+### Rollback once SWA is gone
+
+The SWA-based rollback path described earlier in this runbook no
+longer exists after the decommission. Real-incident recovery for a
+botched ACA web revision becomes:
+
+1. `az containerapp revision list --name jp-adopt-core-web-production
+   -g rg-jp-adopt-core-production` — find the prior known-good revision.
+2. `az containerapp ingress traffic set --name
+   jp-adopt-core-web-production -g rg-jp-adopt-core-production
+   --revision-weight <prior-rev>=100 <bad-rev>=0` — shift traffic back.
+3. Investigate, fix forward, redeploy.
+
+DNS does not need to change in this rollback — both revisions live
+behind the same custom domain.
+
+### Verification after #203
+
+- `az staticwebapp list --query "[?name=='jp-adopt-core-production']"`
+  returns `[]`.
+- `dig +short adoption.joshuaproject.net` still resolves to the ACA
+  FQDN (unchanged from rebind).
+- Deploy workflow runs green without the SWA env vars.
+- `gh secret list` (in the GitHub repo) and the 1P vault contain no
+  remaining SWA references.
