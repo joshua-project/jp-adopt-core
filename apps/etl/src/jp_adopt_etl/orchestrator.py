@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import sys
 import uuid
@@ -36,7 +37,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from jp_adopt_api.models import (
     ActivityLog,
@@ -55,6 +56,7 @@ from jp_adopt_api.outbox_suppression import outbox_suppressed
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from jp_adopt_etl.dt_source import (
@@ -81,11 +83,41 @@ logger = logging.getLogger(__name__)
 
 # Postgres advisory-lock key for serializing dt-etl runs (concurrency
 # guard against hour-N runs that overrun into hour-N+1's schedule).
-# Signed int64; arbitrary but persistent. Derived from
-# `int.from_bytes(hashlib.sha256(b"jp_adopt_dt_etl").digest()[:8], "big",
-# signed=True)` = -5_472_812_309_482_873_348. Hardcoded so it's stable
-# across deploys and visible in `pg_locks` for operator inspection.
-_ETL_ADVISORY_LOCK_KEY: int = -5472812309482873348
+# Derived at module load from a namespaced seed so the value is
+# self-verifying and any future operator can re-derive it. Stable across
+# deploys (seed never changes); visible in `pg_locks.objid` for operator
+# inspection. To reproduce: `int.from_bytes(hashlib.sha256(b"jp_adopt_dt_etl")
+# .digest()[:8], "big", signed=True)`.
+_ETL_ADVISORY_LOCK_KEY: Final[int] = int.from_bytes(
+    hashlib.sha256(b"jp_adopt_dt_etl").digest()[:8], "big", signed=True
+)
+
+
+def _release_etl_lock(session: Session) -> None:
+    """Release the dt-etl advisory lock. Best-effort: logs and rolls back
+    on failure so the caller's original exception (if any) still
+    propagates. Idempotent — Postgres returns false from
+    `pg_advisory_unlock` for an already-released key.
+    """
+    try:
+        session.execute(
+            text("SELECT pg_advisory_unlock(:k)"),
+            {"k": _ETL_ADVISORY_LOCK_KEY},
+        )
+        session.commit()
+    except SQLAlchemyError:
+        logger.warning(
+            "dt-etl: advisory unlock failed; lock will release on "
+            "connection close.",
+            exc_info=True,
+        )
+        try:
+            session.rollback()
+        except SQLAlchemyError:
+            logger.warning(
+                "dt-etl: rollback after failed unlock also failed.",
+                exc_info=True,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1064,185 +1096,170 @@ def run_etl(
 
     async def _drive() -> dict[str, dict[str, int]]:
         results: dict[str, dict[str, int]] = {}
-        with SessionLocal() as pg_session, mysql_engine.connect() as mysql_conn:
-            # Concurrency guard: a long-running hour-N invocation must not
-            # race with the hour-N+1 scheduled fire. Postgres advisory locks
-            # are session-scoped and released automatically when the
-            # connection closes — robust against crash-while-running. The
-            # key is an arbitrary persistent int64; any other process using
-            # the same key would conflict, so it's namespaced by the
-            # 'dt_etl' identifier.
-            locked = pg_session.execute(
-                text("SELECT pg_try_advisory_lock(:k)"),
-                {"k": _ETL_ADVISORY_LOCK_KEY},
-            ).scalar()
-            if not locked:
-                logger.warning(
-                    "dt-etl: another run already holds the advisory lock; "
-                    "exiting cleanly. The next scheduled hour will retry."
-                )
-                return {}
-            capture = (
-                _capture_dry_run_pre_state(pg_session)
-                if mode == "dry_run"
-                else _DryRunCapture()
-            )
-            try:
-                async with outbox_suppressed(
-                    f"dt_etl:{','.join(tables)}",
-                    pg_session,  # type: ignore[arg-type]  # async-safe context var; session is sync
-                    metadata={
-                        "mode": mode,
-                        "mysql_url_scheme": mysql_url.split("://", 1)[0],
-                        "tables": tables,
-                        "started_at": datetime.now(UTC).isoformat(),
-                    },
-                ) as ctx:
-                    for table_name in tables:
-                        with etl_run(
-                            pg_session,
-                            table_name=table_name,
-                            mode=mode,
-                            watermark_from=watermark,
-                        ) as run_row:
-                            if table_name == "staff_identity_link":
-                                counts = import_users(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                )
-                            elif table_name == "contacts":
-                                counts = import_contacts(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                    watermark=watermark,
-                                    batch_size=batch_size,
-                                )
-                                run_row.source_max_modified_at = fetch_max_modified(
-                                    mysql_conn, table="wp_posts"
-                                )
-                                # Full-run only: flag contacts that vanished
-                                # from source since a prior import.
-                                if watermark is None:
-                                    sweep_deleted_contacts(
-                                        mysql_conn, pg_session, run_row.id
-                                    )
-                            elif table_name == "activity_log":
-                                counts = import_comments(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                    watermark=watermark,
-                                    batch_size=batch_size,
-                                )
-                                history = import_activity_history(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                    watermark=watermark,
-                                    batch_size=batch_size,
-                                )
-                                for key, value in history.items():
-                                    counts[key] = counts.get(key, 0) + value
-                                run_row.source_max_modified_at = _min_watermark(
-                                    fetch_max_modified(
-                                        mysql_conn, table="wp_comments"
-                                    ),
-                                    fetch_max_modified(
-                                        mysql_conn, table="wp_dt_activity_log"
-                                    ),
-                                )
-                            elif table_name == "adopter_interest":
-                                counts = import_interests(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                    watermark=watermark,
-                                    batch_size=batch_size,
-                                )
-                            elif table_name == "contact_assignment":
-                                counts = import_assignment(
-                                    mysql_conn=mysql_conn,
-                                    pg_session=pg_session,
-                                    mode=mode,
-                                    watermark=watermark,
-                                    batch_size=batch_size,
-                                )
-                            else:
-                                raise ValueError(f"unknown table {table_name!r}")
-                            run_row.rows_in = counts.get("rows_in", 0)
-                            run_row.rows_out_inserted = counts.get(
-                                "rows_out_inserted", 0
-                            )
-                            run_row.rows_out_updated = counts.get(
-                                "rows_out_updated", 0
-                            )
-                            run_row.rows_out_skipped = counts.get(
-                                "rows_out_skipped", 0
-                            )
-                            run_row.rows_in_conflict = counts.get(
-                                "rows_in_conflict", 0
-                            )
-                            results[table_name] = counts
-                        # Snapshot the audit row immediately so an exception
-                        # in a later table still leaves a replayable record
-                        # of the tables that completed.
-                        capture.etl_runs.append(
-                            _EtlRunSnapshot.from_row(run_row)
-                        )
-                        # In production mode, commit after each table so a
-                        # crash in a later table preserves the audit trail
-                        # AND the data this table already wrote. dry_run
-                        # defers persistence to the snapshot-and-replay
-                        # block below so data writes can still be rolled
-                        # back at the end.
-                        if mode == "production":
-                            pg_session.commit()
-                    ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
-            except Exception:
-                # On exception in dry_run, replay the audit trail captured so
-                # far so the operator can triage whatever tables completed.
-                # Production-mode exceptions: per-table commits above mean
-                # tables that completed already have their audit + data
-                # persisted; the failing table's partial writes were rolled
-                # back implicitly when SessionLocal exits on exception.
-                if mode == "dry_run":
-                    try:
-                        _replay_dry_run_audit(pg_session, capture)
-                        pg_session.commit()
-                    except Exception:
-                        logger.exception(
-                            "dry-run audit replay failed on exception path"
-                        )
-                        pg_session.rollback()
-                # Release the lock even on exception so the next
-                # scheduled run isn't blocked. Best-effort: the session
-                # may be aborted from the original exception.
-                try:
-                    pg_session.execute(
-                        text("SELECT pg_advisory_unlock(:k)"),
-                        {"k": _ETL_ADVISORY_LOCK_KEY},
+        try:
+            with SessionLocal() as pg_session, mysql_engine.connect() as mysql_conn:
+                # Concurrency guard: a long-running hour-N invocation must not
+                # race with the hour-N+1 scheduled fire. Postgres advisory locks
+                # are session-scoped and released automatically when the
+                # connection closes — robust against crash-while-running. Any
+                # other process using the same key would conflict, so it's
+                # namespaced by the 'dt_etl' identifier in the seed.
+                locked = pg_session.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"),
+                    {"k": _ETL_ADVISORY_LOCK_KEY},
+                ).scalar()
+                if not locked:
+                    logger.warning(
+                        "dt-etl: another run already holds the advisory lock; "
+                        "exiting cleanly. The next scheduled hour will retry."
                     )
+                    return {}
+                # Lock acquired — finally below releases it on every exit
+                # path (success or exception).
+                try:
+                    capture = (
+                        _capture_dry_run_pre_state(pg_session)
+                        if mode == "dry_run"
+                        else _DryRunCapture()
+                    )
+                    try:
+                        async with outbox_suppressed(
+                            f"dt_etl:{','.join(tables)}",
+                            pg_session,  # type: ignore[arg-type]  # async-safe context var; session is sync
+                            metadata={
+                                "mode": mode,
+                                "mysql_url_scheme": mysql_url.split("://", 1)[0],
+                                "tables": tables,
+                                "started_at": datetime.now(UTC).isoformat(),
+                            },
+                        ) as ctx:
+                            for table_name in tables:
+                                with etl_run(
+                                    pg_session,
+                                    table_name=table_name,
+                                    mode=mode,
+                                    watermark_from=watermark,
+                                ) as run_row:
+                                    if table_name == "staff_identity_link":
+                                        counts = import_users(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                        )
+                                    elif table_name == "contacts":
+                                        counts = import_contacts(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                            watermark=watermark,
+                                            batch_size=batch_size,
+                                        )
+                                        run_row.source_max_modified_at = fetch_max_modified(
+                                            mysql_conn, table="wp_posts"
+                                        )
+                                        # Full-run only: flag contacts that vanished
+                                        # from source since a prior import.
+                                        if watermark is None:
+                                            sweep_deleted_contacts(
+                                                mysql_conn, pg_session, run_row.id
+                                            )
+                                    elif table_name == "activity_log":
+                                        counts = import_comments(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                            watermark=watermark,
+                                            batch_size=batch_size,
+                                        )
+                                        history = import_activity_history(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                            watermark=watermark,
+                                            batch_size=batch_size,
+                                        )
+                                        for key, value in history.items():
+                                            counts[key] = counts.get(key, 0) + value
+                                        run_row.source_max_modified_at = _min_watermark(
+                                            fetch_max_modified(
+                                                mysql_conn, table="wp_comments"
+                                            ),
+                                            fetch_max_modified(
+                                                mysql_conn, table="wp_dt_activity_log"
+                                            ),
+                                        )
+                                    elif table_name == "adopter_interest":
+                                        counts = import_interests(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                            watermark=watermark,
+                                            batch_size=batch_size,
+                                        )
+                                    elif table_name == "contact_assignment":
+                                        counts = import_assignment(
+                                            mysql_conn=mysql_conn,
+                                            pg_session=pg_session,
+                                            mode=mode,
+                                            watermark=watermark,
+                                            batch_size=batch_size,
+                                        )
+                                    else:
+                                        raise ValueError(f"unknown table {table_name!r}")
+                                    run_row.rows_in = counts.get("rows_in", 0)
+                                    run_row.rows_out_inserted = counts.get(
+                                        "rows_out_inserted", 0
+                                    )
+                                    run_row.rows_out_updated = counts.get(
+                                        "rows_out_updated", 0
+                                    )
+                                    run_row.rows_out_skipped = counts.get(
+                                        "rows_out_skipped", 0
+                                    )
+                                    run_row.rows_in_conflict = counts.get(
+                                        "rows_in_conflict", 0
+                                    )
+                                    results[table_name] = counts
+                                # Snapshot the audit row immediately so an exception
+                                # in a later table still leaves a replayable record
+                                # of the tables that completed.
+                                capture.etl_runs.append(
+                                    _EtlRunSnapshot.from_row(run_row)
+                                )
+                                # In production mode, commit after each table so a
+                                # crash in a later table preserves the audit trail
+                                # AND the data this table already wrote. dry_run
+                                # defers persistence to the snapshot-and-replay
+                                # block below so data writes can still be rolled
+                                # back at the end.
+                                if mode == "production":
+                                    pg_session.commit()
+                            ctx.metadata["finished_at"] = datetime.now(UTC).isoformat()
+                    except Exception:
+                        # On exception in dry_run, replay the audit trail captured so
+                        # far so the operator can triage whatever tables completed.
+                        # Production-mode exceptions: per-table commits above mean
+                        # tables that completed already have their audit + data
+                        # persisted; the failing table's partial writes were rolled
+                        # back implicitly when SessionLocal exits on exception.
+                        if mode == "dry_run":
+                            try:
+                                _replay_dry_run_audit(pg_session, capture)
+                                pg_session.commit()
+                            except Exception:
+                                logger.exception(
+                                    "dry-run audit replay failed on exception path"
+                                )
+                                pg_session.rollback()
+                        raise
+                    if mode == "dry_run":
+                        _replay_dry_run_audit(pg_session, capture)
                     pg_session.commit()
-                except Exception:
-                    pg_session.rollback()
-                raise
-            if mode == "dry_run":
-                _replay_dry_run_audit(pg_session, capture)
-            pg_session.commit()
-            # Release the advisory lock explicitly. Postgres releases
-            # session-scoped locks on connection close, but engine pools
-            # may reuse the underlying TCP connection — an explicit
-            # unlock avoids stale-lock hangs in test suites that share
-            # the engine across runs.
-            pg_session.execute(
-                text("SELECT pg_advisory_unlock(:k)"),
-                {"k": _ETL_ADVISORY_LOCK_KEY},
-            )
-            pg_session.commit()
-        mysql_engine.dispose()
-        pg_engine.dispose()
+                finally:
+                    _release_etl_lock(pg_session)
+        finally:
+            mysql_engine.dispose()
+            pg_engine.dispose()
         return results
 
     return asyncio.run(_drive())
