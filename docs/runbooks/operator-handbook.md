@@ -81,6 +81,61 @@ If you didn't get a digest you expected, check:
 
 ---
 
+## Cadence
+
+What to look at and when. Items marked **(Amy)** are UI-only;
+**(Operator)** items need `az` / `psql` / 1Password access.
+
+### Every weekday morning (Amy, ~5 min)
+
+- [ ] Open the **Matches** page. Triage anything in the recommended /
+  triage queue.
+- [ ] Skim the 9am digest email. Any matches that should have been
+  auto-routed but landed in triage?
+- [ ] Skim **Add contact** sources for the last 24h — any walk-ins or
+  partner referrals you need to enrich?
+
+### Weekly (Amy, ~15 min)
+
+- [ ] Review contacts stuck in `recommended` > 7 days. Either accept,
+  send back, or contact the facilitator.
+- [ ] Review contacts stuck in `triage` > 7 days. Either match
+  manually or mark `do_not_engage`.
+- [ ] Walk through the past week's `do_not_engage` transitions. Any
+  trends (same reason code repeating)?
+
+### Weekly (Operator, ~10 min)
+
+- [ ] Run the health checks below (`/healthz`, `/readyz`, outbox
+  backlog, worker tick gap).
+- [ ] Scan deploy history: `gh run list --workflow Deploy --limit 10`.
+  Any failures or skipped jobs?
+- [ ] Check Azure Postgres metrics: storage % used, connection count,
+  CPU. The portal blade lives in `rg-jp-shared-production`.
+
+### Monthly (Operator, ~30 min)
+
+- [ ] Run the deploy smoke against production:
+  `scripts/smoke-local.sh` against the prod FQDN (read-only checks).
+- [ ] Verify the daily digest fired every weekday for the prior month
+  (`SELECT window_start, status FROM digest_run WHERE status != 'sent'
+  ORDER BY window_start DESC;`).
+- [ ] Rotate the `WEBHOOK_HMAC_SECRET` if any downstream consumer
+  changed.
+
+### Quarterly (Operator, ~1 hr)
+
+- [ ] **Backup-restore drill** per `docs/runbooks/postgres-backup-restore.md`.
+  This is non-negotiable — a backup you've never restored is not a backup.
+- [ ] Review `migration_conflicts` table for unresolved entries from
+  any ETL runs that have happened since the last review.
+- [ ] Re-confirm the production firewall allowlist — any IPs that
+  should no longer be there?
+- [ ] Update this handbook with anything you've learned that the next
+  oncall would benefit from.
+
+---
+
 ## When things go wrong
 
 ### "I sent a match back and now the contact has the same facilitator again"
@@ -167,6 +222,146 @@ WHERE source_system = 'dt' AND id = '<id>';
 
 If `local_modified_after_import` is `false` after your edit, there's a
 bug in the PATCH path. File a ticket.
+
+---
+
+## Operator-only procedures
+
+These sections need `az` CLI, `psql`, and 1Password access. Amy does
+not run these; Joel (or whoever is operator-of-record) does.
+
+### Health checks
+
+Quick commands to verify the system is healthy. Run these as the first
+thing during any incident triage.
+
+```bash
+# 1. API liveness + the deployed SHA
+API_FQDN=$(az containerapp show \
+  --name jp-adopt-api \
+  --resource-group rg-jp-adopt-prod \
+  --query "properties.configuration.ingress.fqdn" -o tsv)
+curl -fsS "https://${API_FQDN}/healthz"
+curl -fsS "https://${API_FQDN}/readyz"
+# Expect both: {"status":"ok"|"ready","sha":"…"} — and the SHA matches
+# the latest main commit you expected to be live.
+
+# 2. Outbox backlog (worker draining?)
+DB_URL=$(op item get "Adopt Core - Production" \
+  --vault "JP Adopt Platform" \
+  --account joshuaproject.1password.com \
+  --fields database-url --reveal)
+docker run --rm -i postgres:16-alpine psql "$DB_URL" -c "
+  SELECT
+    COUNT(*) FILTER (WHERE processed_at IS NULL)        AS pending,
+    COUNT(*) FILTER (WHERE processed_at IS NOT NULL)    AS processed,
+    MAX(emitted_at)                                      AS latest_emit,
+    MAX(processed_at)                                    AS latest_drain,
+    NOW() - MAX(processed_at)                            AS drain_lag
+  FROM outbox;"
+# pending: should be < 50. drain_lag: should be < 1 minute.
+
+# 3. Drip + digest tick freshness
+docker run --rm -i postgres:16-alpine psql "$DB_URL" -c "
+  SELECT 'drip'   AS run, MAX(window_start) AS last_window FROM drip_run
+  UNION ALL
+  SELECT 'digest' AS run, MAX(window_start) FROM digest_run;"
+# drip last window: should be within the last ~15 minutes.
+# digest last window: should be today (if past 9am ET) or yesterday.
+
+# 4. Recent deploys
+gh run list --workflow Deploy --limit 5 \
+  --json status,conclusion,createdAt,headSha --jq '.'
+```
+
+If any of the above is unhealthy, jump to the matching section in
+`docs/runbooks/` — `drip-engine.md`, `daily-digest.md`, `deploy.md`.
+
+### Admin tasks (no UI for these yet)
+
+| Task | How |
+|---|---|
+| Mint a new intake API key | UI: `/admin/intake-keys` (#116). One-time plaintext shown on creation; record in 1Password immediately. |
+| Rotate an existing intake API key | Mint a new key, hand it to the forms repo, deploy forms, then revoke the old key from `/admin/intake-keys`. |
+| Grant `staff_admin` to a new user | Direct SQL: `INSERT INTO user_roles (user_b2c_subject_id, role_id) VALUES ('<sub>', '00000003-0000-0000-0000-000000000001') ON CONFLICT DO NOTHING;` |
+| Add a facilitator org membership | UI: facilitator-org admin (#57) — pick org → Add member → enter B2C sub. |
+| Add FPG coverage for an org | UI: facilitator-org admin → Coverage tab. |
+| Suppress a contact from drips | Manual transition to `do_not_engage` via `/workflow/<id>`. Optional: add to `suppression_list` for hard email block. |
+| Force a re-match for a contact | `curl -X POST https://${API_FQDN}/v1/matches/run/<contact-id> -H "Authorization: Bearer <token>" -d '{"force":true}'` |
+
+### Production access patterns
+
+Read-only access (the only kind you should default to):
+
+```bash
+# Get the runtime user URL (NOT the migrator URL — migrator has DDL):
+DB_URL=$(op item get "Adopt Core - Production" \
+  --vault "JP Adopt Platform" \
+  --account joshuaproject.1password.com \
+  --fields database-url --reveal)
+# database-url is the migrator URL. For runtime read-only queries,
+# substitute the user before piping into psql:
+RUNTIME_URL=$(echo "$DB_URL" | sed 's|jp_adopt_migrator|jp_adopt|')
+RUNTIME_PW=$(op item get "Adopt Core - Production" \
+  --vault "JP Adopt Platform" \
+  --account joshuaproject.1password.com \
+  --fields runtime-password --reveal)
+RUNTIME_URL=$(echo "$RUNTIME_URL" | sed "s|:[^@]*@|:${RUNTIME_PW}@|")
+docker run --rm -i postgres:16-alpine psql "$RUNTIME_URL"
+```
+
+Firewall: production Postgres is not on the public allowlist by
+default. Add your IP temporarily via:
+
+```bash
+MY_IP=$(curl -s https://api.ipify.org)
+az postgres flexible-server firewall-rule create \
+  --resource-group rg-jp-shared-production \
+  --name jp-postgresql-production \
+  --rule-name "operator-$(whoami)-$(date +%Y%m%d)" \
+  --start-ip-address "$MY_IP" \
+  --end-ip-address "$MY_IP"
+```
+
+**Remove the rule when done** — see `docs/runbooks/secret-rotation.md`
+for the firewall cleanup pattern. Persistent operator rules are a
+config-drift smell.
+
+For SSH-into-container debugging (`az containerapp exec`), see
+`docs/runbooks/deploy.md` § "Live debugging."
+
+---
+
+## Companion runbooks
+
+Every operational topic has a dedicated runbook. The handbook above is
+the index; the runbook is the depth.
+
+| Runbook | When to open |
+|---|---|
+| `docs/runbooks/local-dev.md` | Setting up your machine; running the stack locally. |
+| `docs/runbooks/quick-start.md` | First-week onboarding for a new operator. |
+| `docs/runbooks/deploy.md` | Anything about the deploy pipeline; revision restarts; smoke tests. |
+| `docs/runbooks/secret-rotation.md` | When any secret changes (DB password, ACS, magic-link key, intake key, OIDC creds). |
+| `docs/runbooks/postgres-backup-restore.md` | Backup posture, restore drills, real-incident recovery. **Run a drill before any cutover-day work.** |
+| `docs/runbooks/dt-cutover.md` | The DT → core data cutover sequence. |
+| `docs/runbooks/dt-cron-sync.md` | Mirror-sync from forms; troubleshooting fpg-cache imports. |
+| `docs/runbooks/forms-data-import.md` | Backfilling historical form submissions. |
+| `docs/runbooks/drip-engine.md` | Authoring a drip campaign; debugging non-firing enrollments. |
+| `docs/runbooks/daily-digest.md` | Why the 9am email didn't fire; replay procedure. |
+| `docs/runbooks/matching-algorithm-v1.md` | How the score is computed; how to retune weights. |
+| `docs/runbooks/multi-idp-b2c.md` | Adding or troubleshooting an identity provider. |
+| `docs/runbooks/magic-link-side-car.md` | When B2C sign-in isn't practical; how the side-car works. |
+| `docs/runbooks/dns-rebind.md` | Repointing `adoption.joshuaproject.net` between SWA and Container App. |
+| `docs/runbooks/api-external-false.md` | Tightening the API ingress posture after the forms cutover. |
+| `docs/runbooks/etl-postgres-role-split.md` | Why we have separate `jp_adopt` (runtime) and `jp_adopt_migrator` (DDL) roles. |
+| `docs/runbooks/user-testing-walkthrough.md` | End-to-end smoke that exercises every staff workflow. |
+| `docs/runbooks/prod-smoke-walkthrough.md` | Post-deploy production verification. |
+| `docs/runbooks/amy-walkthrough.md` | Amy's first-week orientation script. |
+
+If you're solving a problem and there's no runbook for it, write one
+as you go. Past learnings live in `docs/solutions/` (organized by
+category with frontmatter); the next operator will find it via grep.
 
 ---
 
