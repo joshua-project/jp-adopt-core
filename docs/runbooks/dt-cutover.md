@@ -7,16 +7,17 @@ operator-facing wrapper.
 
 ## Pre-cutover (Friday evening, 5/22)
 
-1. Confirm staging Postgres is at the latest migration (`0025`):
+1. Confirm staging Postgres is at the latest migration (`0026`):
    ```bash
    uv run --package jp-adopt-api alembic current
-   # expect: 0025 (head)
+   # expect: 0026 (head)
    ```
    `0023` adds `contacts.phone`; `0024` adds `adopter_interest.source_system`/
    `source_id` plus the partial unique index needed for ETL idempotency;
    `0025` adds a partial unique index on `migration_conflicts` so the
    hourly delta cron can use `ON CONFLICT DO NOTHING` without unbounded
-   row growth.
+   row growth; `0026` adds the `intake_api_key` table for self-managed
+   bearer credentials (not ETL-related; included so the head check matches).
 2. Dry-run against the latest DT MySQL snapshot:
    ```bash
    uv run --package jp-adopt-etl dt-etl \
