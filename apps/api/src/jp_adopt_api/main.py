@@ -15,6 +15,7 @@ from jp_adopt_api.routers import (
     auth_magic_link,
     contacts,
     drips,
+    etl_admin,
     health,
     intake,
     manual_contacts,
@@ -112,6 +113,7 @@ app.include_router(intake.router)
 app.include_router(matches.router)
 app.include_router(workflow.router)
 app.include_router(admin.router)
+app.include_router(etl_admin.router)
 app.include_router(drips.router)
 app.include_router(suppression.router)
 app.include_router(manual_contacts.router)

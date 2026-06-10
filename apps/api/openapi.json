@@ -2952,6 +2952,498 @@
         }
       }
     },
+    "/v1/admin/etl-runs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Etl Runs",
+        "description": "List ETL audit-run rows, newest first.\n\nAll filters are optional and AND-combined. ``has_errors=true`` keeps\nonly rows with ``errors > 0``; ``has_errors=false`` keeps only\n``errors = 0`` rows. ``since`` filters by ``started_at >= since``.\n``total`` is the count BEFORE the limit was applied so a paginated\nclient can show \"M of N\".",
+        "operationId": "list_etl_runs_v1_admin_etl_runs_get",
+        "parameters": [
+          {
+            "name": "table_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table Name"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "has_errors",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Has Errors"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtlRunListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/migration-conflicts": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Migration Conflicts",
+        "description": "List migration_conflicts rows newest-first.\n\nFor grouped counts (the ``SELECT conflict_type, COUNT(*) GROUP BY``\nshape from the cron runbook), use the sibling endpoint\n``/v1/admin/migration-conflicts/summary`` instead \u2014 its ``total``\nfield is the sum of per-bucket counts, which differs from the\npre-limit row count this endpoint returns.",
+        "operationId": "list_migration_conflicts_v1_admin_migration_conflicts_get",
+        "parameters": [
+          {
+            "name": "source_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source System"
+            }
+          },
+          {
+            "name": "table_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table Name"
+            }
+          },
+          {
+            "name": "conflict_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conflict Type"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationConflictListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/migration-conflicts/summary": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Summarize Migration Conflicts",
+        "description": "Return aggregate counts grouped by ``(table_name, conflict_type)``.\n\n``total`` is the sum of per-bucket counts \u2014 i.e. the total\nmatching conflict rows \u2014 NOT a pre-limit row count. This endpoint\nhas no ``limit`` parameter; the bucket set is bounded by the\nnumber of distinct (table, conflict_type) pairs.",
+        "operationId": "summarize_migration_conflicts_v1_admin_migration_conflicts_summary_get",
+        "parameters": [
+          {
+            "name": "source_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source System"
+            }
+          },
+          {
+            "name": "table_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table Name"
+            }
+          },
+          {
+            "name": "conflict_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conflict Type"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationConflictSummaryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/etl-deleted-in-source": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Etl Deleted In Source",
+        "description": "List rows that vanished from the source on a prior full ETL run.\n\nThese rows were never hard-deleted in jp-adopt-core \u2014 Amy reviews\neach one and decides per case. Filters mirror the cron runbook's\nreconciliation query.",
+        "operationId": "list_etl_deleted_in_source_v1_admin_etl_deleted_in_source_get",
+        "parameters": [
+          {
+            "name": "source_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source System"
+            }
+          },
+          {
+            "name": "table_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table Name"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtlDeletedInSourceListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns": {
       "get": {
         "tags": [
@@ -6311,6 +6803,201 @@
         ],
         "title": "DecideResponse"
       },
+      "EtlDeletedInSourceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EtlDeletedInSourceRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "EtlDeletedInSourceListResponse"
+      },
+      "EtlDeletedInSourceRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "etl_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Etl Run Id"
+          },
+          "table_name": {
+            "type": "string",
+            "title": "Table Name"
+          },
+          "source_system": {
+            "type": "string",
+            "title": "Source System"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "etl_run_id",
+          "table_name",
+          "source_system",
+          "source_id",
+          "last_seen_at",
+          "detected_at"
+        ],
+        "title": "EtlDeletedInSourceRead"
+      },
+      "EtlRunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EtlRunRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "EtlRunListResponse"
+      },
+      "EtlRunRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "table_name": {
+            "type": "string",
+            "title": "Table Name"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "watermark_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark From"
+          },
+          "source_max_modified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Max Modified At"
+          },
+          "rows_in": {
+            "type": "integer",
+            "title": "Rows In"
+          },
+          "rows_out_inserted": {
+            "type": "integer",
+            "title": "Rows Out Inserted"
+          },
+          "rows_out_updated": {
+            "type": "integer",
+            "title": "Rows Out Updated"
+          },
+          "rows_out_skipped": {
+            "type": "integer",
+            "title": "Rows Out Skipped"
+          },
+          "rows_in_conflict": {
+            "type": "integer",
+            "title": "Rows In Conflict"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "table_name",
+          "mode",
+          "started_at",
+          "ended_at",
+          "watermark_from",
+          "source_max_modified_at",
+          "rows_in",
+          "rows_out_inserted",
+          "rows_out_updated",
+          "rows_out_skipped",
+          "rows_in_conflict",
+          "errors"
+        ],
+        "title": "EtlRunRead"
+      },
       "FacilitatingOrgAdminListResponse": {
         "properties": {
           "items": {
@@ -7559,6 +8246,136 @@
         ],
         "title": "MatchSummary",
         "description": "One open Match row in the queue, with embedded alternatives."
+      },
+      "MigrationConflictListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationConflictRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "MigrationConflictListResponse"
+      },
+      "MigrationConflictRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "source_system": {
+            "type": "string",
+            "title": "Source System"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "table_name": {
+            "type": "string",
+            "title": "Table Name"
+          },
+          "conflict_type": {
+            "type": "string",
+            "title": "Conflict Type"
+          },
+          "source_value": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Value"
+          },
+          "local_value": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Value"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source_system",
+          "source_id",
+          "table_name",
+          "conflict_type",
+          "detected_at"
+        ],
+        "title": "MigrationConflictRead"
+      },
+      "MigrationConflictSummaryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationConflictSummaryRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "MigrationConflictSummaryResponse"
+      },
+      "MigrationConflictSummaryRow": {
+        "properties": {
+          "table_name": {
+            "type": "string",
+            "title": "Table Name"
+          },
+          "conflict_type": {
+            "type": "string",
+            "title": "Conflict Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table_name",
+          "conflict_type",
+          "count"
+        ],
+        "title": "MigrationConflictSummaryRow",
+        "description": "One ``(table_name, conflict_type)`` bucket plus its count.\n\nCheaper than the full list when an agent or operator only wants the\nbreakdown (matches the ``SELECT conflict_type, COUNT(*) ... GROUP BY``\nrunbook query)."
       },
       "QueueResponse": {
         "properties": {
