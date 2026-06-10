@@ -113,16 +113,19 @@ shapes are supported. The API endpoints query the same three tables but
 require no firewall rule or Postgres credentials:
 
 ```http
-GET /v1/admin/etl-runs?has_errors=false&limit=10
-GET /v1/admin/migration-conflicts?summary=true
+GET /v1/admin/etl-runs?mode=production&has_errors=false&limit=10
+GET /v1/admin/migration-conflicts/summary
 GET /v1/admin/etl-deleted-in-source
 ```
 
-The `summary=true` query param on `migration-conflicts` returns aggregate
-counts grouped by `(table_name, conflict_type)` — directly equivalent to
-the `SELECT conflict_type, COUNT(*) GROUP BY 1` shape below. Other
-filters: `?source_system=`, `?table_name=`, `?conflict_type=`, `?since=`
-(ISO 8601). For etl-runs: `?mode=`, `?has_errors=true|false`, `?since=`.
+The `/migration-conflicts/summary` endpoint returns aggregate counts
+grouped by `(table_name, conflict_type)` — directly equivalent to the
+`SELECT conflict_type, COUNT(*) GROUP BY 1` shape below. Its `total`
+field is the sum of per-bucket counts, NOT a pre-limit row count. Use
+the sibling `/v1/admin/migration-conflicts` (no `/summary`) for the
+full row list with a `limit`. Filters on both: `?source_system=`,
+`?table_name=`, `?conflict_type=`, `?since=` (ISO 8601). For etl-runs:
+`?mode=`, `?has_errors=true|false`, `?since=`.
 
 For agents using a Bearer token, no further setup is needed. For raw
 HTTP from a script, hit the production API at `<api-base>/v1/admin/...`

@@ -810,16 +810,40 @@ export interface paths {
         };
         /**
          * List Migration Conflicts
-         * @description List migration_conflicts rows.
+         * @description List migration_conflicts rows newest-first.
          *
-         *     With ``summary=true`` returns aggregate counts grouped by
-         *     ``(table_name, conflict_type)`` — matching the
-         *     ``SELECT conflict_type, COUNT(*) GROUP BY 1`` shape from the cron
-         *     runbook. Filters still apply to the aggregation.
-         *
-         *     Without ``summary``, returns the full rows newest-first.
+         *     For grouped counts (the ``SELECT conflict_type, COUNT(*) GROUP BY``
+         *     shape from the cron runbook), use the sibling endpoint
+         *     ``/v1/admin/migration-conflicts/summary`` instead — its ``total``
+         *     field is the sum of per-bucket counts, which differs from the
+         *     pre-limit row count this endpoint returns.
          */
         get: operations["list_migration_conflicts_v1_admin_migration_conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/migration-conflicts/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summarize Migration Conflicts
+         * @description Return aggregate counts grouped by ``(table_name, conflict_type)``.
+         *
+         *     ``total`` is the sum of per-bucket counts — i.e. the total
+         *     matching conflict rows — NOT a pre-limit row count. This endpoint
+         *     has no ``limit`` parameter; the bucket set is bounded by the
+         *     number of distinct (table, conflict_type) pairs.
+         */
+        get: operations["summarize_migration_conflicts_v1_admin_migration_conflicts_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4337,6 +4361,13 @@ export interface operations {
                     "application/json": components["schemas"]["EtlRunListResponse"];
                 };
             };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -4355,7 +4386,6 @@ export interface operations {
                 table_name?: string | null;
                 conflict_type?: string | null;
                 since?: string | null;
-                summary?: boolean;
                 limit?: number;
             };
             header?: {
@@ -4372,8 +4402,58 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MigrationConflictListResponse"] | components["schemas"]["MigrationConflictSummaryResponse"];
+                    "application/json": components["schemas"]["MigrationConflictListResponse"];
                 };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    summarize_migration_conflicts_v1_admin_migration_conflicts_summary_get: {
+        parameters: {
+            query?: {
+                source_system?: string | null;
+                table_name?: string | null;
+                conflict_type?: string | null;
+                since?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationConflictSummaryResponse"];
+                };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -4410,6 +4490,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EtlDeletedInSourceListResponse"];
                 };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

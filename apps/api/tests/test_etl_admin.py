@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -301,6 +301,34 @@ async def test_list_etl_runs_filters_by_has_errors(
 
 
 @pytest.mark.asyncio
+async def test_list_etl_runs_filters_by_has_errors_false(
+    client: TestClient, _seeded_etl_runs: list[EtlRun]
+) -> None:
+    """has_errors=false must select only errors == 0 rows. Guards
+    against a silent True/False swap that the has_errors=true test
+    alone cannot catch."""
+    r = client.get(
+        f"/v1/admin/etl-runs?table_name={_TEST_TABLE_NAME}&has_errors=false",
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert all(item["errors"] == 0 for item in body["items"])
+
+
+@pytest.mark.asyncio
+async def test_list_etl_runs_limit_above_max_rejects(
+    client: TestClient,
+) -> None:
+    """FastAPI's Query(le=_LIMIT_MAX) must reject limit > 500 with 422."""
+    r = client.get(
+        "/v1/admin/etl-runs?limit=501", headers=_auth_headers()
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_list_etl_runs_filters_by_since(
     client: TestClient, _seeded_etl_runs: list[EtlRun]
 ) -> None:
@@ -353,12 +381,12 @@ async def test_list_etl_runs_requires_staff_admin(
 
 
 @pytest.mark.asyncio
-async def test_list_migration_conflicts_summary_groups_by_type(
+async def test_summarize_migration_conflicts_groups_by_type(
     client: TestClient, _seeded_conflicts: list[MigrationConflict]
 ) -> None:
     r = client.get(
-        f"/v1/admin/migration-conflicts?source_system={_TEST_SOURCE_SYSTEM}"
-        "&summary=true",
+        "/v1/admin/migration-conflicts/summary",
+        params={"source_system": _TEST_SOURCE_SYSTEM},
         headers=_auth_headers(),
     )
     assert r.status_code == 200, r.text
@@ -370,6 +398,32 @@ async def test_list_migration_conflicts_summary_groups_by_type(
     assert pairs[("contacts", "duplicate_email")] == 2
     assert pairs[("contact_assignment", "assignee_no_subject")] == 1
     assert body["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_summarize_migration_conflicts_narrowing_filter(
+    client: TestClient, _seeded_conflicts: list[MigrationConflict]
+) -> None:
+    """A filter that removes a whole bucket should both shrink the
+    items list AND recompute total as the sum of remaining counts."""
+    r = client.get(
+        "/v1/admin/migration-conflicts/summary",
+        params={
+            "source_system": _TEST_SOURCE_SYSTEM,
+            "conflict_type": "duplicate_email",
+        },
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0] == {
+        "table_name": "contacts",
+        "conflict_type": "duplicate_email",
+        "count": 2,
+    }
+    # total is the sum of per-bucket counts, NOT a row count
+    assert body["total"] == 2
 
 
 @pytest.mark.asyncio
@@ -444,5 +498,3 @@ async def test_list_etl_deleted_in_source_requires_staff_admin(
     assert r.status_code == 403
 
 
-# Suppress unused-import warning for `text` — kept for future test growth
-_ = text

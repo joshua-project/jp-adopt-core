@@ -4,9 +4,10 @@ These complement the hourly DT-sync Container Apps Job by giving agents
 (and admin operators) an HTTP surface for the three audit tables the cron
 writes to. Every endpoint is gated on ``require_role('staff_admin')``:
 
-  * ``GET /v1/admin/etl-runs``                 — list etl_run rows with filters
-  * ``GET /v1/admin/migration-conflicts``      — list conflicts (or summary)
-  * ``GET /v1/admin/etl-deleted-in-source``    — list vanished-from-source rows
+  * ``GET /v1/admin/etl-runs``                       — list etl_run rows
+  * ``GET /v1/admin/migration-conflicts``            — list conflict rows
+  * ``GET /v1/admin/migration-conflicts/summary``    — aggregate counts
+  * ``GET /v1/admin/etl-deleted-in-source``          — vanished-from-source
 
 The corresponding ``POST /v1/admin/etl/trigger`` (kick off the cron
 out-of-band via Azure Container Apps Job Start) is a follow-up — requires
@@ -25,8 +26,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 
+from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.deps import DbSession, require_role
 from jp_adopt_api.models import EtlDeletedInSource, EtlRun, MigrationConflict
+
+_FORBIDDEN_RESPONSE: dict[int | str, dict[str, Any]] = {
+    403: {"description": "Caller lacks the staff_admin role"},
+}
 
 router = APIRouter(tags=["admin"])
 
@@ -127,11 +133,12 @@ _LIMIT_MAX = 500
 @router.get(
     "/v1/admin/etl-runs",
     response_model=EtlRunListResponse,
+    responses=_FORBIDDEN_RESPONSE,
 )
 async def list_etl_runs(
     db: DbSession,
     _: Annotated[
-        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
     ],
     table_name: str | None = None,
     mode: str | None = None,
@@ -177,72 +184,52 @@ async def list_etl_runs(
     )
 
 
+def _conflict_where_clauses(
+    source_system: str | None,
+    table_name: str | None,
+    conflict_type: str | None,
+    since: datetime | None,
+) -> list[Any]:
+    """Compose the filter set both /migration-conflicts endpoints share."""
+    clauses: list[Any] = []
+    if source_system is not None:
+        clauses.append(MigrationConflict.source_system == source_system)
+    if table_name is not None:
+        clauses.append(MigrationConflict.table_name == table_name)
+    if conflict_type is not None:
+        clauses.append(MigrationConflict.conflict_type == conflict_type)
+    if since is not None:
+        clauses.append(MigrationConflict.detected_at >= since)
+    return clauses
+
+
 @router.get(
     "/v1/admin/migration-conflicts",
-    response_model=(
-        MigrationConflictListResponse | MigrationConflictSummaryResponse
-    ),
+    response_model=MigrationConflictListResponse,
+    responses=_FORBIDDEN_RESPONSE,
 )
 async def list_migration_conflicts(
     db: DbSession,
     _: Annotated[
-        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
     ],
     source_system: str | None = None,
     table_name: str | None = None,
     conflict_type: str | None = None,
     since: datetime | None = None,
-    summary: bool = False,
     limit: int = Query(_LIMIT_DEFAULT, ge=1, le=_LIMIT_MAX),
-) -> MigrationConflictListResponse | MigrationConflictSummaryResponse:
-    """List migration_conflicts rows.
+) -> MigrationConflictListResponse:
+    """List migration_conflicts rows newest-first.
 
-    With ``summary=true`` returns aggregate counts grouped by
-    ``(table_name, conflict_type)`` — matching the
-    ``SELECT conflict_type, COUNT(*) GROUP BY 1`` shape from the cron
-    runbook. Filters still apply to the aggregation.
-
-    Without ``summary``, returns the full rows newest-first.
+    For grouped counts (the ``SELECT conflict_type, COUNT(*) GROUP BY``
+    shape from the cron runbook), use the sibling endpoint
+    ``/v1/admin/migration-conflicts/summary`` instead — its ``total``
+    field is the sum of per-bucket counts, which differs from the
+    pre-limit row count this endpoint returns.
     """
-    where_clauses = []
-    if source_system is not None:
-        where_clauses.append(MigrationConflict.source_system == source_system)
-    if table_name is not None:
-        where_clauses.append(MigrationConflict.table_name == table_name)
-    if conflict_type is not None:
-        where_clauses.append(MigrationConflict.conflict_type == conflict_type)
-    if since is not None:
-        where_clauses.append(MigrationConflict.detected_at >= since)
-
-    if summary:
-        summary_stmt = (
-            select(
-                MigrationConflict.table_name,
-                MigrationConflict.conflict_type,
-                func.count().label("count"),
-            )
-            .where(*where_clauses)
-            .group_by(
-                MigrationConflict.table_name, MigrationConflict.conflict_type
-            )
-            .order_by(
-                MigrationConflict.table_name, MigrationConflict.conflict_type
-            )
-        )
-        rows = (await db.execute(summary_stmt)).all()
-        items = [
-            MigrationConflictSummaryRow(
-                table_name=r.table_name,
-                conflict_type=r.conflict_type,
-                count=r.count,
-            )
-            for r in rows
-        ]
-        return MigrationConflictSummaryResponse(
-            items=items, total=sum(i.count for i in items)
-        )
-
-    stmt = select(MigrationConflict).where(*where_clauses)
+    stmt = select(MigrationConflict).where(
+        *_conflict_where_clauses(source_system, table_name, conflict_type, since)
+    )
     total = (
         await db.execute(
             select(func.count()).select_from(stmt.subquery())
@@ -260,13 +247,68 @@ async def list_migration_conflicts(
 
 
 @router.get(
+    "/v1/admin/migration-conflicts/summary",
+    response_model=MigrationConflictSummaryResponse,
+    responses=_FORBIDDEN_RESPONSE,
+)
+async def summarize_migration_conflicts(
+    db: DbSession,
+    _: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+    source_system: str | None = None,
+    table_name: str | None = None,
+    conflict_type: str | None = None,
+    since: datetime | None = None,
+) -> MigrationConflictSummaryResponse:
+    """Return aggregate counts grouped by ``(table_name, conflict_type)``.
+
+    ``total`` is the sum of per-bucket counts — i.e. the total
+    matching conflict rows — NOT a pre-limit row count. This endpoint
+    has no ``limit`` parameter; the bucket set is bounded by the
+    number of distinct (table, conflict_type) pairs.
+    """
+    summary_stmt = (
+        select(
+            MigrationConflict.table_name,
+            MigrationConflict.conflict_type,
+            func.count().label("count"),
+        )
+        .where(
+            *_conflict_where_clauses(
+                source_system, table_name, conflict_type, since
+            )
+        )
+        .group_by(
+            MigrationConflict.table_name, MigrationConflict.conflict_type
+        )
+        .order_by(
+            MigrationConflict.table_name, MigrationConflict.conflict_type
+        )
+    )
+    rows = (await db.execute(summary_stmt)).all()
+    items = [
+        MigrationConflictSummaryRow(
+            table_name=r.table_name,
+            conflict_type=r.conflict_type,
+            count=r.count,
+        )
+        for r in rows
+    ]
+    return MigrationConflictSummaryResponse(
+        items=items, total=sum(i.count for i in items)
+    )
+
+
+@router.get(
     "/v1/admin/etl-deleted-in-source",
     response_model=EtlDeletedInSourceListResponse,
+    responses=_FORBIDDEN_RESPONSE,
 )
 async def list_etl_deleted_in_source(
     db: DbSession,
     _: Annotated[
-        tuple[object, frozenset[str]], Depends(_staff_admin_dep)
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
     ],
     source_system: str | None = None,
     table_name: str | None = None,

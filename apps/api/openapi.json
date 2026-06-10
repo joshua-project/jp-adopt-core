@@ -3066,6 +3066,9 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -3085,7 +3088,7 @@
           "admin"
         ],
         "summary": "List Migration Conflicts",
-        "description": "List migration_conflicts rows.\n\nWith ``summary=true`` returns aggregate counts grouped by\n``(table_name, conflict_type)`` \u2014 matching the\n``SELECT conflict_type, COUNT(*) GROUP BY 1`` shape from the cron\nrunbook. Filters still apply to the aggregation.\n\nWithout ``summary``, returns the full rows newest-first.",
+        "description": "List migration_conflicts rows newest-first.\n\nFor grouped counts (the ``SELECT conflict_type, COUNT(*) GROUP BY``\nshape from the cron runbook), use the sibling endpoint\n``/v1/admin/migration-conflicts/summary`` instead \u2014 its ``total``\nfield is the sum of per-bucket counts, which differs from the\npre-limit row count this endpoint returns.",
         "operationId": "list_migration_conflicts_v1_admin_migration_conflicts_get",
         "parameters": [
           {
@@ -3154,16 +3157,6 @@
             }
           },
           {
-            "name": "summary",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Summary"
-            }
-          },
-          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -3198,18 +3191,131 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/MigrationConflictListResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/MigrationConflictSummaryResponse"
-                    }
-                  ],
-                  "title": "Response List Migration Conflicts V1 Admin Migration Conflicts Get"
+                  "$ref": "#/components/schemas/MigrationConflictListResponse"
                 }
               }
             }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/migration-conflicts/summary": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Summarize Migration Conflicts",
+        "description": "Return aggregate counts grouped by ``(table_name, conflict_type)``.\n\n``total`` is the sum of per-bucket counts \u2014 i.e. the total\nmatching conflict rows \u2014 NOT a pre-limit row count. This endpoint\nhas no ``limit`` parameter; the bucket set is bounded by the\nnumber of distinct (table, conflict_type) pairs.",
+        "operationId": "summarize_migration_conflicts_v1_admin_migration_conflicts_summary_get",
+        "parameters": [
+          {
+            "name": "source_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source System"
+            }
+          },
+          {
+            "name": "table_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Table Name"
+            }
+          },
+          {
+            "name": "conflict_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conflict Type"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationConflictSummaryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
           },
           "422": {
             "description": "Validation Error",
@@ -3321,6 +3427,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
           },
           "422": {
             "description": "Validation Error",
