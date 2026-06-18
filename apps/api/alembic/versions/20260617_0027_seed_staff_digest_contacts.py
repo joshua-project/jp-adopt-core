@@ -51,16 +51,20 @@ _STAFF_CONTACT_SEEDS: tuple[tuple[str, str, str], ...] = (
 
 
 def upgrade() -> None:
+    # contacts.id has no server default — the ORM supplies uuid.uuid4()
+    # at insert time, but raw SQL bypasses that. Use gen_random_uuid()
+    # (built-in on PG14+) so the seed runs from Alembic.
     for oid, name, email in _STAFF_CONTACT_SEEDS:
         op.execute(
             sa.text(
                 """
                 INSERT INTO contacts (
-                    party_kind, display_name,
+                    id, party_kind, display_name,
                     b2c_subject_id, email_normalized,
                     source_system, source_id
                 )
-                SELECT 'staff', :name, :oid, :email, 'staff_seed', :oid
+                SELECT gen_random_uuid(), 'staff', :name, :oid, :email,
+                       'staff_seed', :oid
                 WHERE NOT EXISTS (
                     SELECT 1 FROM contacts WHERE email_normalized = :email
                 )
