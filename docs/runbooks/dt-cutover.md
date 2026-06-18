@@ -7,10 +7,10 @@ operator-facing wrapper.
 
 ## Pre-cutover (Friday evening, 5/22)
 
-1. Confirm staging Postgres is at the latest migration (`0027`):
+1. Confirm staging Postgres is at the latest migration (`0028`):
    ```bash
    uv run --package jp-adopt-api alembic current
-   # expect: 0027 (head)
+   # expect: 0028 (head)
    ```
    `0023` adds `contacts.phone`; `0024` adds `adopter_interest.source_system`/
    `source_id` plus the partial unique index needed for ETL idempotency;
@@ -19,7 +19,9 @@ operator-facing wrapper.
    row growth; `0026` adds the `intake_api_key` table for self-managed
    bearer credentials (not ETL-related; included so the head check
    matches); `0027` seeds Contact rows for launch staff so the daily
-   digest reaches them (not ETL-related; same rationale).
+   digest reaches them (not ETL-related; same rationale); `0028` adds
+   the `staff_profile` table and migrates the digest staff-recipient
+   lookup off `contacts` (not ETL-related; same rationale).
 2. Dry-run against the latest DT MySQL snapshot:
    ```bash
    uv run --package jp-adopt-etl dt-etl \

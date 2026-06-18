@@ -321,6 +321,51 @@ class UserRole(Base):
     )
 
 
+class StaffProfile(Base):
+    """Email + display-name source for users with staff digest roles.
+
+    Decouples the daily-digest staff recipient lookup from ``contacts``.
+    One row per staff user, keyed by ``b2c_subject_id``. The digest
+    pipeline joins ``user_roles`` → ``staff_profile`` to resolve emails;
+    staff without a profile row are silently skipped. New staff are
+    added in a seed migration alongside the ``user_roles`` seed (see
+    ``20260618_0028_staff_profile.py`` for the canonical shape).
+    """
+
+    __tablename__ = "staff_profile"
+    __table_args__ = (
+        UniqueConstraint("b2c_subject_id", name="uq_staff_profile_b2c_subject_id"),
+        Index("ix_staff_profile_email_normalized", "email_normalized"),
+        CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_staff_profile_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    b2c_subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    digest_opt_in: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'active'"), default="active"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class TransitionAudit(Base):
     __tablename__ = "transition_audit"
     __table_args__ = (Index("ix_transition_audit_contact_id", "contact_id"),)
