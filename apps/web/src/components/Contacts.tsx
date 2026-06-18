@@ -10,6 +10,7 @@ import { getBaseUrl } from "../lib/api-client";
 import { API_ACCESS_SCOPES, isDevTokenUiEnabled } from "../lib/msalConfig";
 import { DataRow, DataTable, EmptyState, LoadingRows } from "./DataTable";
 import { StatusBadge } from "./StatusBadge";
+import { contactStatusBadge } from "../lib/contactStatus";
 import { humanizePartyKind } from "../lib/vocab";
 
 type ListResponse = paths["/v1/contacts"]["get"]["responses"]["200"]["content"]["application/json"];
@@ -107,7 +108,7 @@ export function Contacts() {
       return;
     }
     void instance
-      .loginPopup({ scopes })
+      .loginPopup({ scopes, prompt: "select_account" })
       .then((r) => {
         if (r.account) {
           instance.setActiveAccount(r.account);
@@ -244,16 +245,12 @@ export function Contacts() {
                     id={c.id}
                     href={`/contacts/${c.id}`}
                     title={c.display_name}
-                    badge={
-                      c.party_kind === "facilitator" && c.facilitator_status ? (
-                        <StatusBadge
-                          status={c.facilitator_status}
-                          kind="facilitator"
-                        />
-                      ) : c.adopter_status ? (
-                        <StatusBadge status={c.adopter_status} kind="adopter" />
-                      ) : undefined
-                    }
+                    badge={(() => {
+                      const b = contactStatusBadge(c);
+                      return b ? (
+                        <StatusBadge status={b.status} kind={b.kind} />
+                      ) : undefined;
+                    })()}
                     meta={
                       <span>
                         <span className="text-slate-500">Kind:</span>{" "}
