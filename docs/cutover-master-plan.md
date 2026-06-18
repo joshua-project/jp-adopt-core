@@ -20,8 +20,13 @@ Tracks live in [#91](https://github.com/joshua-project/jp-adopt-core/issues/91).
 - Production deployed, smoke green, every Phase 2 punch-list item has
   either a runbook, a plan, or both.
 - DNS for `adoption.joshuaproject.net` still points at the legacy SWA.
-- DT MySQL is still the system of record. No `source_system='dt'` rows
-  exist in core's Postgres yet.
+- DT MySQL is still the authoritative source on the WordPress side,
+  but the hourly cron sync is healthy — **248 `source_system='dt'`
+  contacts, 6,744 `adopter_interest` rows, and 1 active match are
+  already in core's Postgres**, with **zero ETL errors across 1,095
+  historical runs**. Cutover (Gate C) is about flipping the
+  authoritative flag, not about copying data — the data has been
+  flowing for weeks.
 - Zero production alerts on adopt-core resources.
 
 **Already done (do not re-do):**
@@ -50,10 +55,10 @@ Tracks live in [#91](https://github.com/joshua-project/jp-adopt-core/issues/91).
 
 ### Gate A — Amy testing (Phase 1)
 
-1. **Smoke the full journey**: walk [`user-testing-walkthrough.md`](./runbooks/user-testing-walkthrough.md) on production.
-2. **Amy session**: she + 1-2 invited facilitators sign in, transition contacts, run a match, enroll in a drip. Reference [`amy-walkthrough.md`](./runbooks/amy-walkthrough.md).
+1. **Demo-day walkthrough**: follow [`demo-day-walkthrough.md`](./runbooks/demo-day-walkthrough.md) on production — the targeted script for the production-readiness session (pre-flight, demo agenda, acceptance criteria).
+2. **Reference for any workflow detail**: [`amy-walkthrough.md`](./runbooks/amy-walkthrough.md) (also her ongoing first-week reference).
 
-**Exit Gate A when:** zero P0/P1 bugs from the session; at least one real outside-email form submission landed cleanly through the bridge.
+**Exit Gate A when:** see [`demo-day-walkthrough.md` § Acceptance criteria](./runbooks/demo-day-walkthrough.md#acceptance-criteria--does-amy-clear-gate-a).
 
 ### Gate B — Pre-cutover hardening
 
@@ -94,6 +99,7 @@ These can run in parallel with Gate A or before Gate C. None blocks Amy testing;
 [`amy-walkthrough.md`](./runbooks/amy-walkthrough.md) ·
 [`api-external-false.md`](./runbooks/api-external-false.md) ·
 [`daily-digest.md`](./runbooks/daily-digest.md) ·
+[`demo-day-walkthrough.md`](./runbooks/demo-day-walkthrough.md) ·
 [`deploy.md`](./runbooks/deploy.md) ·
 [`dns-rebind.md`](./runbooks/dns-rebind.md) ·
 [`drip-engine.md`](./runbooks/drip-engine.md) ·
