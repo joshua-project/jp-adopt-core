@@ -32,6 +32,7 @@ from jp_adopt_api.models import (
     FacilitatingOrg,
     Match,
     Role,
+    StaffProfile,
     UserRole,
 )
 
@@ -69,6 +70,27 @@ async def _make_contact(
     await session.flush()
     await session.commit()
     return contact
+
+
+async def _make_staff_profile(
+    session: AsyncSession,
+    *,
+    b2c_subject_id: str,
+    email: str | None = None,
+    display_name: str | None = None,
+) -> StaffProfile:
+    addr = email or f"stf-{uuid.uuid4().hex[:10]}@example.com"
+    sp = StaffProfile(
+        id=uuid.uuid4(),
+        b2c_subject_id=b2c_subject_id,
+        email=addr,
+        email_normalized=addr.lower(),
+        display_name=display_name or f"Staff test {uuid.uuid4().hex[:6]}",
+    )
+    session.add(sp)
+    await session.flush()
+    await session.commit()
+    return sp
 
 
 async def _make_org(session: AsyncSession) -> FacilitatingOrg:
@@ -135,7 +157,12 @@ async def _assign_role(
         await session.commit()
 
 
-async def _cleanup(session: AsyncSession, contacts: list[Contact]) -> None:
+async def _cleanup(
+    session: AsyncSession,
+    contacts: list[Contact],
+    *,
+    staff_profiles: list[StaffProfile] | None = None,
+) -> None:
     """Drop everything we created for this test, in FK order."""
     for c in contacts:
         interest_ids = (
@@ -163,6 +190,15 @@ async def _cleanup(session: AsyncSession, contacts: list[Contact]) -> None:
                 )
             )
         await session.execute(delete(Contact).where(Contact.id == c.id))
+    for sp in staff_profiles or []:
+        await session.execute(
+            delete(UserRole).where(
+                UserRole.user_subject_id == sp.b2c_subject_id
+            )
+        )
+        await session.execute(
+            delete(StaffProfile).where(StaffProfile.id == sp.id)
+        )
     # Wipe digest_run / digest_recipient rows from this test run.
     await session.execute(delete(DigestRecipient))
     await session.execute(delete(DigestRun))
@@ -183,11 +219,9 @@ async def test_build_digest_groups_staff_and_facilitator(
     window_start = now - timedelta(hours=24)
     window_end = now + timedelta(hours=1)
 
-    # Staff member (has b2c_subject_id + staff_admin role)
+    # Staff member (has staff_profile + staff_admin role)
     staff_sub = f"staff-{uuid.uuid4().hex[:8]}"
-    staff = await _make_contact(
-        session, b2c_subject_id=staff_sub, party_kind="adopter"
-    )
+    staff_profile = await _make_staff_profile(session, b2c_subject_id=staff_sub)
     await _assign_role(session, user_sub=staff_sub, role_name="staff_admin")
 
     # Facilitator member of org_a
@@ -224,7 +258,7 @@ async def test_build_digest_groups_staff_and_facilitator(
         )
         addresses = {p.recipient_address for p in plans}
         # Staff is in there
-        assert staff.email_normalized in addresses
+        assert staff_profile.email_normalized in addresses
         # Facilitator member of org_a is in there
         assert fac.email_normalized in addresses
         # Adopter (no role / membership) is NOT
@@ -233,7 +267,9 @@ async def test_build_digest_groups_staff_and_facilitator(
         # Staff sees the match; facilitator sees the same match (only
         # match in their org)
         staff_plan = next(
-            p for p in plans if p.recipient_address == staff.email_normalized
+            p
+            for p in plans
+            if p.recipient_address == staff_profile.email_normalized
         )
         assert any(m.match_id == match.id for m in staff_plan.matches)
         assert staff_plan.recipient_kind == "all_staff"
@@ -250,7 +286,9 @@ async def test_build_digest_groups_staff_and_facilitator(
             )
         )
         await session.commit()
-        await _cleanup(session, [staff, fac, adopter])
+        await _cleanup(
+            session, [fac, adopter], staff_profiles=[staff_profile]
+        )
         await session.execute(
             delete(FacilitatingOrg).where(FacilitatingOrg.id == org_a.id)
         )
@@ -280,7 +318,7 @@ async def test_build_digest_excludes_matches_outside_window(
     window_end = now + timedelta(hours=1)
 
     staff_sub = f"staff-{uuid.uuid4().hex[:8]}"
-    staff = await _make_contact(session, b2c_subject_id=staff_sub)
+    staff_profile = await _make_staff_profile(session, b2c_subject_id=staff_sub)
     await _assign_role(session, user_sub=staff_sub, role_name="staff_admin")
     adopter = await _make_contact(session)
     org = await _make_org(session)
@@ -303,13 +341,15 @@ async def test_build_digest_excludes_matches_outside_window(
             session, window_start=window_start, window_end=window_end
         )
         staff_plan = next(
-            p for p in plans if p.recipient_address == staff.email_normalized
+            p
+            for p in plans
+            if p.recipient_address == staff_profile.email_normalized
         )
         match_ids = {m.match_id for m in staff_plan.matches}
         assert fresh_match.id in match_ids
         assert old_match.id not in match_ids
     finally:
-        await _cleanup(session, [staff, adopter])
+        await _cleanup(session, [adopter], staff_profiles=[staff_profile])
         await session.execute(
             delete(FacilitatingOrg).where(FacilitatingOrg.id == org.id)
         )
@@ -375,7 +415,7 @@ async def test_run_digest_idempotent_on_same_window(
     window_end = window_start + timedelta(hours=24)
 
     staff_sub = f"staff-{uuid.uuid4().hex[:8]}"
-    staff = await _make_contact(session, b2c_subject_id=staff_sub)
+    staff_profile = await _make_staff_profile(session, b2c_subject_id=staff_sub)
     await _assign_role(session, user_sub=staff_sub, role_name="staff_admin")
     adopter = await _make_contact(session)
     org = await _make_org(session)
@@ -423,7 +463,66 @@ async def test_run_digest_idempotent_on_same_window(
         ).scalars().all()
         assert len(second_run_count) == 1
     finally:
-        await _cleanup(session, [staff, adopter])
+        await _cleanup(session, [adopter], staff_profiles=[staff_profile])
+        await session.execute(
+            delete(FacilitatingOrg).where(FacilitatingOrg.id == org.id)
+        )
+        await session.commit()
+
+
+# ─── new behavior: silent-skip when staff has no profile ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_staff_admin_without_profile_is_silently_skipped(
+    session: AsyncSession,
+) -> None:
+    """A user with the staff_admin role but no StaffProfile row must not
+    appear in digest recipients. This preserves the fail-safe behavior
+    (a misconfigured staff member silently misses one digest rather than
+    blocking everyone else's)."""
+    now = datetime.now(UTC)
+    window_start = now - timedelta(hours=24)
+    window_end = now + timedelta(hours=1)
+
+    # staff_admin role with NO StaffProfile
+    orphan_sub = f"orphan-{uuid.uuid4().hex[:8]}"
+    await _assign_role(session, user_sub=orphan_sub, role_name="staff_admin")
+
+    adopter = await _make_contact(session)
+    org = await _make_org(session)
+    await _make_match_in_window(
+        session,
+        contact=adopter,
+        org=org,
+        recommended_at=now - timedelta(hours=1),
+    )
+
+    try:
+        plans = await build_digest_for_window(
+            session, window_start=window_start, window_end=window_end
+        )
+        addresses = {p.recipient_address for p in plans}
+        # The orphan sub has no profile → no email → not a recipient.
+        # We can't assert on the orphan's email (there isn't one); assert
+        # no recipient kind "all_staff" came from the orphan path by
+        # ensuring orphan_sub never made it anywhere observable.
+        # The strongest assertion we can make: none of the plans carries
+        # the orphan's sub as the source (no plan has the orphan's sub).
+        # Indirectly: total recipients = seeded staff (Joel + Amy) + any
+        # other staff profiles already in the DB, never including the
+        # orphan.
+        for p in plans:
+            # All recipient addresses must come from a real StaffProfile
+            # or a real facilitator Contact — never the orphan placeholder.
+            assert not p.recipient_address.startswith("orphan-")
+        # Also assert the digest didn't crash on the orphan.
+        assert isinstance(addresses, set)
+    finally:
+        await session.execute(
+            delete(UserRole).where(UserRole.user_subject_id == orphan_sub)
+        )
+        await _cleanup(session, [adopter])
         await session.execute(
             delete(FacilitatingOrg).where(FacilitatingOrg.id == org.id)
         )

@@ -41,6 +41,7 @@ from jp_adopt_api.models import (
     FacilitatorOrgMembership,
     Match,
     Role,
+    StaffProfile,
     UserRole,
 )
 
@@ -136,9 +137,10 @@ async def _load_staff_recipients(
     session: AsyncSession,
 ) -> list[tuple[str, str]]:
     """Return ``(address, kind)`` tuples for every staff member whose
-    role is in :data:`STAFF_DIGEST_ROLE_NAMES`. Address comes from the
-    Contact row that shares the user's ``b2c_subject_id``; staff who
-    have no Contact row are silently skipped.
+    role is in :data:`STAFF_DIGEST_ROLE_NAMES` and who has an active,
+    digest-opted-in :class:`StaffProfile` row. Email comes from
+    ``staff_profile.email_normalized``; staff without a profile are
+    silently skipped.
 
     "kind" is ``all_staff`` for staff_admin and ``adoption_manager`` for
     the latter — both receive the same all-matches digest body in v1,
@@ -146,28 +148,26 @@ async def _load_staff_recipients(
     cheaper."""
     rows = (
         await session.execute(
-            select(Role.name, UserRole.user_subject_id)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(Role.name.in_(STAFF_DIGEST_ROLE_NAMES))
-        )
-    ).all()
-    if not rows:
-        return []
-    subs = {sub for _, sub in rows}
-    role_by_sub: dict[str, str] = {sub: name for name, sub in rows}
-
-    contact_rows = (
-        await session.execute(
-            select(Contact.b2c_subject_id, Contact.email_normalized).where(
-                Contact.b2c_subject_id.in_(subs)
+            select(Role.name, StaffProfile.email_normalized)
+            .select_from(UserRole)
+            .join(Role, UserRole.role_id == Role.id)
+            .join(
+                StaffProfile,
+                StaffProfile.b2c_subject_id == UserRole.user_subject_id,
+            )
+            .where(
+                Role.name.in_(STAFF_DIGEST_ROLE_NAMES),
+                StaffProfile.status == "active",
+                StaffProfile.digest_opt_in.is_(True),
             )
         )
     ).all()
     out: list[tuple[str, str]] = []
-    for sub, email in contact_rows:
-        if not email:
+    seen: set[str] = set()
+    for role_name, email in rows:
+        if not email or email in seen:
             continue
-        role_name = role_by_sub.get(sub)
+        seen.add(email)
         kind = "all_staff" if role_name == "staff_admin" else "adoption_manager"
         out.append((email, kind))
     return out
