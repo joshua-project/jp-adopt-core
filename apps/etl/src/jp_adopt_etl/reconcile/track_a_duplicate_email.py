@@ -110,10 +110,23 @@ from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
 from jp_adopt_etl.mappers.interests import parse_fpg_submission_data
 from jp_adopt_etl.mappers.profile import map_contact_profile
 from jp_adopt_etl.mappers.status import Mode
+from jp_adopt_etl.orchestrator import _load_existing_fpg_ids
 from jp_adopt_etl.reconcile.track_a_merge import (
     interests_to_add,
     merge_descriptive,
 )
+
+# A core contact carrying any of these signals is PROTECTED — the
+# DT-authoritative merge never overwrites it; it is skipped and flagged for
+# Amy. These are the opt-out / most-restrictive signals: ``do_not_engage`` is
+# an explicit human "do not contact" disposition, and
+# ``local_modified_after_import`` means staff edited the contact in core after
+# import. This mirrors the ETL importer's own guard
+# (``orchestrator._flush_contact_batch``: the upsert's
+# ``where=Contact.local_modified_after_import.is_(False)`` records a
+# ``local_modified_after_import`` conflict instead of overwriting). See the
+# design doc carve-out #3.
+_DO_NOT_ENGAGE = "do_not_engage"
 
 logger = logging.getLogger(__name__)
 
@@ -124,22 +137,42 @@ RECONCILE_LABEL = "dt_reconcile:duplicate_email"
 
 # "Open" match statuses — a contact with a match in any of these is in
 # active in-core triage and must NOT have its workflow status reset by the
-# DT-authoritative merge. This is the same not-yet-terminal set the
-# ``uq_match_open_per_interest`` partial unique index uses (models.py); the
-# terminal statuses (declined / completed / withdrawn / sent_back) are NOT
-# open. A Match has no direct contact FK — it hangs off adopter_interest —
-# so the predicate joins Match → AdopterInterest by contact_id.
-OPEN_MATCH_STATUSES = ("recommended", "accepted", "active", "triage")
+# DT-authoritative merge. A Match has no direct contact FK — it hangs off
+# adopter_interest — so the predicate joins Match → AdopterInterest by
+# contact_id.
+#
+# This is intentionally a SUPERSET of the DB ``uq_match_open_per_interest``
+# partial unique index (which covers recommended / accepted / active /
+# triage). ``sent_back`` is added here because a sent-back match is
+# mid-triage — a human bounced it back for rework and is actively deciding —
+# so the contact is still "live" for the purpose of NOT clobbering its core
+# status from DT. The DB index legitimately excludes ``sent_back`` (a
+# sent-back match is not "open" for the one-open-match-per-interest
+# invariant), but this is a read-only skip predicate with a more
+# conservative goal: when in doubt, leave a contact under any active human
+# attention for Amy rather than auto-overwrite. The remaining terminal
+# statuses (declined / completed / withdrawn) are genuinely done and not
+# protected here.
+OPEN_MATCH_STATUSES = ("recommended", "accepted", "active", "triage", "sent_back")
 
 # Contact columns the DT-authoritative merge overwrites onto the target
 # where DT has a value (``merge_descriptive`` keeps the core value only
 # where DT is empty). adopter_status / facilitator_status are INCLUDED:
-# the merge is DT-authoritative and the open-match pre-check has already
-# excluded anything under live in-core triage, so a direct status write is
-# safe here (consistent with the ETL importer, which also writes status
-# directly). email_normalized is excluded — the target already owns the
-# email; the DT loser's email is folded in via the identity link + key
-# adoption, not a column overwrite.
+# the merge is DT-authoritative and two pre-checks have already excluded
+# anything we must not touch — the open-match skip (live in-core triage) and
+# the protected-contact skip (do_not_engage / local_modified_after_import,
+# ``plan_merges``). Only after both filters do we write status directly.
+#
+# This is NOT a blanket "the ETL importer also writes status directly" — the
+# importer is GUARDED: its upsert carries
+# ``where=Contact.local_modified_after_import.is_(False)`` and routes
+# locally-edited rows to a conflict instead of overwriting. We mirror that
+# guard with the ``skip_protected`` carve-out below, so a direct status
+# write here only ever lands on an unprotected, non-live contact.
+#
+# email_normalized is excluded — the target already owns the email; the DT
+# loser's email is folded in via the identity link + key adoption, not a
+# column overwrite.
 _MERGE_FIELDS = (
     "display_name",
     "phone",
@@ -178,9 +211,11 @@ class MergePlan:
     dt_profile: dict[str, Any] | None = None
     dt_interests: list[dict[str, Any]] = field(default_factory=list)
     activity_repointed: int = 0
+    interests_repointed: int = 0
     assignment_repointed: bool = False
     identity_linked: bool = False
-    # Disposition: 'merge' | 'review' | 'skip_open_match' | 'skip_missing_target'.
+    # Disposition: 'merge' | 'review' | 'skip_open_match' | 'skip_protected'
+    # | 'skip_multi_collision' | 'skip_missing_target' | 'failed'.
     status: str = "pending"
     reason: str = ""
 
@@ -202,20 +237,37 @@ class ReconcileResult:
         return [p for p in self.planned if p.status.startswith("skip")]
 
     @property
+    def failed(self) -> list[MergePlan]:
+        return [p for p in self.planned if p.status == "failed"]
+
+    @property
     def for_review_list(self) -> list[MergePlan]:
-        """Cases needing an Amy decision: ambiguous names + open-match
-        skips. (``skip_missing_target`` is data hygiene, not a review item.)"""
+        """Cases needing an Amy decision: ambiguous names, open-match skips,
+        protected contacts (do_not_engage / locally edited), and
+        multi-collision emails. (``skip_missing_target`` is data hygiene, not
+        a review item.)"""
         return [
             p
             for p in self.planned
-            if p.status in ("review", "skip_open_match")
+            if p.status
+            in (
+                "review",
+                "skip_open_match",
+                "skip_protected",
+                "skip_multi_collision",
+            )
         ]
 
     def counts(self) -> dict[str, int]:
+        # NOTE: call AFTER apply — a per-contact SAVEPOINT failure flips a
+        # plan's status from 'merge' to 'failed', so it drops out of
+        # ``to_merge`` and is counted under ``skipped`` (failed rows are not
+        # "inserted"). In dry-run nothing applies, so all 'merge' plans stay.
         return {
             "rows_in": len(self.planned),
             "rows_out_inserted": len(self.to_merge),
-            "rows_out_skipped": len(self.skipped) + len(self.to_review),
+            "rows_out_skipped": len(self.skipped) + len(self.to_review)
+            + len(self.failed),
             "rows_in_review": len(self.to_review),
         }
 
@@ -308,11 +360,27 @@ def plan_merges(
 
     No writes. Each conflict becomes a :class:`MergePlan` whose ``status``
     is ``merge`` (clear, auto-mergeable), ``review`` (ambiguous name —
-    needs Amy), or ``skip_missing_target`` (the merge target no longer
-    carries the email; nothing to merge into).
+    needs Amy), ``skip_open_match`` / ``skip_protected`` /
+    ``skip_multi_collision`` (routed to Amy), or ``skip_missing_target``
+    (the merge target no longer carries the email; nothing to merge into).
     """
     result = ReconcileResult()
-    for conflict in _load_conflicts(pg_session):
+    conflicts = _load_conflicts(pg_session)
+
+    # Pre-scan for multi-collision emails: if the SAME email_normalized
+    # appears in more than one duplicate_email conflict, every DT post on
+    # that email collides onto one core contact. Durable key adoption
+    # (target adopts ('dt', source_id)) can only represent ONE DT post ->
+    # one contact, so a many-DT-posts -> one-contact case is not auto-
+    # mergeable. Route ALL of them to Amy (skip_multi_collision) instead.
+    email_counts: dict[str, int] = {}
+    for conflict in conflicts:
+        raw = (conflict.source_value or {}).get("email_normalized")
+        norm = normalize_email(raw) if raw else None
+        if norm:
+            email_counts[norm] = email_counts.get(norm, 0) + 1
+
+    for conflict in conflicts:
         source_id = conflict.source_id
         raw_email = (conflict.source_value or {}).get("email_normalized")
         email = normalize_email(raw_email) if raw_email else None
@@ -320,6 +388,18 @@ def plan_merges(
         if not email:
             plan.status = "skip_missing_target"
             plan.reason = "conflict row has no email_normalized"
+            result.planned.append(plan)
+            continue
+
+        # Carve-out: multi-collision email — more than one DT post maps onto
+        # this same email/contact. Not representable by single-key adoption;
+        # route every member to Amy.
+        if email_counts.get(email, 0) > 1:
+            plan.status = "skip_multi_collision"
+            plan.reason = (
+                f"email {email!r} collides from {email_counts[email]} DT "
+                "posts; many-to-one not auto-mergeable, left for Amy"
+            )
             result.planned.append(plan)
             continue
 
@@ -334,6 +414,24 @@ def plan_merges(
             continue
         plan.target_contact_id = target.id
         plan.target_display_name = target.display_name
+
+        # Carve-out: protected contact — never overwrite a do_not_engage or
+        # staff-edited (local_modified_after_import) contact. Mirrors the ETL
+        # importer's ``where=local_modified_after_import.is_(False)`` guard
+        # (and extends it to do_not_engage). Skip + flag for Amy. See
+        # ``_DO_NOT_ENGAGE`` / the design carve-out #3.
+        if (
+            target.adopter_status == _DO_NOT_ENGAGE
+            or target.facilitator_status == _DO_NOT_ENGAGE
+            or target.local_modified_after_import
+        ):
+            plan.status = "skip_protected"
+            plan.reason = (
+                "core contact is protected (do_not_engage or "
+                "local_modified_after_import); never overwritten, left for Amy"
+            )
+            result.planned.append(plan)
+            continue
 
         # Carve-out 1: open core match => skip + flag for Amy. A stale DT
         # status reset must never clobber a contact under active in-core
@@ -481,6 +579,52 @@ def _apply_overwrite(pg_session: Session, plan: MergePlan) -> None:
     )
 
 
+def _repoint_loser_interests(pg_session: Session, plan: MergePlan) -> None:
+    """Re-point the DT loser contact's OWN ``adopter_interest`` rows onto the
+    merge target BEFORE the loser is deleted, so its interests are genuinely
+    unioned rather than cascade-deleted with the stub.
+
+    The loser already owns dt-keyed interest rows
+    (``source_id='{loser_post_id}:{people_id3}'``); they hang off
+    ``loser_contact_id``. We move each by ``contact_id`` UNLESS the target
+    already carries the same ``people_id3`` (the union semantics — never
+    duplicate an FPG the target already has; the orphaned loser row is left
+    to cascade-delete with the stub). The (source_system, source_id) unique
+    index is unaffected by contact_id, so the move is a plain UPDATE.
+    """
+    if plan.loser_contact_id is None:
+        return
+    target_people = {
+        pid
+        for (pid,) in pg_session.execute(
+            select(AdopterInterest.people_id3).where(
+                AdopterInterest.contact_id == plan.target_contact_id
+            )
+        ).all()
+        if pid is not None
+    }
+    loser_interests = pg_session.execute(
+        select(AdopterInterest).where(
+            AdopterInterest.contact_id == plan.loser_contact_id
+        )
+    ).scalars().all()
+    moved = 0
+    for interest in loser_interests:
+        if interest.people_id3 is not None and interest.people_id3 in target_people:
+            # Target already has this FPG — don't duplicate; let the loser
+            # row cascade-delete with the stub.
+            continue
+        pg_session.execute(
+            update(AdopterInterest)
+            .where(AdopterInterest.id == interest.id)
+            .values(contact_id=plan.target_contact_id)
+        )
+        if interest.people_id3 is not None:
+            target_people.add(interest.people_id3)
+        moved += 1
+    plan.interests_repointed = moved
+
+
 def _repoint_history_and_assignment(
     pg_session: Session, plan: MergePlan
 ) -> None:
@@ -491,10 +635,13 @@ def _repoint_history_and_assignment(
       is on (source_system, source_id), unaffected by contact_id, so this
       is a plain UPDATE and idempotent (a re-run finds nothing left to
       move).
-    * contact_assignment is 1:1 (contact_id PK). We only move a
-      DT-imported assignment, and only when the target has none — never
-      clobber a staff override on either side (assigned_by guard, mirrors
-      ``orchestrator._flush_assignment_batch``).
+    * contact_assignment is 1:1 (contact_id PK). ContactAssignment is
+      DT-authoritative REPLACE for clean merges (design rule): a DT-imported
+      loser assignment replaces the target's prior DT-imported assignment.
+      Protected/locally-edited contacts never reach here (skip_protected),
+      so the target's assignment can only be another ``dt_import`` row — we
+      overwrite it. We still guard the loser side to ``dt_import`` so we
+      never carry a non-DT assignment across.
     """
     if plan.loser_contact_id is None:
         return
@@ -512,13 +659,12 @@ def _repoint_history_and_assignment(
     ).scalars().first()
     if loser_assignment is None or loser_assignment.assigned_by != "dt_import":
         return
-    target_has = pg_session.execute(
-        select(ContactAssignment.contact_id).where(
+    # DT-replace: drop any existing target assignment, then write the DT one.
+    pg_session.execute(
+        delete(ContactAssignment).where(
             ContactAssignment.contact_id == plan.target_contact_id
         )
-    ).first()
-    if target_has is not None:
-        return
+    )
     pg_session.execute(
         pg_insert(ContactAssignment)
         .values(
@@ -526,7 +672,13 @@ def _repoint_history_and_assignment(
             user_subject_id=loser_assignment.user_subject_id,
             assigned_by="dt_import",
         )
-        .on_conflict_do_nothing(index_elements=["contact_id"])
+        .on_conflict_do_update(
+            index_elements=["contact_id"],
+            set_={
+                "user_subject_id": loser_assignment.user_subject_id,
+                "assigned_by": "dt_import",
+            },
+        )
     )
     pg_session.execute(
         delete(ContactAssignment).where(
@@ -537,37 +689,50 @@ def _repoint_history_and_assignment(
     plan.assignment_repointed = True
 
 
-def _merge_children(pg_session: Session, plan: MergePlan) -> None:
+def _merge_children(
+    pg_session: Session, plan: MergePlan, fpg_ids: set[str]
+) -> None:
     """Merge DT child tables onto the target per the design's per-category
     rules:
 
-    * **ContactProfile** — DT-overwrite (upsert by ``contact_id``).
+    * **ContactProfile** — DT-overwrite (upsert by ``contact_id``). None-
+      valued DT keys are dropped from the ``DO UPDATE`` set so an
+      unmappable/clamped DT enum keeps the existing core value instead of
+      nulling it.
     * **AdopterInterest** — union: add DT interests whose key isn't already
-      on the target; never touch the core's existing interests.
+      on the target; never touch the core's existing interests. DT
+      interests whose ``people_id3`` is absent from ``fpg`` are SKIPPED —
+      inserting them would violate the ``adopter_interest.people_id3`` FK
+      and abort the apply (mirrors ``orchestrator._flush_interest_batch``).
     * **Consent** — most-restrictive: NO-OP. The DT ETL imports no consent
       acceptance rows and ``Consent`` rows are opt-IN records, so leaving
       the target's consent untouched cannot weaken a core opt-out (the
       safety requirement). See ``consent_most_restrictive`` for the rule.
     * **ContactAssignment / ActivityLog** — handled in
       ``_repoint_history_and_assignment`` (DT-authoritative replace +
-      append).
+      append) and ``_repoint_loser_interests``.
     """
     target_id = plan.target_contact_id
     if target_id is None:
         return
 
-    # ContactProfile: DT overwrites the 1:1 profile row.
+    # ContactProfile: DT overwrites the 1:1 profile row. Drop None-valued
+    # keys so an unmappable/clamped DT enum (mapper returns None) keeps the
+    # core value rather than nulling it.
     if plan.dt_profile:
-        pg_session.execute(
-            pg_insert(ContactProfile)
-            .values(id=uuid.uuid4(), contact_id=target_id, **plan.dt_profile)
-            .on_conflict_do_update(
-                index_elements=["contact_id"],
-                set_=plan.dt_profile,
+        profile_set = {k: v for k, v in plan.dt_profile.items() if v is not None}
+        if profile_set:
+            pg_session.execute(
+                pg_insert(ContactProfile)
+                .values(id=uuid.uuid4(), contact_id=target_id, **profile_set)
+                .on_conflict_do_update(
+                    index_elements=["contact_id"],
+                    set_=profile_set,
+                )
             )
-        )
 
-    # AdopterInterest: union. Only add DT FPGs not already on the target.
+    # AdopterInterest: union. Only add DT FPGs not already on the target,
+    # and only those whose people_id3 exists in fpg (FK safety).
     if plan.dt_interests:
         existing_people = {
             pid
@@ -584,6 +749,16 @@ def _merge_children(pg_session: Session, plan: MergePlan) -> None:
         for people_id3 in interests_to_add(
             core_keys=existing_people, dt_keys=set(dt_by_people)
         ):
+            if people_id3 not in fpg_ids:
+                # FPG not present locally — the FK would abort the batch.
+                # Skip (operators run sync_fpg before cutover; rare).
+                logger.warning(
+                    "track_a: skipping DT interest for missing FPG %s "
+                    "(source_id %s)",
+                    people_id3,
+                    plan.source_id,
+                )
+                continue
             interest = dt_by_people[people_id3]
             pg_session.execute(
                 pg_insert(AdopterInterest)
@@ -643,7 +818,7 @@ def _resolve_conflict(pg_session: Session, plan: MergePlan) -> None:
     )
 
 
-def _apply_one(pg_session: Session, plan: MergePlan) -> None:
+def _apply_one(pg_session: Session, plan: MergePlan, fpg_ids: set[str]) -> None:
     target = pg_session.get(Contact, plan.target_contact_id)
     if target is None:
         # Target vanished between planning and apply — leave the conflict.
@@ -652,7 +827,11 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
         return
     plan.identity_linked = _apply_identity_link(pg_session, plan, target)
     _apply_overwrite(pg_session, plan)
-    _merge_children(pg_session, plan)
+    # Re-point the loser's OWN dt-keyed interests onto the target BEFORE both
+    # the JSON union (so it dedups against them) and the loser delete (so they
+    # are not cascade-lost).
+    _repoint_loser_interests(pg_session, plan)
+    _merge_children(pg_session, plan, fpg_ids)
     _repoint_history_and_assignment(pg_session, plan)
     _adopt_dt_keys(pg_session, plan)
     _resolve_conflict(pg_session, plan)
@@ -664,9 +843,10 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
 
 
 def _review_rows(result: ReconcileResult) -> list[dict[str, Any]]:
-    # Amy's review list = ambiguous-name cases AND open-match skips. Both
-    # need a human decision before any merge; the ``disposition`` column
-    # tells her which carve-out triggered.
+    # Amy's review list = every carve-out that needs a human decision before
+    # any merge: ambiguous-name, open-match, protected (do_not_engage /
+    # locally edited), and multi-collision. The ``disposition`` column tells
+    # her which carve-out triggered.
     return [
         {
             "source_id": p.source_id,
@@ -750,6 +930,14 @@ def reconcile(
     pg_session.add(run_row)
     pg_session.flush()
 
+    # Load FPG ids once (FK safety for the interest union — mirrors the
+    # importer's ``_load_existing_fpg_ids``); reused across every plan.
+    fpg_ids = _load_existing_fpg_ids(pg_session)
+    # Snapshot the auto-mergeable plans before the loop: a per-contact
+    # SAVEPOINT failure flips a plan's status to 'failed', which would
+    # otherwise mutate ``result.to_merge`` mid-iteration.
+    mergeable = list(result.to_merge)
+
     async def _drive() -> None:
         async with outbox_suppressed(
             RECONCILE_LABEL,
@@ -758,13 +946,29 @@ def reconcile(
                 "mode": mode,
                 "conflict_type": CONFLICT_TYPE,
                 "planned": len(result.planned),
-                "merged": len(result.to_merge),
+                "merged": len(mergeable),
                 "review": len(result.to_review),
                 "skipped": len(result.skipped),
             },
         ):
-            for plan in result.to_merge:
-                _apply_one(pg_session, plan)
+            for plan in mergeable:
+                # One SAVEPOINT per contact: a failure rolls back ONLY that
+                # contact's writes, marks the plan failed (its conflict row
+                # stays for Amy), and the loop continues. The outer
+                # outbox_suppressed scope + final commit are untouched, so
+                # the other plans still land and the single bulk_imported
+                # summary still fires.
+                try:
+                    with pg_session.begin_nested():
+                        _apply_one(pg_session, plan, fpg_ids)
+                except Exception:  # noqa: BLE001 — isolate one bad contact
+                    plan.status = "failed"
+                    plan.reason = "apply failed; rolled back to savepoint"
+                    logger.exception(
+                        "track_a: apply failed for source_id %s; "
+                        "rolled back this contact and continuing",
+                        plan.source_id,
+                    )
 
     asyncio.run(_drive())
 
@@ -778,7 +982,8 @@ def reconcile(
     run_row.ended_at = datetime.now(UTC)
     run_row.notes = (
         f"merged={len(result.to_merge)} review={len(result.to_review)} "
-        f"skipped={len(result.skipped)} mode={mode}"
+        f"skipped={len(result.skipped)} failed={len(result.failed)} "
+        f"mode={mode}"
     )
     pg_session.flush()
 

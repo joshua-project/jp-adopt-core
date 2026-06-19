@@ -8,6 +8,7 @@ test, mirroring ``test_orchestrator_integration.py``.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import UTC, datetime
@@ -231,8 +232,25 @@ def _seed_target(pg_session, *, email, name, source_system="forms",
     return c
 
 
-def _seed_loser(pg_session, *, source_id, name, phone=None, origin=None):
-    """The DT contact whose email was dropped to NULL during import."""
+def _seed_loser(
+    pg_session,
+    *,
+    source_id,
+    name,
+    phone=None,
+    origin=None,
+    own_children=False,
+    own_people_id3=None,
+):
+    """The DT contact whose email was dropped to NULL during import.
+
+    When ``own_children=True`` the loser is seeded with its own dt-keyed child
+    rows in production shape — adopter_interest, contact_profile, consent and
+    activity_log — so a test can assert none of them are stranded after the
+    merge re-points/unions them onto the target (loser deleted, cascades the
+    rest). ``own_people_id3`` (when given) is the FPG the loser's interest
+    points at; the caller must seed that FPG row first.
+    """
     c = Contact(
         id=uuid.uuid4(),
         party_kind="adopter",
@@ -245,6 +263,45 @@ def _seed_loser(pg_session, *, source_id, name, phone=None, origin=None):
     )
     pg_session.add(c)
     pg_session.flush()
+    if own_children:
+        if own_people_id3 is not None:
+            pg_session.add(
+                AdopterInterest(
+                    id=uuid.uuid4(),
+                    contact_id=c.id,
+                    people_id3=own_people_id3,
+                    source_system="dt",
+                    source_id=f"{source_id}:{own_people_id3}",
+                )
+            )
+        pg_session.add(
+            ContactProfile(
+                id=uuid.uuid4(), contact_id=c.id, entity_size="1",
+            )
+        )
+        pg_session.add(
+            Consent(
+                id=uuid.uuid4(),
+                contact_id=c.id,
+                consent_type="email",
+                version="1",
+                content_hash="b" * 64,
+                accepted_at=datetime.now(UTC),
+            )
+        )
+        pg_session.add(
+            ActivityLog(
+                id=uuid.uuid4(),
+                contact_id=c.id,
+                author_id="system:dt_legacy_unknown",
+                body="loser legacy note",
+                kind="field_change",
+                source_system="dt",
+                source_id=f"histlog:{source_id}900",
+                occurred_at=datetime.now(UTC),
+            )
+        )
+        pg_session.flush()
     return c
 
 
@@ -381,13 +438,11 @@ def _meta_with_fpg(fpg_json, **kw):
 
 
 def test_interests_unioned(pg_session):
-    import json as _json
     email = "interests@9test.dev"
     target = _seed_target(pg_session, email=email, name="Jane Doe",
                           b2c_subject_id="subj-9-int")
-    _seed_loser(pg_session, source_id="9720", name="Jane Doe")
-    _seed_conflict(pg_session, source_id="9720", email=email)
-    # Seed FPGs and an existing core interest for people 90010.
+    # Seed FPGs first (FK target for both the loser's interest and the
+    # core interest).
     pg_session.execute(
         text(
             "INSERT INTO fpg (people_id3, name, frontier) VALUES "
@@ -395,6 +450,15 @@ def test_interests_unioned(pg_session):
             "ON CONFLICT (people_id3) DO NOTHING"
         )
     )
+    # The DT loser already OWNS its own dt-keyed adopter_interest row for
+    # 90011 (source_id '9720:90011'); the merge must re-point it onto the
+    # target, not let it cascade-delete when the loser stub is removed.
+    _seed_loser(
+        pg_session, source_id="9720", name="Jane Doe",
+        own_children=True, own_people_id3="90011",
+    )
+    _seed_conflict(pg_session, source_id="9720", email=email)
+    # Existing core interest for people 90010.
     pg_session.add(
         AdopterInterest(
             id=uuid.uuid4(), contact_id=target.id, people_id3="90010",
@@ -403,25 +467,34 @@ def test_interests_unioned(pg_session):
     )
     pg_session.commit()
 
-    # DT carries interests in both 90010 (already present) and 90011 (new).
-    fpg_json = _json.dumps([
-        {"peopleId3": "90010"}, {"peopleId3": "90011"},
-    ])
+    # DT postmeta still carries the JSON for both 90010 + 90011 (DT export
+    # shape); the union must not double-insert 90011 the loser already owns.
     reader = _make_dt_reader(
         {"9720": {"post_row": _post_row(9720, "Jane Doe"),
-                  "meta_rows": _meta_with_fpg(fpg_json)}}
+                  "meta_rows": _meta_with_fpg(
+                      json.dumps([{"peopleId3": "90010"},
+                                  {"peopleId3": "90011"}])
+                  )}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
               mode="production", dt_reader=reader)
 
-    people = {
-        i.people_id3
-        for i in pg_session.execute(
-            select(AdopterInterest).where(AdopterInterest.contact_id == target.id)
-        ).scalars().all()
-    }
-    # Union: both the pre-existing core FPG and the new DT FPG present.
+    interests = pg_session.execute(
+        select(AdopterInterest).where(AdopterInterest.contact_id == target.id)
+    ).scalars().all()
+    people = {i.people_id3 for i in interests}
+    # Union: the pre-existing core FPG and the DT FPG the loser owned are
+    # both on the target.
     assert people == {"90010", "90011"}
+    # The loser's dt-keyed interest row is genuinely re-pointed (not lost to
+    # cascade and not duplicated) — exactly one row carries '9720:90011'.
+    keyed = [i for i in interests if i.source_id == "9720:90011"]
+    assert len(keyed) == 1
+    # No stranded interest left on the (now-deleted) loser.
+    stranded = pg_session.execute(
+        select(AdopterInterest).where(AdopterInterest.source_id == "9720:90011")
+    ).scalars().all()
+    assert {i.contact_id for i in stranded} == {target.id}
 
 
 def test_profile_overwritten_from_dt(pg_session):
@@ -794,3 +867,344 @@ def test_missing_target_is_skipped_not_merged(pg_session):
     assert pg_session.execute(
         select(MigrationConflict).where(MigrationConflict.source_id == "9650")
     ).scalars().first() is not None
+
+
+# ─── fix #1: FPG FK violation — interests with a missing FPG are skipped ──────
+
+
+def test_interest_with_missing_fpg_is_skipped_not_fk_error(pg_session):
+    """A DT interest whose people_id3 is absent from ``fpg`` must NOT be
+    inserted (it would violate the adopter_interest.people_id3 FK and abort
+    the whole apply). Mirror the importer: load existing fpg ids once, skip
+    the unknown one. Merge does not raise; the unknown interest is skipped."""
+    email = "missingfpg@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-mfpg")
+    pg_session.execute(
+        text(
+            "INSERT INTO fpg (people_id3, name, frontier) VALUES "
+            "('90020', 'FPG present', true) ON CONFLICT (people_id3) DO NOTHING"
+        )
+    )
+    _seed_loser(pg_session, source_id="9770", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9770", email=email)
+    pg_session.commit()
+
+    # DT carries 90020 (present in fpg) AND 90099 (ABSENT — would FK-fail).
+    reader = _make_dt_reader(
+        {"9770": {"post_row": _post_row(9770, "Jane Doe"),
+                  "meta_rows": _meta_with_fpg(
+                      json.dumps([{"peopleId3": "90020"},
+                                  {"peopleId3": "90099"}])
+                  )}}
+    )
+    # Must not raise an IntegrityError.
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+
+    people = {
+        i.people_id3
+        for i in pg_session.execute(
+            select(AdopterInterest).where(AdopterInterest.contact_id == target.id)
+        ).scalars().all()
+    }
+    # Only the known FPG landed; the unknown one was skipped, not inserted.
+    assert people == {"90020"}
+
+
+# ─── fix #3: protected contacts (do_not_engage / locally-edited) ─────────────
+
+
+def test_core_do_not_engage_is_protected_and_flagged(pg_session, tmp_path):
+    """A core contact whose adopter_status is do_not_engage is PROTECTED: the
+    DT merge never overwrites it, the status is unchanged, the conflict stays,
+    and it lands on Amy's review list with disposition 'skip_protected'."""
+    email = "dne@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-dne", phone=None)
+    target.adopter_status = "do_not_engage"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9780", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9780", email=email)
+    pg_session.commit()
+
+    # DT is engaged with a phone — would normally overwrite.
+    reader = _make_dt_reader(
+        {"9780": {"post_row": _post_row(9780, "Jane Doe"),
+                  "meta_rows": _meta(status="engaged", phone="NEW")}}
+    )
+    review_out = tmp_path / "review.csv"
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader,
+                       review_path=str(review_out))
+
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9780"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+
+    pg_session.refresh(target)
+    # Status + fields untouched.
+    assert target.adopter_status == "do_not_engage"
+    assert target.phone is None
+    # Conflict left for Amy.
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9780")
+    ).scalars().first() is not None
+    # On the review list.
+    body = review_out.read_text()
+    assert "9780" in body
+    assert "skip_protected" in body
+
+
+def test_local_modified_after_import_is_protected_and_flagged(pg_session):
+    """A contact a staff member edited in core (local_modified_after_import)
+    is PROTECTED exactly as the ETL importer guards it — skipped + flagged,
+    never overwritten."""
+    email = "edited@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-edit", phone=None)
+    target.local_modified_after_import = True
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9790", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9790", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9790": {"post_row": _post_row(9790, "Jane Doe"),
+                  "meta_rows": _meta(status="engaged", phone="NEW")}}
+    )
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader)
+
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9790"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+    assert plans["9790"] in result.for_review_list
+
+    pg_session.refresh(target)
+    assert target.phone is None
+    # Conflict left for Amy.
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9790")
+    ).scalars().first() is not None
+
+
+# ─── fix #4: per-contact SAVEPOINT — one failure doesn't poison the batch ─────
+
+
+def test_one_plan_failure_does_not_abort_other_merges(pg_session, monkeypatch):
+    """Each _apply_one runs in its own SAVEPOINT. A failure on one plan rolls
+    back only that contact (its conflict row survives) and the other plans
+    still apply + resolve."""
+    from jp_adopt_etl.reconcile import track_a_duplicate_email as mod
+
+    good_email = "good@9test.dev"
+    bad_email = "bad@9test.dev"
+    good = _seed_target(pg_session, email=good_email, name="Good Person",
+                        b2c_subject_id="subj-9-good", phone=None)
+    _seed_target(pg_session, email=bad_email, name="Bad Person",
+                 source_id="9501", b2c_subject_id="subj-9-bad")
+    _seed_loser(pg_session, source_id="9810", name="Good Person")
+    _seed_loser(pg_session, source_id="9811", name="Bad Person")
+    _seed_conflict(pg_session, source_id="9810", email=good_email)
+    _seed_conflict(pg_session, source_id="9811", email=bad_email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9810": {"post_row": _post_row(9810, "Good Person"),
+                 "meta_rows": _meta(phone="555-GOOD")},
+        "9811": {"post_row": _post_row(9811, "Bad Person"),
+                 "meta_rows": _meta(phone="555-BAD")},
+    })
+
+    real_overwrite = mod._apply_overwrite
+
+    def flaky_overwrite(sess, plan):
+        if plan.source_id == "9811":
+            raise RuntimeError("boom on 9811")
+        return real_overwrite(sess, plan)
+
+    monkeypatch.setattr(mod, "_apply_overwrite", flaky_overwrite)
+
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader)
+
+    plans = {p.source_id: p for p in result.planned}
+    # The good plan applied + resolved.
+    pg_session.refresh(good)
+    assert good.phone == "555-GOOD"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9810")
+    ).scalars().first() is None
+    # The bad plan rolled back: marked failed and its conflict row survives.
+    assert plans["9811"].status == "failed"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9811")
+    ).scalars().first() is not None
+
+
+# ─── fix #5: multi-collision emails route to Amy, never auto-merge ───────────
+
+
+def test_two_conflicts_sharing_a_target_go_to_review(pg_session, tmp_path):
+    """When >1 duplicate_email conflict resolves to the SAME target contact,
+    durable key adoption can't represent many-DT-posts->one-contact, so ALL
+    of them route to Amy (disposition 'skip_multi_collision') — neither
+    auto-merges."""
+    email = "shared@9test.dev"
+    _seed_target(pg_session, email=email, name="Jane Doe",
+                 b2c_subject_id="subj-9-multi")
+    _seed_loser(pg_session, source_id="9820", name="Jane Doe")
+    _seed_loser(pg_session, source_id="9821", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9820", email=email)
+    _seed_conflict(pg_session, source_id="9821", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9820": {"post_row": _post_row(9820, "Jane Doe"), "meta_rows": _meta()},
+        "9821": {"post_row": _post_row(9821, "Jane Doe"), "meta_rows": _meta()},
+    })
+    review_out = tmp_path / "review.csv"
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader,
+                       review_path=str(review_out))
+
+    assert len(result.to_merge) == 0
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9820"].status == "skip_multi_collision"
+    assert plans["9821"].status == "skip_multi_collision"
+    # Both conflicts left in place for Amy.
+    for sid in ("9820", "9821"):
+        assert pg_session.execute(
+            select(MigrationConflict).where(MigrationConflict.source_id == sid)
+        ).scalars().first() is not None
+    # Both on the review list.
+    body = review_out.read_text()
+    assert "9820" in body and "9821" in body
+    assert "skip_multi_collision" in body
+
+
+# ─── fix #6: ContactAssignment DT-replace when target already assigned ───────
+
+
+def test_dt_assignment_replaces_existing_target_assignment(pg_session):
+    """Per the spec, ContactAssignment is DT-authoritative replace for clean
+    merges: when the target already has a (non-staff) assignment, the DT one
+    replaces it."""
+    email = "replace-asg@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-rasg")
+    loser = _seed_loser(pg_session, source_id="9830", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9830", email=email)
+    # Target ALREADY has a dt_import assignment to a different staffer.
+    pg_session.add(
+        ContactAssignment(
+            contact_id=target.id, user_subject_id="staff-old-9",
+            assigned_by="dt_import",
+        )
+    )
+    pg_session.add(
+        ContactAssignment(
+            contact_id=loser.id, user_subject_id="staff-new-9",
+            assigned_by="dt_import",
+        )
+    )
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9830": {"post_row": _post_row(9830, "Jane Doe"), "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+
+    asg = pg_session.execute(
+        select(ContactAssignment).where(
+            ContactAssignment.contact_id == target.id
+        )
+    ).scalars().one()
+    # DT's assignment replaced the target's prior dt_import one.
+    assert asg.user_subject_id == "staff-new-9"
+
+
+# ─── fix #8: ContactProfile upsert drops None keys, keeping core values ──────
+
+
+def test_profile_upsert_keeps_core_value_when_dt_field_is_none(pg_session):
+    """An unmappable/clamped DT enum comes through as None; the upsert must
+    drop None-valued keys so the core value is kept, not nulled."""
+    email = "profnone@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-pnone")
+    # Core profile has a good entity_size that must SURVIVE.
+    pg_session.add(
+        ContactProfile(
+            id=uuid.uuid4(), contact_id=target.id, entity_size="31_100",
+        )
+    )
+    _seed_loser(pg_session, source_id="9840", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9840", email=email)
+    pg_session.commit()
+
+    # DT meta has NO entity_size => mapper yields entity_size=None. The merge
+    # must not null the core value.
+    reader = _make_dt_reader(
+        {"9840": {"post_row": _post_row(9840, "Jane Doe"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+
+    prof = pg_session.execute(
+        select(ContactProfile).where(ContactProfile.contact_id == target.id)
+    ).scalars().one()
+    assert prof.entity_size == "31_100"  # core value kept, not nulled
+
+
+# ─── fix #9: loser's own dt-keyed children are not stranded post-merge ───────
+
+
+def test_loser_children_not_stranded_after_merge(pg_session):
+    """The loser seeded in production shape (its own dt-keyed interest +
+    profile + consent + activity) must leave nothing stranded: interest +
+    activity re-pointed onto the target, consent/profile cascade-cleaned with
+    the deleted loser stub."""
+    email = "nostrand@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-nostrand")
+    pg_session.execute(
+        text(
+            "INSERT INTO fpg (people_id3, name, frontier) VALUES "
+            "('90030', 'FPG strand', true) ON CONFLICT (people_id3) DO NOTHING"
+        )
+    )
+    loser = _seed_loser(
+        pg_session, source_id="9850", name="Jane Doe",
+        own_children=True, own_people_id3="90030",
+    )
+    loser_id = loser.id
+    _seed_conflict(pg_session, source_id="9850", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9850": {"post_row": _post_row(9850, "Jane Doe"), "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+
+    # Loser stub deleted.
+    assert pg_session.get(Contact, loser_id) is None
+    # Its interest + activity re-pointed onto the target.
+    interest = pg_session.execute(
+        select(AdopterInterest).where(AdopterInterest.source_id == "9850:90030")
+    ).scalars().one()
+    assert interest.contact_id == target.id
+    activity = pg_session.execute(
+        select(ActivityLog).where(ActivityLog.source_id == "histlog:9850900")
+    ).scalars().one()
+    assert activity.contact_id == target.id
+    # No child rows still hang off the (deleted) loser.
+    for model in (AdopterInterest, ContactProfile, Consent, ContactAssignment):
+        stranded = pg_session.execute(
+            select(model).where(model.contact_id == loser_id)
+        ).scalars().all()
+        assert stranded == []
