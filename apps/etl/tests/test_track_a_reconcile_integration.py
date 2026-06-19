@@ -365,6 +365,150 @@ def test_dt_overwrites_nonempty_status_and_fields(pg_session):
     assert target.adopter_status == "contacted"
 
 
+def _meta_with_profile(*, entity_size=None, **kw):
+    rows = _meta(**kw)
+    if entity_size is not None:
+        rows.append({"meta_key": "entity_size", "meta_value": entity_size})
+    return rows
+
+
+def _meta_with_fpg(fpg_json, **kw):
+    rows = _meta(**kw)
+    rows.append({"meta_key": "fpg_submission_data", "meta_value": fpg_json})
+    return rows
+
+
+def test_interests_unioned(pg_session):
+    import json as _json
+    email = "interests@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-int")
+    _seed_loser(pg_session, source_id="9720", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9720", email=email)
+    # Seed FPGs and an existing core interest for people 90010.
+    pg_session.execute(
+        text(
+            "INSERT INTO fpg (people_id3, name, frontier) VALUES "
+            "('90010', 'FPG core', true), ('90011', 'FPG dt', true) "
+            "ON CONFLICT (people_id3) DO NOTHING"
+        )
+    )
+    pg_session.add(
+        AdopterInterest(
+            id=uuid.uuid4(), contact_id=target.id, people_id3="90010",
+            source_system="local", source_id=None,
+        )
+    )
+    pg_session.commit()
+
+    # DT carries interests in both 90010 (already present) and 90011 (new).
+    fpg_json = _json.dumps([
+        {"peopleId3": "90010"}, {"peopleId3": "90011"},
+    ])
+    reader = _make_dt_reader(
+        {"9720": {"post_row": _post_row(9720, "Jane Doe"),
+                  "meta_rows": _meta_with_fpg(fpg_json)}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+
+    people = {
+        i.people_id3
+        for i in pg_session.execute(
+            select(AdopterInterest).where(AdopterInterest.contact_id == target.id)
+        ).scalars().all()
+    }
+    # Union: both the pre-existing core FPG and the new DT FPG present.
+    assert people == {"90010", "90011"}
+
+
+def test_profile_overwritten_from_dt(pg_session):
+    email = "profile@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-prof")
+    # Existing core profile with a stale entity_size.
+    pg_session.add(
+        ContactProfile(
+            id=uuid.uuid4(), contact_id=target.id, entity_size="1",
+        )
+    )
+    _seed_loser(pg_session, source_id="9730", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9730", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9730": {"post_row": _post_row(9730, "Jane Doe"),
+                  "meta_rows": _meta_with_profile(entity_size="31_100")}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+
+    prof = pg_session.execute(
+        select(ContactProfile).where(ContactProfile.contact_id == target.id)
+    ).scalars().one()
+    assert prof.entity_size == "31_100"  # DT overwrote core
+
+
+def test_core_consent_optout_preserved(pg_session):
+    email = "consent@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-cons")
+    # Core has a consent acceptance record that must survive the merge.
+    pg_session.add(
+        Consent(
+            id=uuid.uuid4(), contact_id=target.id, consent_type="email",
+            version="1", content_hash="a" * 64, accepted_at=datetime.now(UTC),
+        )
+    )
+    _seed_loser(pg_session, source_id="9740", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9740", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9740": {"post_row": _post_row(9740, "Jane Doe"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+
+    consents = pg_session.execute(
+        select(Consent).where(Consent.contact_id == target.id)
+    ).scalars().all()
+    # The merge must never clear/contradict the core consent record.
+    assert len(consents) == 1
+    assert consents[0].consent_type == "email"
+
+
+def test_dt_assignment_replaces(pg_session):
+    email = "assign@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-asg")
+    loser = _seed_loser(pg_session, source_id="9750", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9750", email=email)
+    # Loser carries a dt_import assignment; target has none.
+    pg_session.add(
+        ContactAssignment(
+            contact_id=loser.id, user_subject_id="staff-dt-9",
+            assigned_by="dt_import",
+        )
+    )
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9750": {"post_row": _post_row(9750, "Jane Doe"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+
+    asg = pg_session.execute(
+        select(ContactAssignment).where(
+            ContactAssignment.contact_id == target.id
+        )
+    ).scalars().one()
+    assert asg.user_subject_id == "staff-dt-9"
+
+
 def test_dry_run_is_non_mutating_but_writes_etl_run(pg_session):
     email = "merge.me@9test.dev"
     target = _seed_target(pg_session, email=email, name="Jane Doe", phone=None)

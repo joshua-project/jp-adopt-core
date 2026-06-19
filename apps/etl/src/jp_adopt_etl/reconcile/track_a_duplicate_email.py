@@ -104,6 +104,7 @@ from jp_adopt_api.models import (
     AdopterInterest,
     Contact,
     ContactAssignment,
+    ContactProfile,
     EtlRun,
     IdentityLink,
     Match,
@@ -120,9 +121,14 @@ from jp_adopt_etl.dt_source import (
     load_postmeta,
     open_engine,
 )
-from jp_adopt_etl.mappers.contacts import map_contact
+from jp_adopt_etl.mappers.contacts import map_contact, pivot_postmeta
+from jp_adopt_etl.mappers.interests import parse_fpg_submission_data
+from jp_adopt_etl.mappers.profile import map_contact_profile
 from jp_adopt_etl.mappers.status import Mode
-from jp_adopt_etl.reconcile.track_a_merge import merge_descriptive
+from jp_adopt_etl.reconcile.track_a_merge import (
+    interests_to_add,
+    merge_descriptive,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +189,9 @@ class MergePlan:
     dt_display_name: str | None = None
     # Fields DT overwrites onto the target {column: value}.
     field_changes: dict[str, Any] = field(default_factory=dict)
+    # DT child data carried from planning to apply.
+    dt_profile: dict[str, Any] | None = None
+    dt_interests: list[dict[str, Any]] = field(default_factory=list)
     activity_repointed: int = 0
     assignment_repointed: bool = False
     identity_linked: bool = False
@@ -401,6 +410,14 @@ def plan_merges(
                 dt_vals[col] = None
         plan.field_changes = merge_descriptive(core=core_vals, dt=dt_vals)
 
+        # Child-table inputs from the same DT postmeta pivot. Carried on the
+        # plan so the apply step merges them without re-reading DT.
+        dt_meta = pivot_postmeta(meta_rows)
+        plan.dt_profile = map_contact_profile(dt_meta)
+        plan.dt_interests = parse_fpg_submission_data(
+            dt_meta.get("fpg_submission_data")
+        )
+
         # Ambiguity gate: same email but mismatched name => possible shared
         # inbox. Route to the review list instead of auto-merging.
         if not names_look_like_same_person(
@@ -535,6 +552,70 @@ def _repoint_history_and_assignment(
     plan.assignment_repointed = True
 
 
+def _merge_children(pg_session: Session, plan: MergePlan) -> None:
+    """Merge DT child tables onto the target per the design's per-category
+    rules:
+
+    * **ContactProfile** — DT-overwrite (upsert by ``contact_id``).
+    * **AdopterInterest** — union: add DT interests whose key isn't already
+      on the target; never touch the core's existing interests.
+    * **Consent** — most-restrictive: NO-OP. The DT ETL imports no consent
+      acceptance rows and ``Consent`` rows are opt-IN records, so leaving
+      the target's consent untouched cannot weaken a core opt-out (the
+      safety requirement). See ``consent_most_restrictive`` for the rule.
+    * **ContactAssignment / ActivityLog** — handled in
+      ``_repoint_history_and_assignment`` (DT-authoritative replace +
+      append).
+    """
+    target_id = plan.target_contact_id
+    if target_id is None:
+        return
+
+    # ContactProfile: DT overwrites the 1:1 profile row.
+    if plan.dt_profile:
+        pg_session.execute(
+            pg_insert(ContactProfile)
+            .values(id=uuid.uuid4(), contact_id=target_id, **plan.dt_profile)
+            .on_conflict_do_update(
+                index_elements=["contact_id"],
+                set_=plan.dt_profile,
+            )
+        )
+
+    # AdopterInterest: union. Only add DT FPGs not already on the target.
+    if plan.dt_interests:
+        existing_people = {
+            pid
+            for (pid,) in pg_session.execute(
+                select(AdopterInterest.people_id3).where(
+                    AdopterInterest.contact_id == target_id
+                )
+            ).all()
+            if pid is not None
+        }
+        dt_by_people = {
+            interest["people_id3"]: interest for interest in plan.dt_interests
+        }
+        for people_id3 in interests_to_add(
+            core_keys=existing_people, dt_keys=set(dt_by_people)
+        ):
+            interest = dt_by_people[people_id3]
+            pg_session.execute(
+                pg_insert(AdopterInterest)
+                .values(
+                    id=uuid.uuid4(),
+                    contact_id=target_id,
+                    source_system=SOURCE_SYSTEM,
+                    source_id=f"{plan.source_id}:{people_id3}",
+                    **interest,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["source_system", "source_id"],
+                    index_where=text("source_id IS NOT NULL"),
+                )
+            )
+
+
 def _resolve_conflict(pg_session: Session, plan: MergePlan) -> None:
     """Delete the MigrationConflict row by its natural key — the model has
     no status column, so delete-on-resolve is the convention. Safe and
@@ -558,6 +639,7 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
         return
     plan.identity_linked = _apply_identity_link(pg_session, plan, target)
     _apply_overwrite(pg_session, plan)
+    _merge_children(pg_session, plan)
     _repoint_history_and_assignment(pg_session, plan)
     _resolve_conflict(pg_session, plan)
 
