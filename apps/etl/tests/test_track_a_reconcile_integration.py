@@ -1084,6 +1084,59 @@ def test_two_conflicts_sharing_a_target_go_to_review(pg_session, tmp_path):
     assert "skip_multi_collision" in body
 
 
+def test_multi_collision_recommends_real_named_keeper(pg_session, tmp_path):
+    """In a multi-collision cluster, both members stay 'skip_multi_collision'
+    (review-only, never auto-merged), but each plan is annotated with the
+    SAME ``recommended_keep`` = the DT contact with the most-complete, real
+    name. The email-named record (more meta) must LOSE to the real-named one
+    (the suranjansim bug), and the recommendation surfaces in the review CSV.
+    """
+    email = "rec@9test.dev"
+    _seed_target(pg_session, email=email, name="Suranjan Sim",
+                 b2c_subject_id="subj-9-rec")
+    _seed_loser(pg_session, source_id="9860", name=email)
+    _seed_loser(pg_session, source_id="9861", name="Suranjan Sim")
+    _seed_conflict(pg_session, source_id="9860", email=email)
+    _seed_conflict(pg_session, source_id="9861", email=email)
+    pg_session.commit()
+
+    # 9860: post_title is the EMAIL (DT fallback) but carries MORE meta.
+    # 9861: post_title is a real name with LESS meta — must still win.
+    reader = _make_dt_reader({
+        "9860": {
+            "post_row": _post_row(9860, email),
+            "meta_rows": _meta(phone="555-0001", sources="referral"),
+        },
+        "9861": {
+            "post_row": _post_row(9861, "Suranjan Sim"),
+            "meta_rows": _meta(),
+        },
+    })
+    review_out = tmp_path / "review.csv"
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader,
+                       review_path=str(review_out))
+
+    assert len(result.to_merge) == 0
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9860"].status == "skip_multi_collision"
+    assert plans["9861"].status == "skip_multi_collision"
+    # Both plans carry the SAME recommendation: the real-named record (9861),
+    # even though the email-named 9860 has more filled meta.
+    assert plans["9860"].recommended_keep == "9861"
+    assert plans["9861"].recommended_keep == "9861"
+
+    body = review_out.read_text()
+    assert "recommended_keep" in body  # column present
+    # The recommendation value appears in the review output.
+    import csv as _csv
+
+    rows = list(_csv.DictReader(review_out.read_text().splitlines()))
+    by_sid = {r["source_id"]: r for r in rows}
+    assert by_sid["9860"]["recommended_keep"] == "9861"
+    assert by_sid["9861"]["recommended_keep"] == "9861"
+
+
 # ─── fix #6: ContactAssignment DT-replace when target already assigned ───────
 
 
