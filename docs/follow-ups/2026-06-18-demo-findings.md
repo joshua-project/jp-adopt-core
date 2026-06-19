@@ -7,24 +7,27 @@ roadmap at the bottom.
 
 ## The root cause behind most of this
 
-**Production was seeded from `jp-adopt-forms` (#85) only — none of the
-operational seed data was ever loaded into prod.** Multiple symptoms are
-the same underlying gap, not separate bugs:
+**CORRECTED 2026-06-18 (verified against prod admin API + a read-only DB
+count).** An earlier draft of this section claimed the DT backfill never
+ran and drips were never seeded — both wrong. What's actually true:
 
-- DT historical contacts missing → the `disciple.tools` backfill never
-  landed (the hourly delta cron runs green but imports ~0 rows; "0
-  errors" ≠ "complete" — `duplicate_email` / watermark-skip drop rows
-  silently).
-- Daily digest didn't reach staff → staff `Contact`/`staff_profile`
-  rows seeded via migrations, but other operational data wasn't.
-- Drip "email templates not loaded" → the template **files** ship in the
-  API image, but the **campaign + step rows** (created by
-  `scripts/seed-local.sh`, a local-dev script) were never created in
-  prod.
+- **DT sync IS running and the historical import largely landed** —
+  1,165 hourly runs; prod `contacts` by `source_system`: **dt=249**,
+  forms=198, staff_seed=1 (total 448). Not a missing import.
+- **The real gap is a silent conflict backlog** (errors=0, so it looked
+  clean): **210 `duplicate_email`** (DT contacts colliding with forms
+  contacts → DT history not merged), **246 `assignee_no_subject`**
+  (assignments referencing unmapped DT user handles), **12
+  `fpg_not_found`**. This is the Phase-2 reconciliation work below.
+- **Drip campaigns ARE seeded** — all 3 (Adopter 8-step, Facilitator
+  post-approval 5-step, Facilitator welcome 1-step) with every step +
+  template ref — but all in `status='draft'`. "Templates not loaded" =
+  not activated + content not yet adjusted, **not** a seeding gap.
 
-Fixing the seeding gap resolves several rows below at once. Verify with
-the firewall-free admin API (`/v1/admin/migration-conflicts/summary`,
-`/v1/admin/etl-runs`, `/v1/drips/campaigns`) — no DB exposure needed.
+Verify anytime with the firewall-free admin API
+(`/v1/admin/migration-conflicts/summary`, `/v1/admin/etl-runs`,
+`/v1/drips/campaigns`). The definitive `source_system` split needs a
+read-only DB count (operator-run).
 
 ---
 
