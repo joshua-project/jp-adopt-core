@@ -15,7 +15,9 @@ For each clean `duplicate_email` conflict, merge the authoritative DT contact on
 **Full DT overwrite of descriptive data + workflow status**, with three carve-outs:
 1. **Open core match → skip + flag.** Any contact with an open `match` row is left untouched and routed to Amy's review list (protects in-core triage from a stale DT status reset).
 2. **Ambiguous identity → skip + flag.** Same email but DT name vs core name mismatch (shared/family inbox) is not auto-merged; goes to Amy's review list. Amy-approved cases merge on a later run.
-3. **Consent: most-restrictive wins.** An opt-out in DT *or* core stays opted-out; DT may only *add* consent, never weaken a core opt-out.
+3. **Protected contact → skip + flag (operator decision 2026-06-18).** A contact is PROTECTED and is never overwritten — skipped to Amy's review list — when its core `adopter_status == 'do_not_engage'` **OR** core `facilitator_status == 'do_not_engage'` **OR** `Contact.local_modified_after_import is True`. These are the opt-out / most-restrictive signals: `do_not_engage` is an explicit human "do not contact" disposition, and `local_modified_after_import` means staff edited the contact in core after import. This mirrors the ETL importer's own guard (`orchestrator.py` upsert: `where=Contact.local_modified_after_import.is_(False)`, which records a `local_modified_after_import` conflict for Amy instead of overwriting). The merge applies the most-restrictive interpretation: when in doubt, do not clobber a human's edit or opt-out — route it to Amy.
+
+   Consent is still handled most-restrictively as a child-table rule (an opt-out in DT *or* core stays opted-out; DT may only *add* consent, never weaken a core opt-out).
 
 ## Merge rules (per data category)
 
