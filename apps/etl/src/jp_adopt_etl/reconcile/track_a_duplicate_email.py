@@ -616,6 +616,31 @@ def _merge_children(pg_session: Session, plan: MergePlan) -> None:
             )
 
 
+def _adopt_dt_keys(pg_session: Session, plan: MergePlan) -> None:
+    """Durable resolution: the target adopts the DT identity keys
+    (``source_system='dt'``, ``source_id=<conflict.source_id>``) so the next
+    hourly sync resolves it by ``(source_system, source_id)`` — the update
+    path — and never re-collides on email. Must run AFTER the loser's
+    history/assignment are re-pointed off it.
+
+    Key-collision guard: the DT "loser" Contact already holds
+    ``('dt', source_id)`` under the partial unique index
+    ``uq_contacts_source_system_source_id``. The target can't adopt those
+    keys while the loser still owns them, so we delete the loser stub first
+    (its email was dropped to NULL on import and its children have already
+    moved to the target). Cascades clean up any remaining child rows.
+    """
+    if plan.loser_contact_id is not None and plan.loser_contact_id != plan.target_contact_id:
+        pg_session.execute(
+            delete(Contact).where(Contact.id == plan.loser_contact_id)
+        )
+    pg_session.execute(
+        update(Contact)
+        .where(Contact.id == plan.target_contact_id)
+        .values(source_system=SOURCE_SYSTEM, source_id=plan.source_id)
+    )
+
+
 def _resolve_conflict(pg_session: Session, plan: MergePlan) -> None:
     """Delete the MigrationConflict row by its natural key — the model has
     no status column, so delete-on-resolve is the convention. Safe and
@@ -641,6 +666,7 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
     _apply_overwrite(pg_session, plan)
     _merge_children(pg_session, plan)
     _repoint_history_and_assignment(pg_session, plan)
+    _adopt_dt_keys(pg_session, plan)
     _resolve_conflict(pg_session, plan)
 
 

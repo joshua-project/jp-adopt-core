@@ -509,6 +509,39 @@ def test_dt_assignment_replaces(pg_session):
     assert asg.user_subject_id == "staff-dt-9"
 
 
+def test_durable_resolution_no_reconflict(pg_session):
+    email = "durable@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          source_system="forms", source_id="9500",
+                          b2c_subject_id="subj-9-dur")
+    _seed_loser(pg_session, source_id="9760", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9760", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9760": {"post_row": _post_row(9760, "Jane Doe"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+
+    pg_session.refresh(target)
+    # Target adopted the DT keys so the next sync resolves it by
+    # (source_system, source_id) — the update path, never a re-collision.
+    assert target.source_system == "dt"
+    assert target.source_id == "9760"
+
+    # Exactly one contact holds ('dt', '9760') — the loser stub is gone, so
+    # the partial unique index is satisfied and no new conflict can form.
+    existing = pg_session.execute(
+        select(Contact).where(
+            Contact.source_system == "dt", Contact.source_id == "9760"
+        )
+    ).scalars().all()
+    assert len(existing) == 1
+    assert existing[0].id == target.id
+
+
 def test_dry_run_is_non_mutating_but_writes_etl_run(pg_session):
     email = "merge.me@9test.dev"
     target = _seed_target(pg_session, email=email, name="Jane Doe", phone=None)
