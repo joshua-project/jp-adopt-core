@@ -335,6 +335,36 @@ def test_contact_with_open_match_is_skipped(pg_session):
     assert target.phone is None
 
 
+def test_dt_overwrites_nonempty_status_and_fields(pg_session):
+    email = "overwrite@9test.dev"
+    target = _seed_target(
+        pg_session, email=email, name="Jane Doe",
+        b2c_subject_id="subj-9-ow", phone="OLD", origin="forms",
+    )
+    target.adopter_status = "new"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9710", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9710", email=email)
+    pg_session.commit()
+
+    # DT carries a newer phone, origin, and a moved-on workflow status.
+    # DT 'engaged' maps to adopter_status 'contacted' (status.py).
+    reader = _make_dt_reader(
+        {"9710": {"post_row": _post_row(9710, "Jane Doe"),
+                  "meta_rows": _meta(status="engaged", phone="NEW",
+                                     sources="referral")}}
+    )
+    reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, allow_unsafe_merge=True,
+    )
+    pg_session.refresh(target)
+    # DT wins on non-empty fields AND on workflow status.
+    assert target.phone == "NEW"
+    assert target.origin == "referral"
+    assert target.adopter_status == "contacted"
+
+
 def test_dry_run_is_non_mutating_but_writes_etl_run(pg_session):
     email = "merge.me@9test.dev"
     target = _seed_target(pg_session, email=email, name="Jane Doe", phone=None)
@@ -461,27 +491,31 @@ def test_apply_merges_backfills_and_resolves(pg_session):
     assert n_summary == 1
 
 
-def test_apply_does_not_overwrite_nonempty_local_value(pg_session):
+def test_apply_keeps_local_value_where_dt_is_empty(pg_session):
+    # DT-authoritative: DT overwrites where it HAS a value, but a column DT
+    # leaves empty keeps the existing core value (no clobber-to-null).
     email = "keep.local@9test.dev"
     target = _seed_target(
         pg_session, email=email, name="Jane Doe",
-        b2c_subject_id="subj-9-keep", phone="LOCAL-PHONE",
+        b2c_subject_id="subj-9-keep", phone="LOCAL-PHONE", origin="forms",
     )
     _seed_loser(pg_session, source_id="9620", name="Jane Doe")
     _seed_conflict(pg_session, source_id="9620", email=email)
     pg_session.commit()
 
+    # DT has no phone (empty) but a new origin.
     reader = _make_dt_reader(
         {"9620": {"post_row": _post_row(9620, "Jane Doe"),
-                  "meta_rows": _meta(phone="DT-PHONE")}}
+                  "meta_rows": _meta(sources="referral")}}
     )
     reconcile(
         pg_session=pg_session, mysql_conn=object(),
         mode="production", dt_reader=reader, allow_unsafe_merge=True,
     )
     pg_session.refresh(target)
-    # Non-empty local phone must be preserved, NOT overwritten by DT.
+    # DT empty on phone => core value kept; DT non-empty origin => DT wins.
     assert target.phone == "LOCAL-PHONE"
+    assert target.origin == "referral"
 
 
 def test_ambiguous_name_goes_to_review_not_merged(pg_session, tmp_path):

@@ -122,6 +122,7 @@ from jp_adopt_etl.dt_source import (
 )
 from jp_adopt_etl.mappers.contacts import map_contact
 from jp_adopt_etl.mappers.status import Mode
+from jp_adopt_etl.reconcile.track_a_merge import merge_descriptive
 
 logger = logging.getLogger(__name__)
 
@@ -139,16 +140,31 @@ RECONCILE_LABEL = "dt_reconcile:duplicate_email"
 # so the predicate joins Match → AdopterInterest by contact_id.
 OPEN_MATCH_STATUSES = ("recommended", "accepted", "active", "triage")
 
-# Contact columns we are willing to backfill from DT when the local value
-# is empty. We deliberately EXCLUDE adopter_status / facilitator_status —
-# those mutate only via the workflow router (AGENTS.md), never here. We
-# also exclude email_normalized: the merge target already owns the email,
-# and the DT loser's email is the one we are folding in.
-_BACKFILLABLE_FIELDS = (
+# Contact columns the DT-authoritative merge overwrites onto the target
+# where DT has a value (``merge_descriptive`` keeps the core value only
+# where DT is empty). adopter_status / facilitator_status are INCLUDED:
+# the merge is DT-authoritative and the open-match pre-check has already
+# excluded anything under live in-core triage, so a direct status write is
+# safe here (consistent with the ETL importer, which also writes status
+# directly). email_normalized is excluded — the target already owns the
+# email; the DT loser's email is folded in via the identity link + key
+# adoption, not a column overwrite.
+_MERGE_FIELDS = (
+    "display_name",
     "phone",
     "origin",
     "country_code",
+    "adopter_status",
+    "facilitator_status",
 )
+
+# Status values that are NOT valid members of the contacts CHECK
+# constraints (ck_contacts_adopter_status / _facilitator_status). The
+# status mapper emits ``unknown`` for DT values it can't map; writing it
+# would violate the constraint, so we drop those from the overwrite (the
+# core status is kept and the row is surfaced elsewhere for review).
+_INVALID_STATUS_VALUES = ("unknown",)
+_STATUS_FIELDS = ("adopter_status", "facilitator_status")
 
 
 # A DT reader callable: (conn, post_id) -> (post_row | None, meta_rows).
@@ -165,8 +181,8 @@ class MergePlan:
     target_display_name: str | None = None
     loser_contact_id: uuid.UUID | None = None
     dt_display_name: str | None = None
-    # Fields that would be backfilled onto the target {column: value}.
-    backfill: dict[str, Any] = field(default_factory=dict)
+    # Fields DT overwrites onto the target {column: value}.
+    field_changes: dict[str, Any] = field(default_factory=dict)
     activity_repointed: int = 0
     assignment_repointed: bool = False
     identity_linked: bool = False
@@ -374,13 +390,16 @@ def plan_merges(
         )
         plan.dt_display_name = dt_kwargs.get("display_name")
 
-        # Backfill plan: only columns where the target value is empty AND
-        # the DT value is non-empty.
-        for col in _BACKFILLABLE_FIELDS:
-            local_val = getattr(target, col, None)
-            dt_val = dt_kwargs.get(col)
-            if (local_val is None or local_val == "") and dt_val not in (None, ""):
-                plan.backfill[col] = dt_val
+        # DT-authoritative field plan: DT wins where DT has a value; the core
+        # value is kept where DT is empty. Status columns whose DT value is
+        # unmappable (``unknown``) are dropped so the overwrite never
+        # violates the contacts status CHECK constraints.
+        core_vals = {col: getattr(target, col, None) for col in _MERGE_FIELDS}
+        dt_vals = {col: dt_kwargs.get(col) for col in _MERGE_FIELDS}
+        for col in _STATUS_FIELDS:
+            if dt_vals.get(col) in _INVALID_STATUS_VALUES:
+                dt_vals[col] = None
+        plan.field_changes = merge_descriptive(core=core_vals, dt=dt_vals)
 
         # Ambiguity gate: same email but mismatched name => possible shared
         # inbox. Route to the review list instead of auto-merging.
@@ -446,17 +465,17 @@ def _apply_identity_link(
     return False
 
 
-def _apply_backfill(pg_session: Session, plan: MergePlan) -> None:
-    """Backfill empty target columns. Guarded so a concurrent write that
-    filled a column since planning still wins (``col IS NULL``)."""
-    if not plan.backfill:
+def _apply_overwrite(pg_session: Session, plan: MergePlan) -> None:
+    """DT-authoritative field overwrite: write every planned change directly
+    onto the target (no ``IS NULL`` guard — DT is the record of truth, and
+    ``merge_descriptive`` already restricted ``field_changes`` to columns
+    where DT has a value that differs from core)."""
+    if not plan.field_changes:
         return
-    conditions = " AND ".join(f"{col} IS NULL" for col in plan.backfill)
     pg_session.execute(
         update(Contact)
         .where(Contact.id == plan.target_contact_id)
-        .where(text(conditions))
-        .values(**plan.backfill)
+        .values(**plan.field_changes)
     )
 
 
@@ -538,7 +557,7 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
         plan.reason = "merge target disappeared before apply"
         return
     plan.identity_linked = _apply_identity_link(pg_session, plan, target)
-    _apply_backfill(pg_session, plan)
+    _apply_overwrite(pg_session, plan)
     _repoint_history_and_assignment(pg_session, plan)
     _resolve_conflict(pg_session, plan)
 
