@@ -15,10 +15,16 @@ from datetime import UTC, datetime
 import pytest
 from jp_adopt_api.models import (
     ActivityLog,
+    AdopterInterest,
+    Consent,
     Contact,
     ContactAssignment,
+    ContactProfile,
     EtlRun,
+    FacilitatingOrg,
+    Fpg,
     IdentityLink,
+    Match,
     MigrationConflict,
 )
 from sqlalchemy import create_engine, delete, select, text
@@ -61,6 +67,51 @@ def _cleanup(pg_session):
         test_contact_ids = select(Contact.id).where(
             Contact.email_normalized.like("%@9test.dev")
         )
+        scoped_contact_ids = select(Contact.id).where(
+            Contact.source_id.like("9%"),
+            Contact.source_system.in_(["dt", "forms", "staff_seed"]),
+        )
+        # Matches reference adopter_interest rows; delete them (and the
+        # interests) before the contacts they hang off of.
+        pg_session.execute(
+            delete(Match).where(
+                Match.adopter_interest_id.in_(
+                    select(AdopterInterest.id).where(
+                        AdopterInterest.contact_id.in_(scoped_contact_ids)
+                    )
+                )
+            )
+        )
+        pg_session.execute(
+            delete(AdopterInterest).where(
+                AdopterInterest.contact_id.in_(scoped_contact_ids)
+            )
+        )
+        pg_session.execute(
+            delete(AdopterInterest).where(
+                AdopterInterest.contact_id.in_(test_contact_ids)
+            )
+        )
+        pg_session.execute(
+            delete(ContactProfile).where(
+                ContactProfile.contact_id.in_(scoped_contact_ids)
+            )
+        )
+        pg_session.execute(
+            delete(ContactProfile).where(
+                ContactProfile.contact_id.in_(test_contact_ids)
+            )
+        )
+        pg_session.execute(
+            delete(Consent).where(Consent.contact_id.in_(test_contact_ids))
+        )
+        pg_session.execute(
+            delete(FacilitatingOrg).where(
+                FacilitatingOrg.source_system == "dt",
+                FacilitatingOrg.source_id.like("9%"),
+            )
+        )
+        pg_session.execute(delete(Fpg).where(Fpg.people_id3.like("9%")))
         pg_session.execute(
             delete(ActivityLog).where(
                 ActivityLog.source_system == "dt",
@@ -214,7 +265,74 @@ def _seed_conflict(pg_session, *, source_id, email):
     pg_session.flush()
 
 
+def _seed_open_match(pg_session, *, contact_id, people_id3="90001", status="recommended"):
+    """Seed an FPG + facilitating org + adopter_interest + an OPEN match on
+    ``contact_id``. Returns the Match id."""
+    pg_session.execute(
+        text(
+            "INSERT INTO fpg (people_id3, name, frontier) VALUES "
+            "(:pid, 'Test FPG 9', true) ON CONFLICT (people_id3) DO NOTHING"
+        ),
+        {"pid": people_id3},
+    )
+    org = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name="Test Org 9",
+        source_system="dt",
+        source_id="9900",
+    )
+    pg_session.add(org)
+    interest = AdopterInterest(
+        id=uuid.uuid4(),
+        contact_id=contact_id,
+        people_id3=people_id3,
+        source_system="local",
+        source_id=None,
+    )
+    pg_session.add(interest)
+    pg_session.flush()
+    match = Match(
+        id=uuid.uuid4(),
+        adopter_interest_id=interest.id,
+        facilitator_org_id=org.id,
+        status=status,
+    )
+    pg_session.add(match)
+    pg_session.flush()
+    return match.id
+
+
 # ─── tests ─────────────────────────────────────────────────────────────────
+
+
+def test_contact_with_open_match_is_skipped(pg_session):
+    email = "openmatch@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe")
+    _seed_loser(pg_session, source_id="9700", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9700", email=email)
+    _seed_open_match(pg_session, contact_id=target.id, status="recommended")
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9700": {"post_row": _post_row(9700, "Jane Doe"),
+                  "meta_rows": _meta(phone="555-7777")}}
+    )
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, allow_unsafe_merge=True,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9700"].status == "skip_open_match"
+    assert plans["9700"] in result.skipped
+    assert len(result.to_merge) == 0
+
+    # Conflict left in place — routed to Amy, not merged.
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9700")
+    ).scalars().first() is not None
+    # No field overwrite landed.
+    pg_session.refresh(target)
+    assert target.phone is None
 
 
 def test_dry_run_is_non_mutating_but_writes_etl_run(pg_session):

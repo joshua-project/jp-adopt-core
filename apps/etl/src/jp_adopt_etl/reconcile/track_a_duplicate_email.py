@@ -101,10 +101,12 @@ from typing import Any
 from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     ActivityLog,
+    AdopterInterest,
     Contact,
     ContactAssignment,
     EtlRun,
     IdentityLink,
+    Match,
     MigrationConflict,
 )
 from jp_adopt_api.outbox_suppression import outbox_suppressed
@@ -127,6 +129,15 @@ CONFLICT_TYPE = "duplicate_email"
 TABLE_NAME = "contacts"
 SOURCE_SYSTEM = "dt"
 RECONCILE_LABEL = "dt_reconcile:duplicate_email"
+
+# "Open" match statuses — a contact with a match in any of these is in
+# active in-core triage and must NOT have its workflow status reset by the
+# DT-authoritative merge. This is the same not-yet-terminal set the
+# ``uq_match_open_per_interest`` partial unique index uses (models.py); the
+# terminal statuses (declined / completed / withdrawn / sent_back) are NOT
+# open. A Match has no direct contact FK — it hangs off adopter_interest —
+# so the predicate joins Match → AdopterInterest by contact_id.
+OPEN_MATCH_STATUSES = ("recommended", "accepted", "active", "triage")
 
 # Contact columns we are willing to backfill from DT when the local value
 # is empty. We deliberately EXCLUDE adopter_status / facilitator_status —
@@ -159,8 +170,8 @@ class MergePlan:
     activity_repointed: int = 0
     assignment_repointed: bool = False
     identity_linked: bool = False
-    # Disposition.
-    status: str = "pending"  # 'merge' | 'review' | 'skip_missing_target'
+    # Disposition: 'merge' | 'review' | 'skip_open_match' | 'skip_missing_target'.
+    status: str = "pending"
     reason: str = ""
 
 
@@ -179,6 +190,16 @@ class ReconcileResult:
     @property
     def skipped(self) -> list[MergePlan]:
         return [p for p in self.planned if p.status.startswith("skip")]
+
+    @property
+    def for_review_list(self) -> list[MergePlan]:
+        """Cases needing an Amy decision: ambiguous names + open-match
+        skips. (``skip_missing_target`` is data hygiene, not a review item.)"""
+        return [
+            p
+            for p in self.planned
+            if p.status in ("review", "skip_open_match")
+        ]
 
     def counts(self) -> dict[str, int]:
         return {
@@ -303,6 +324,27 @@ def plan_merges(
             continue
         plan.target_contact_id = target.id
         plan.target_display_name = target.display_name
+
+        # Carve-out 1: open core match => skip + flag for Amy. A stale DT
+        # status reset must never clobber a contact under active in-core
+        # triage. Match has no contact FK — it references adopter_interest —
+        # so join through it.
+        open_match = pg_session.execute(
+            select(Match.id)
+            .join(
+                AdopterInterest,
+                Match.adopter_interest_id == AdopterInterest.id,
+            )
+            .where(
+                AdopterInterest.contact_id == target.id,
+                Match.status.in_(OPEN_MATCH_STATUSES),
+            )
+        ).first()
+        if open_match is not None:
+            plan.status = "skip_open_match"
+            plan.reason = "contact has an open match in core; left for Amy"
+            result.planned.append(plan)
+            continue
 
         # The DT loser contact (its email was dropped to NULL on import).
         loser = pg_session.execute(
@@ -507,6 +549,9 @@ def _apply_one(pg_session: Session, plan: MergePlan) -> None:
 
 
 def _review_rows(result: ReconcileResult) -> list[dict[str, Any]]:
+    # Amy's review list = ambiguous-name cases AND open-match skips. Both
+    # need a human decision before any merge; the ``disposition`` column
+    # tells her which carve-out triggered.
     return [
         {
             "source_id": p.source_id,
@@ -516,17 +561,19 @@ def _review_rows(result: ReconcileResult) -> list[dict[str, Any]]:
             "target_contact_id": str(p.target_contact_id)
             if p.target_contact_id
             else "",
+            "disposition": p.status,
             "reason": p.reason,
         }
-        for p in result.to_review
+        for p in result.for_review_list
     ]
 
 
 def write_review_list(
     result: ReconcileResult, path: str
 ) -> int:
-    """Write the ambiguous-match review list for Amy. Format inferred from
-    the path suffix (``.json`` => JSON, else CSV). Returns the row count."""
+    """Write the review list for Amy (ambiguous-name + open-match cases).
+    Format inferred from the path suffix (``.json`` => JSON, else CSV).
+    Returns the row count."""
     rows = _review_rows(result)
     if path.endswith(".json"):
         with open(path, "w", encoding="utf-8") as fh:
@@ -538,6 +585,7 @@ def write_review_list(
             "dt_display_name",
             "local_display_name",
             "target_contact_id",
+            "disposition",
             "reason",
         ]
         with open(path, "w", encoding="utf-8", newline="") as fh:
