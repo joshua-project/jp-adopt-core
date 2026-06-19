@@ -261,8 +261,10 @@ class ReconcileResult:
     def counts(self) -> dict[str, int]:
         # NOTE: call AFTER apply — a per-contact SAVEPOINT failure flips a
         # plan's status from 'merge' to 'failed', so it drops out of
-        # ``to_merge`` and is counted under ``skipped`` (failed rows are not
-        # "inserted"). In dry-run nothing applies, so all 'merge' plans stay.
+        # ``to_merge`` and is added to ``rows_out_skipped`` via the explicit
+        # ``+ len(self.failed)`` term below (failed rows are not "inserted";
+        # 'failed' does not match the ``skip`` prefix). In dry-run nothing
+        # applies, so all 'merge' plans stay.
         return {
             "rows_in": len(self.planned),
             "rows_out_inserted": len(self.to_merge),
@@ -636,11 +638,13 @@ def _repoint_history_and_assignment(
       is a plain UPDATE and idempotent (a re-run finds nothing left to
       move).
     * contact_assignment is 1:1 (contact_id PK). ContactAssignment is
-      DT-authoritative REPLACE for clean merges (design rule): a DT-imported
-      loser assignment replaces the target's prior DT-imported assignment.
-      Protected/locally-edited contacts never reach here (skip_protected),
-      so the target's assignment can only be another ``dt_import`` row — we
-      overwrite it. We still guard the loser side to ``dt_import`` so we
+      DT-authoritative REPLACE for clean merges (design rule) — BUT never
+      clobber a staff override. A clean-merge contact can still carry a
+      staff assignment (assigning a facilitator does not set
+      ``local_modified_after_import``, so skip_protected does not cover it).
+      So we only replace when the target has no assignment OR its existing
+      one is itself a ``dt_import`` row; a non-DT (staff) target assignment
+      is preserved. We also guard the loser side to ``dt_import`` so we
       never carry a non-DT assignment across.
     """
     if plan.loser_contact_id is None:
@@ -659,7 +663,20 @@ def _repoint_history_and_assignment(
     ).scalars().first()
     if loser_assignment is None or loser_assignment.assigned_by != "dt_import":
         return
-    # DT-replace: drop any existing target assignment, then write the DT one.
+    # Never clobber a staff override: only DT-replace when the target has no
+    # assignment or its own is a dt_import row.
+    target_assignment = pg_session.execute(
+        select(ContactAssignment).where(
+            ContactAssignment.contact_id == plan.target_contact_id
+        )
+    ).scalars().first()
+    if (
+        target_assignment is not None
+        and target_assignment.assigned_by != "dt_import"
+    ):
+        return
+    # DT-replace: drop the existing (dt_import) target assignment, then write
+    # the DT one.
     pg_session.execute(
         delete(ContactAssignment).where(
             ContactAssignment.contact_id == plan.target_contact_id
@@ -866,9 +883,11 @@ def _review_rows(result: ReconcileResult) -> list[dict[str, Any]]:
 def write_review_list(
     result: ReconcileResult, path: str
 ) -> int:
-    """Write the review list for Amy (ambiguous-name + open-match cases).
-    Format inferred from the path suffix (``.json`` => JSON, else CSV).
-    Returns the row count."""
+    """Write the review list for Amy — every disposition needing a human
+    decision: ``review`` (ambiguous name), ``skip_open_match``,
+    ``skip_protected`` (do_not_engage / locally edited), and
+    ``skip_multi_collision``. Format inferred from the path suffix
+    (``.json`` => JSON, else CSV). Returns the row count."""
     rows = _review_rows(result)
     if path.endswith(".json"):
         with open(path, "w", encoding="utf-8") as fh:
@@ -938,18 +957,23 @@ def reconcile(
     # otherwise mutate ``result.to_merge`` mid-iteration.
     mergeable = list(result.to_merge)
 
+    # Mutable so we can correct ``merged``/``failed`` after the loop to the
+    # counts that actually committed (a per-contact SAVEPOINT failure flips a
+    # plan to 'failed'); the single bulk_imported summary fires on scope exit.
+    summary_meta: dict[str, Any] = {
+        "mode": mode,
+        "conflict_type": CONFLICT_TYPE,
+        "planned": len(result.planned),
+        "merged": len(mergeable),
+        "review": len(result.to_review),
+        "skipped": len(result.skipped),
+    }
+
     async def _drive() -> None:
         async with outbox_suppressed(
             RECONCILE_LABEL,
             pg_session,  # type: ignore[arg-type]  # async-safe ContextVar; session is sync
-            metadata={
-                "mode": mode,
-                "conflict_type": CONFLICT_TYPE,
-                "planned": len(result.planned),
-                "merged": len(mergeable),
-                "review": len(result.to_review),
-                "skipped": len(result.skipped),
-            },
+            metadata=summary_meta,
         ):
             for plan in mergeable:
                 # One SAVEPOINT per contact: a failure rolls back ONLY that
@@ -969,6 +993,10 @@ def reconcile(
                         "rolled back this contact and continuing",
                         plan.source_id,
                     )
+            # Correct the summary to what actually committed before the
+            # single bulk_imported event fires on scope exit.
+            summary_meta["merged"] = len(result.to_merge)
+            summary_meta["failed"] = len(result.failed)
 
     asyncio.run(_drive())
 

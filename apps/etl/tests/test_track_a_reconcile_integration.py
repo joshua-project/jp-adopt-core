@@ -1208,3 +1208,72 @@ def test_loser_children_not_stranded_after_merge(pg_session):
             select(model).where(model.contact_id == loser_id)
         ).scalars().all()
         assert stranded == []
+
+
+def test_staff_assignment_on_target_is_not_clobbered(pg_session):
+    """A clean-merge contact can carry a STAFF assignment (assigning a
+    facilitator does not set local_modified_after_import, so skip_protected
+    does not cover it). DT-replace must NEVER overwrite a staff override —
+    only a target's own dt_import assignment is replaceable."""
+    email = "staff-asg@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          b2c_subject_id="subj-9-sasg")
+    loser = _seed_loser(pg_session, source_id="9840", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9840", email=email)
+    # Target has a STAFF assignment (assigned_by != 'dt_import').
+    pg_session.add(
+        ContactAssignment(
+            contact_id=target.id, user_subject_id="staff-curated-9",
+            assigned_by="amy@joshuaproject.net",
+        )
+    )
+    pg_session.add(
+        ContactAssignment(
+            contact_id=loser.id, user_subject_id="dt-staffer-9",
+            assigned_by="dt_import",
+        )
+    )
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9840": {"post_row": _post_row(9840, "Jane Doe"), "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+
+    asg = pg_session.execute(
+        select(ContactAssignment).where(
+            ContactAssignment.contact_id == target.id
+        )
+    ).scalars().one()
+    # Staff override preserved — DT did NOT replace it.
+    assert asg.user_subject_id == "staff-curated-9"
+    assert asg.assigned_by == "amy@joshuaproject.net"
+
+
+def test_core_facilitator_do_not_engage_is_protected(pg_session):
+    """The protected carve-out also fires on the facilitator_status branch:
+    a facilitator marked do_not_engage is skipped + flagged, never overwritten."""
+    email = "fac-dne@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Grace Org",
+                          b2c_subject_id="subj-9-fdne", phone=None)
+    target.party_kind = "facilitator"
+    target.facilitator_status = "do_not_engage"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9850", name="Grace Org")
+    _seed_conflict(pg_session, source_id="9850", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9850": {"post_row": _post_row(9850, "Grace Org"),
+                  "meta_rows": _meta(status="engaged", phone="NEW")}}
+    )
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader)
+
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9850"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+    pg_session.refresh(target)
+    assert target.facilitator_status == "do_not_engage"
+    assert target.phone is None
