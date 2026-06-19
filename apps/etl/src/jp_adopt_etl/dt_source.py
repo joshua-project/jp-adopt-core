@@ -96,6 +96,26 @@ def iter_contacts(
         yield from batch
 
 
+def fetch_contact(conn: Connection, post_id: Any) -> dict[Any, Any] | None:
+    """Re-read a SINGLE wp_posts contact row by ID.
+
+    Mirrors :func:`iter_contacts`' SELECT (same columns, same
+    ``post_type='contacts'`` filter) but for one post. Returns the row dict
+    or ``None`` when the id is absent / not a contact. Used by the
+    reconciliation tooling, which must re-read the full DT payload for a
+    contact that the main ETL diverted into a ``migration_conflicts`` row
+    (the conflict row does not carry the payload).
+    """
+    sql = (
+        "SELECT ID, post_title, post_status, post_date, post_date_gmt, "
+        "post_modified, post_modified_gmt "
+        "FROM wp_posts "
+        "WHERE ID = :post_id AND post_type = 'contacts'"
+    )
+    row = conn.execute(text(sql), {"post_id": post_id}).mappings().one_or_none()
+    return dict(row) if row is not None else None
+
+
 def load_postmeta(
     conn: Connection,
     post_ids: list[Any],
@@ -263,6 +283,7 @@ def fetch_max_modified(conn: Connection, table: str = "wp_posts") -> datetime | 
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
+    "fetch_contact",
     "fetch_max_modified",
     "iter_activity_log",
     "iter_comments",
