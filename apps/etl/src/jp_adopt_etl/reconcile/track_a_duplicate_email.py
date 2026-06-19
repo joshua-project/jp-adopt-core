@@ -615,7 +615,10 @@ def _adopt_dt_keys(pg_session: Session, plan: MergePlan) -> None:
     (its email was dropped to NULL on import and its children have already
     moved to the target). Cascades clean up any remaining child rows.
     """
-    if plan.loser_contact_id is not None and plan.loser_contact_id != plan.target_contact_id:
+    if (
+        plan.loser_contact_id is not None
+        and plan.loser_contact_id != plan.target_contact_id
+    ):
         pg_session.execute(
             delete(Contact).where(Contact.id == plan.loser_contact_id)
         )

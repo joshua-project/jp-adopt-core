@@ -265,7 +265,9 @@ def _seed_conflict(pg_session, *, source_id, email):
     pg_session.flush()
 
 
-def _seed_open_match(pg_session, *, contact_id, people_id3="90001", status="recommended"):
+def _seed_open_match(
+    pg_session, *, contact_id, people_id3="90001", status="recommended"
+):
     """Seed an FPG + facilitating org + adopter_interest + an OPEN match on
     ``contact_id``. Returns the Match id."""
     pg_session.execute(
