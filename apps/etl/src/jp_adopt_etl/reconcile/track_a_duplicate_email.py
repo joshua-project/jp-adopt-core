@@ -1,32 +1,13 @@
-"""Track A — reconcile ``duplicate_email`` migration conflicts.
-
-===================== STATUS: DIAGNOSTICS-ONLY =====================
-The merge WRITE path (``--apply``) is HARD-GATED and raises unless an
-explicit ``allow_unsafe_merge`` override is passed. The dry-run diagnostics
-and the ambiguous-match review list are fully functional and are the only
-supported outputs today.
-
-It is gated because the agreed policy is now **DT-authoritative** (Amy
-curates contacts in DT, so DT values are canonical) — the OPPOSITE merge
-direction from the backfill-only/forms-authoritative logic implemented
-below. Three redesign items must land before the gate is lifted:
-
-  (1) DT is authoritative — DT values are CANONICAL, not backfill-only.
-      The current ``_apply_backfill`` only fills empty target columns; a
-      DT-authoritative merge must let curated DT values win.
-  (2) Merge ALL DT child tables. Today only ActivityLog + ContactAssignment
-      are re-pointed; ContactProfile / AdopterInterest / Consent /
-      Enrollment / etc. on the DT loser are STRANDED.
-  (3) Durable conflict resolution. Deleting the MigrationConflict row is not
-      durable — the hourly cron re-detects the same email collision and
-      re-creates the conflict, so resolution must persist a real decision.
-=========================================================================================
+"""Track A — DT-authoritative ``duplicate_email`` merge.
 
 Backlog in prod (2026-06-18): 210 ``duplicate_email`` rows on
-``table_name='contacts'``.
+``table_name='contacts'``. Each is a person who exists as BOTH a
+jp-adopt-forms-seeded core contact (live) and a legacy Disciple.Tools (DT)
+contact. DT is the record of truth — Amy curates contacts there — so this
+tool merges the authoritative DT data ONTO the existing core contact.
 
-Why they exist
---------------
+Why the conflicts exist
+-----------------------
 DT permits the same email on multiple contacts; the new system enforces a
 partial unique index (``uq_contacts_email_normalized`` WHERE
 email_normalized IS NOT NULL). During the main ETL, when a second DT
@@ -36,52 +17,56 @@ a ``duplicate_email`` conflict (``orchestrator._flush_contact_batch``,
 source_value={'email_normalized': '<addr>'}, local_value=null).
 
 That conflict row is LOSSY — it carries neither the DT payload nor the
-merge-target contact id. So to reconcile one row we must:
+merge-target contact id. So to reconcile one row we:
 
-  (a) find the existing local **merge target** Contact by
+  (a) find the existing core **merge target** Contact by
       ``email_normalized == source_value['email_normalized']`` (the contact
       that kept the email), and
   (b) RE-READ the full DT contact by ``source_id`` (= the conflict's
       ``source_id`` = wp_posts.ID) via the gated DT reader.
 
-The merge
----------
-The DT "loser" contact already exists locally as its own Contact row
-(``source_system='dt'``, ``source_id=<conflict.source_id>``) with
-``email_normalized=NULL``. Merging it into the target means:
+The merge (DT-authoritative, three carve-outs)
+----------------------------------------------
+For each CLEAN conflict, DT overwrites the core contact:
 
-  1. **identity_link** — record the colliding email as an auth identity
-     pointing at the merge target's B2C subject (when the target has one),
-     so a future login via that email resolves to the surviving contact.
-     Idempotent against ``uq_identity_link_b2c_subject_id`` (partial,
-     WHERE b2c_subject_id IS NOT NULL).
-  2. **backfill empty fields only** on the merge target from the freshly
-     re-read DT contact — never overwrite a non-empty local value.
-  3. **re-point activity history + assignment** of the DT loser contact
-     onto the merge target so the surviving record carries the full
-     timeline.
-  4. **resolve the conflict** by deleting the MigrationConflict row (the
-     model has no status column — delete-on-resolve is the convention).
+  * **descriptive fields + workflow status** — DT wins where DT has a
+    value (``merge_descriptive``); core kept only where DT is empty.
+  * **child tables** — ContactProfile DT-overwrite; AdopterInterest union;
+    Consent most-restrictive (never weaken a core opt-out); ActivityLog
+    append; ContactAssignment DT-replace (``_merge_children`` +
+    ``_repoint_history_and_assignment``).
+  * **identity_link** — record the colliding email as an auth identity
+    pointing at the merge target's B2C subject so a future login resolves
+    to the surviving contact.
+  * **durable resolution** — the target adopts the DT keys
+    (``source_system='dt'``, ``source_id``) so the next hourly sync
+    resolves it by key (update path) and never re-collides; the DT loser
+    stub is deleted and the MigrationConflict row removed.
 
-Ambiguity / review list
-------------------------
-Same email + clearly different name => possibly a shared/family inbox
-rather than the same person. Those are NOT auto-merged; they are written
-to a REVIEW LIST (CSV/JSON) for Amy to confirm before ``--apply``.
+Three carve-outs route to Amy instead of auto-merging:
+
+  1. **Open core match** — a contact with a match in
+     ``OPEN_MATCH_STATUSES`` is left untouched (protects live in-core
+     triage from a stale DT status reset) and flagged in the review list.
+  2. **Ambiguous identity** — same email but a DT/core name mismatch
+     (likely a shared/family inbox) is not auto-merged; goes to review.
+  3. **Consent most-restrictive** — an opt-out in DT OR core stays
+     opted-out; DT may never weaken a core opt-out.
 
 Safety
 ------
 * DEFAULTS TO DRY-RUN. ``--apply`` (or ``mode='production'``) is required
   to write; dry-run rolls back every data write but still surfaces an
-  ``etl_run`` audit row + the would-be conflict deltas (mirrors
-  ``orchestrator.run_etl``).
+  ``etl_run`` audit row (mirrors ``orchestrator.run_etl``).
 * Bulk writes go through ``outbox_suppressed`` — one
   ``jp.adopt.v1.bulk_imported`` summary event, never per-row Outbox.
-* Idempotent: ON CONFLICT upserts + delete-by-natural-key, so
-  dry-run-then-apply or apply-twice is safe.
+* Idempotent: merged contacts become ``source_system='dt'`` and no longer
+  surface as conflicts; their conflict rows are deleted; field overwrites
+  are deterministic; child upserts use ON CONFLICT — so apply-twice is a
+  no-op.
 * DT MySQL is credential-gated and unavailable in CI — the DT reader is
-  injectable (``dt_reader=``) so tests mock it; the real run is
-  operator-gated.
+  injectable (``dt_reader=``) so tests mock it; the real ``--apply`` is
+  operator-led.
 """
 
 from __future__ import annotations
@@ -735,30 +720,17 @@ def reconcile(
     mode: Mode = "dry_run",
     dt_reader: DtReader = _default_dt_reader,
     review_path: str | None = None,
-    allow_unsafe_merge: bool = False,
 ) -> ReconcileResult:
-    """Plan + (in production) apply duplicate_email merges.
+    """Plan + (in production) apply the DT-authoritative duplicate_email merge.
 
     DRY-RUN (default): plan everything, write an ``etl_run`` audit row, emit
     the review list, then ROLL BACK so zero data rows change — but the
     audit row survives so an operator sees the would-be effect.
 
-    PRODUCTION (``mode='production'``, i.e. ``--apply``): GATED. Raises a
-    ``RuntimeError`` unless ``allow_unsafe_merge=True`` is passed, because
-    the merge is pending the DT-authoritative redesign (see the module
-    docstring's STATUS: DIAGNOSTICS-ONLY block). When the override is set,
-    applies every auto-mergeable plan inside one ``outbox_suppressed`` scope
-    (single bulk_imported summary event), commits, and still emits the
-    review list.
+    PRODUCTION (``mode='production'``, i.e. ``--apply``): applies every
+    auto-mergeable plan inside one ``outbox_suppressed`` scope (single
+    bulk_imported summary event), commits, and still emits the review list.
     """
-    if mode == "production" and not allow_unsafe_merge:
-        raise RuntimeError(
-            "Track A merge --apply is gated: pending DT-authoritative merge "
-            "redesign (re-point ALL DT child tables; durable conflict "
-            "resolution). See module docstring. Pass --allow-unsafe-merge "
-            "(allow_unsafe_merge=True) only to deliberately exercise the "
-            "unsafe write path."
-        )
     result = plan_merges(
         pg_session=pg_session,
         mysql_conn=mysql_conn,
@@ -840,13 +812,11 @@ def run(
     postgres_url: str,
     mode: Mode = "dry_run",
     review_path: str | None = None,
-    allow_unsafe_merge: bool = False,
 ) -> ReconcileResult:
     """Open both engines and reconcile. The MySQL engine is only
     ``.connect()``-ed; the gated reader does the actual queries. This is
     the operator entry point — never run with ``mode='production'`` against
-    prod without an approved review list. ``--apply`` is additionally gated
-    behind ``allow_unsafe_merge`` (see the module docstring)."""
+    prod without an approved review list."""
     mysql_engine: Engine = open_engine(mysql_url)
     pg_engine: Engine = create_engine(postgres_url, future=True)
     SessionLocal = sessionmaker(pg_engine, expire_on_commit=False, autoflush=False)
@@ -857,7 +827,6 @@ def run(
                 mysql_conn=mysql_conn,
                 mode=mode,
                 review_path=review_path,
-                allow_unsafe_merge=allow_unsafe_merge,
             )
     finally:
         pg_engine.dispose()
@@ -874,16 +843,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Write changes (production mode). Omitted => DRY-RUN (default). "
-        "GATED: also requires --allow-unsafe-merge (the merge is pending the "
-        "DT-authoritative redesign — see the module docstring).",
-    )
-    parser.add_argument(
-        "--allow-unsafe-merge",
-        action="store_true",
-        default=False,
-        help="Override the --apply gate and run the UNSAFE merge write path. "
-        "Pending the DT-authoritative redesign; do not use against prod.",
+        help="Write changes (production mode). Omitted => DRY-RUN (default).",
     )
     parser.add_argument(
         "--review-out",
@@ -901,7 +861,6 @@ def main(argv: list[str] | None = None) -> int:
         postgres_url=args.postgres_url,
         mode=mode,
         review_path=args.review_out,
-        allow_unsafe_merge=args.allow_unsafe_merge,
     )
     logger.info(
         "track_a duplicate_email: mode=%s planned=%d merged=%d review=%d skipped=%d",

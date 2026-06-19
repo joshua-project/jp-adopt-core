@@ -319,7 +319,7 @@ def test_contact_with_open_match_is_skipped(pg_session):
     )
     result = reconcile(
         pg_session=pg_session, mysql_conn=object(),
-        mode="production", dt_reader=reader, allow_unsafe_merge=True,
+        mode="production", dt_reader=reader,
     )
     plans = {p.source_id: p for p in result.planned}
     assert plans["9700"].status == "skip_open_match"
@@ -356,7 +356,7 @@ def test_dt_overwrites_nonempty_status_and_fields(pg_session):
     )
     reconcile(
         pg_session=pg_session, mysql_conn=object(),
-        mode="production", dt_reader=reader, allow_unsafe_merge=True,
+        mode="production", dt_reader=reader,
     )
     pg_session.refresh(target)
     # DT wins on non-empty fields AND on workflow status.
@@ -410,7 +410,7 @@ def test_interests_unioned(pg_session):
                   "meta_rows": _meta_with_fpg(fpg_json)}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
 
     people = {
         i.people_id3
@@ -441,7 +441,7 @@ def test_profile_overwritten_from_dt(pg_session):
                   "meta_rows": _meta_with_profile(entity_size="31_100")}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
 
     prof = pg_session.execute(
         select(ContactProfile).where(ContactProfile.contact_id == target.id)
@@ -469,7 +469,7 @@ def test_core_consent_optout_preserved(pg_session):
                   "meta_rows": _meta()}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
 
     consents = pg_session.execute(
         select(Consent).where(Consent.contact_id == target.id)
@@ -499,7 +499,7 @@ def test_dt_assignment_replaces(pg_session):
                   "meta_rows": _meta()}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
 
     asg = pg_session.execute(
         select(ContactAssignment).where(
@@ -523,7 +523,7 @@ def test_durable_resolution_no_reconflict(pg_session):
                   "meta_rows": _meta()}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
 
     pg_session.refresh(target)
     # Target adopted the DT keys so the next sync resolves it by
@@ -628,7 +628,6 @@ def test_apply_merges_backfills_and_resolves(pg_session):
         mysql_conn=object(),
         mode="production",
         dt_reader=reader,
-        allow_unsafe_merge=True,
     )
     assert len(result.to_merge) == 1
 
@@ -687,7 +686,7 @@ def test_apply_keeps_local_value_where_dt_is_empty(pg_session):
     )
     reconcile(
         pg_session=pg_session, mysql_conn=object(),
-        mode="production", dt_reader=reader, allow_unsafe_merge=True,
+        mode="production", dt_reader=reader,
     )
     pg_session.refresh(target)
     # DT empty on phone => core value kept; DT non-empty origin => DT wins.
@@ -712,7 +711,6 @@ def test_ambiguous_name_goes_to_review_not_merged(pg_session, tmp_path):
     result = reconcile(
         pg_session=pg_session, mysql_conn=object(),
         mode="production", dt_reader=reader, review_path=str(review_out),
-        allow_unsafe_merge=True,
     )
     assert len(result.to_review) == 1
     assert len(result.to_merge) == 0
@@ -742,22 +740,20 @@ def test_apply_is_idempotent(pg_session):
                   "meta_rows": _meta(phone="555-0000")}}
     )
     reconcile(pg_session=pg_session, mysql_conn=object(),
-              mode="production", dt_reader=reader, allow_unsafe_merge=True)
+              mode="production", dt_reader=reader)
     # Second apply: conflict is gone, so nothing to do — must not raise.
     result2 = reconcile(pg_session=pg_session, mysql_conn=object(),
-                        mode="production", dt_reader=reader,
-                        allow_unsafe_merge=True)
+                        mode="production", dt_reader=reader)
     assert len(result2.planned) == 0
     pg_session.refresh(target)
     assert target.phone == "555-0000"
 
 
-def test_apply_without_override_is_gated(pg_session):
-    """--apply (mode='production') WITHOUT allow_unsafe_merge raises the gate
-    error — the merge is diagnostics-only pending the DT-authoritative
-    redesign — and writes nothing."""
-    email = "gated@9test.dev"
-    _seed_target(pg_session, email=email, name="Jane Doe", b2c_subject_id="subj-9-gate")
+def test_apply_runs_without_override(pg_session):
+    """--apply (mode='production') runs the DT-authoritative merge with no
+    override flag — the gate has been removed now the merge is designed."""
+    email = "ungated@9test.dev"
+    _seed_target(pg_session, email=email, name="Jane Doe", b2c_subject_id="subj-9-ung")
     _seed_loser(pg_session, source_id="9660", name="Jane Doe")
     _seed_conflict(pg_session, source_id="9660", email=email)
     pg_session.commit()
@@ -765,19 +761,18 @@ def test_apply_without_override_is_gated(pg_session):
     reader = _make_dt_reader(
         {"9660": {"post_row": _post_row(9660, "Jane Doe"), "meta_rows": _meta()}}
     )
-    with pytest.raises(RuntimeError, match="Track A merge --apply is gated"):
-        reconcile(
-            pg_session=pg_session,
-            mysql_conn=object(),
-            mode="production",
-            dt_reader=reader,
-        )
+    result = reconcile(
+        pg_session=pg_session,
+        mysql_conn=object(),
+        mode="production",
+        dt_reader=reader,
+    )
+    assert len(result.to_merge) == 1  # merged, no RuntimeError
 
-    # The conflict was left untouched (nothing committed before the raise).
-    pg_session.rollback()
+    # The conflict was resolved (deleted) by the merge.
     assert pg_session.execute(
         select(MigrationConflict).where(MigrationConflict.source_id == "9660")
-    ).scalars().first() is not None
+    ).scalars().first() is None
 
 
 def test_missing_target_is_skipped_not_merged(pg_session):
@@ -790,8 +785,7 @@ def test_missing_target_is_skipped_not_merged(pg_session):
         {"9650": {"post_row": _post_row(9650, "Ghost"), "meta_rows": _meta()}}
     )
     result = reconcile(pg_session=pg_session, mysql_conn=object(),
-                       mode="production", dt_reader=reader,
-                       allow_unsafe_merge=True)
+                       mode="production", dt_reader=reader)
     assert len(result.skipped) == 1
     assert len(result.to_merge) == 0
     # Conflict left in place.
