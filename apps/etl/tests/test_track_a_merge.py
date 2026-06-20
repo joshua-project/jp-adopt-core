@@ -9,7 +9,9 @@ from __future__ import annotations
 from jp_adopt_etl.reconcile.track_a_merge import (
     consent_most_restrictive,
     interests_to_add,
+    is_real_name,
     merge_descriptive,
+    pick_winner,
 )
 
 
@@ -54,3 +56,86 @@ def test_consent_dt_optout_propagates():
 def test_interests_union_adds_only_missing():
     add = interests_to_add(core_keys={"pid-1"}, dt_keys={"pid-1", "pid-2"})
     assert add == {"pid-2"}
+
+
+# ─── multi-collision recommended-keeper: is_real_name + pick_winner ──────────
+
+
+def test_is_real_name_true_for_genuine_name():
+    assert is_real_name("Suranjan Sim", "suranjansim@example.com") is True
+
+
+def test_is_real_name_false_for_full_email():
+    assert is_real_name("suranjansim@example.com", "suranjansim@example.com") is False
+
+
+def test_is_real_name_false_for_email_local_part():
+    assert is_real_name("suranjansim", "suranjansim@example.com") is False
+
+
+def test_is_real_name_false_for_empty():
+    assert is_real_name("", "x@example.com") is False
+    assert is_real_name(None, "x@example.com") is False
+
+
+def test_is_real_name_case_and_whitespace_insensitive():
+    # Surrounding whitespace + different case still detected as the email.
+    assert is_real_name("  SuranjanSim@Example.com  ", "suranjansim@example.com") is False
+    assert is_real_name("  SURANJANSIM  ", "suranjansim@example.com") is False
+
+
+def test_is_real_name_true_when_no_email():
+    # No email to compare against => any non-empty name is "real".
+    assert is_real_name("Jane Doe", None) is True
+
+
+def test_pick_winner_real_name_beats_more_filled_email_name():
+    # The suranjansim bug: the email-named record has MORE fields (15) but
+    # the real-named record (13) is the correct entity and must win.
+    candidates = [
+        {
+            "source_id": "100",
+            "name": "suranjansim@example.com",
+            "email": "suranjansim@example.com",
+            "filled": 15,
+            "created": "2020-01-01",
+        },
+        {
+            "source_id": "200",
+            "name": "Suranjan Sim",
+            "email": "suranjansim@example.com",
+            "filled": 13,
+            "created": "2019-01-01",
+        },
+    ]
+    assert pick_winner(candidates)["source_id"] == "200"
+
+
+def test_pick_winner_filled_tiebreak_among_real_names():
+    candidates = [
+        {"source_id": "1", "name": "Jane Doe", "email": "j@x.com",
+         "filled": 5, "created": "2020-01-01"},
+        {"source_id": "2", "name": "Jane M Doe", "email": "j@x.com",
+         "filled": 9, "created": "2019-01-01"},
+    ]
+    assert pick_winner(candidates)["source_id"] == "2"
+
+
+def test_pick_winner_created_tiebreak_among_real_names():
+    candidates = [
+        {"source_id": "1", "name": "Jane Doe", "email": "j@x.com",
+         "filled": 7, "created": "2019-06-01"},
+        {"source_id": "2", "name": "Jane Doe", "email": "j@x.com",
+         "filled": 7, "created": "2021-06-01"},
+    ]
+    assert pick_winner(candidates)["source_id"] == "2"
+
+
+def test_pick_winner_stable_by_source_id():
+    candidates = [
+        {"source_id": "200", "name": "Jane Doe", "email": "j@x.com",
+         "filled": 7, "created": "2020-01-01"},
+        {"source_id": "100", "name": "Jane Doe", "email": "j@x.com",
+         "filled": 7, "created": "2020-01-01"},
+    ]
+    assert pick_winner(candidates)["source_id"] == "100"

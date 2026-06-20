@@ -114,6 +114,7 @@ from jp_adopt_etl.orchestrator import _load_existing_fpg_ids
 from jp_adopt_etl.reconcile.track_a_merge import (
     interests_to_add,
     merge_descriptive,
+    pick_winner,
 )
 
 # A core contact carrying any of these signals is PROTECTED — the
@@ -214,6 +215,10 @@ class MergePlan:
     interests_repointed: int = 0
     assignment_repointed: bool = False
     identity_linked: bool = False
+    # For multi-collision clusters only: the source_id of the DT contact the
+    # reviewer is RECOMMENDED to keep (most-complete, name-aware). Advisory —
+    # multi-collision stays review-only; this does not auto-merge or delete.
+    recommended_keep: str | None = None
     # Disposition: 'merge' | 'review' | 'skip_open_match' | 'skip_protected'
     # | 'skip_multi_collision' | 'skip_missing_target' | 'failed'.
     status: str = "pending"
@@ -293,6 +298,60 @@ def _default_dt_reader(
         return None, []
     meta = load_postmeta(conn, [post_row["ID"]])
     return post_row, meta.get(post_row["ID"], [])
+
+
+def _count_filled(meta_rows: list[dict[str, Any]]) -> int:
+    """Count meta rows whose value is non-empty — a rough "how complete is
+    this DT contact" signal for the recommended-keeper heuristic. DT postmeta
+    rows carry the value under ``meta_value`` (``dt_source.load_postmeta``);
+    fall back to ``value`` for resilience to alternate reader shapes."""
+    filled = 0
+    for row in meta_rows:
+        val = row.get("meta_value", row.get("value"))
+        if val not in (None, ""):
+            filled += 1
+    return filled
+
+
+def _recommend_keeper(
+    mysql_conn: Any, email: str, source_ids: list[str], dt_reader: DtReader,
+) -> str | None:
+    """Re-read every DT contact in a multi-collision cluster and return the
+    source_id of the recommended keeper (name-aware "most complete").
+
+    The cluster's shared collision ``email`` is what each candidate's
+    ``post_title`` is tested against — a DT post whose title IS the email is
+    the fallback-named one and loses to a genuinely-named sibling.
+
+    Re-read failures are tolerated: a candidate whose re-read returns None is
+    scored with ``name=None`` / ``filled=0`` so it ranks last but
+    ``pick_winner`` still produces a recommendation. Advisory only — the
+    cluster stays review-only; nothing is merged or deleted here.
+    """
+    candidates: list[dict[str, Any]] = []
+    for sid in source_ids:
+        try:
+            post_row, meta_rows = dt_reader(mysql_conn, sid)
+        except Exception:  # noqa: BLE001 — a bad re-read must not abort scoring
+            post_row, meta_rows = None, []
+        if post_row is None:
+            candidates.append(
+                {"source_id": sid, "name": None, "email": email,
+                 "filled": 0, "created": None}
+            )
+            continue
+        candidates.append(
+            {
+                "source_id": sid,
+                "name": post_row.get("post_title"),
+                "email": email,
+                "filled": _count_filled(meta_rows),
+                "created": post_row.get("post_date"),
+            }
+        )
+    if not candidates:
+        return None
+    return pick_winner(candidates)["source_id"]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -376,11 +435,29 @@ def plan_merges(
     # one contact, so a many-DT-posts -> one-contact case is not auto-
     # mergeable. Route ALL of them to Amy (skip_multi_collision) instead.
     email_counts: dict[str, int] = {}
+    # email -> [source_id, ...] of every DT post colliding on it, so a
+    # multi-collision cluster can be scored together for a recommended keeper.
+    email_members: dict[str, list[str]] = {}
     for conflict in conflicts:
         raw = (conflict.source_value or {}).get("email_normalized")
         norm = normalize_email(raw) if raw else None
         if norm:
             email_counts[norm] = email_counts.get(norm, 0) + 1
+            email_members.setdefault(norm, []).append(conflict.source_id)
+
+    # For each multi-collision email, score every candidate DT contact once
+    # (name-aware "most complete") and cache the recommended keeper's
+    # source_id. Advisory only: multi-collision stays in the review list; we
+    # never auto-merge or delete losers (a "most complete" pick can be a
+    # different real entity — e.g. an org beats a person — so discarding
+    # losers needs human confirmation).
+    recommended_keep_by_email: dict[str, str | None] = {}
+    for norm, members in email_members.items():
+        if email_counts.get(norm, 0) <= 1:
+            continue
+        recommended_keep_by_email[norm] = _recommend_keeper(
+            mysql_conn, norm, members, dt_reader
+        )
 
     for conflict in conflicts:
         source_id = conflict.source_id
@@ -398,10 +475,13 @@ def plan_merges(
         # route every member to Amy.
         if email_counts.get(email, 0) > 1:
             plan.status = "skip_multi_collision"
+            plan.recommended_keep = recommended_keep_by_email.get(email)
             plan.reason = (
                 f"email {email!r} collides from {email_counts[email]} DT "
                 "posts; many-to-one not auto-mergeable, left for Amy"
             )
+            if plan.recommended_keep:
+                plan.reason += f" (recommended keep: {plan.recommended_keep})"
             result.planned.append(plan)
             continue
 
@@ -874,6 +954,7 @@ def _review_rows(result: ReconcileResult) -> list[dict[str, Any]]:
             if p.target_contact_id
             else "",
             "disposition": p.status,
+            "recommended_keep": p.recommended_keep or "",
             "reason": p.reason,
         }
         for p in result.for_review_list
@@ -900,6 +981,7 @@ def write_review_list(
             "local_display_name",
             "target_contact_id",
             "disposition",
+            "recommended_keep",
             "reason",
         ]
         with open(path, "w", encoding="utf-8", newline="") as fh:

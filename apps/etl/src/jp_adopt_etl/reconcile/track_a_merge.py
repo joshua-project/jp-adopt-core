@@ -68,9 +68,79 @@ def interests_to_add(
     return set(dt_keys) - set(core_keys)
 
 
+def is_real_name(name: str | None, email: str | None) -> bool:
+    """True when ``name`` is a genuine person/org name, not DT's email fallback.
+
+    DT seeds a contact's ``post_title`` from the email (whole address or its
+    local-part) when no real name is known. Those are NOT names. Returns
+    False for an empty name, or a name that — ignoring case and surrounding
+    whitespace — equals the email or its local-part. With no email to
+    compare against, any non-empty name is treated as real.
+    """
+    if name is None:
+        return False
+    stripped = name.strip()
+    if not stripped:
+        return False
+    if not email:
+        return True
+    candidate = stripped.casefold()
+    addr = email.strip().casefold()
+    if candidate == addr:
+        return False
+    local_part = addr.split("@", 1)[0]
+    return candidate != local_part
+
+
+def pick_winner(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pick the recommended-keep DT contact from a multi-collision cluster.
+
+    Each candidate: ``{"source_id", "name", "email", "filled", "created"}``.
+    Ranking (best first):
+      (a) a real name (``is_real_name``) beats an email-as-name — a record
+          with MORE fields but only an email for a name still loses to a
+          genuinely-named record (the ``suranjansim`` bug);
+      (b) higher ``filled`` (non-empty meta count);
+      (c) newer ``created`` (ISO string compare);
+      (d) stable by ``source_id`` ascending.
+    Pure, no I/O.
+    """
+    # Rank candidates best-first; index 0 is the winner. We sort by the
+    # "worse-is-larger" dimensions and use reverse=True on filled/created via
+    # a tuple that flips their direction: real-name first (False < True for
+    # `not real`), then higher filled, then newer created, then lowest
+    # source_id. Build by sorting twice so each key keeps its natural
+    # direction (stable sort), cheapest to read.
+    ranked = sorted(
+        candidates,
+        key=lambda c: (c.get("source_id") or ""),
+    )
+    ranked = sorted(
+        ranked,
+        key=lambda c: (
+            not is_real_name(c.get("name"), c.get("email")),
+            -(c.get("filled") or 0),
+            _DescStr(c.get("created") or ""),
+        ),
+    )
+    return ranked[0]
+
+
+@dataclass(frozen=True)
+class _DescStr:
+    """Wrap a string so it sorts in DESCENDING order (newer ISO date first)."""
+
+    value: str
+
+    def __lt__(self, other: _DescStr) -> bool:
+        return self.value > other.value
+
+
 __all__ = [
     "ConsentDecision",
     "consent_most_restrictive",
     "interests_to_add",
+    "is_real_name",
     "merge_descriptive",
+    "pick_winner",
 ]
