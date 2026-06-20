@@ -11,8 +11,10 @@ import json
 import uuid
 
 from jp_adopt_etl.reconcile.track_a_duplicate_email import (
+    Decisions,
     MergePlan,
     ReconcileResult,
+    load_decisions,
     names_look_like_same_person,
     write_review_list,
 )
@@ -109,3 +111,38 @@ class TestResultCounts:
         assert c["rows_in_review"] == 1
         # skipped (1) + review (1) both count as not-written.
         assert c["rows_out_skipped"] == 2
+
+
+class TestLoadDecisions:
+    def test_parses_both_keys_and_normalizes_emails(self, tmp_path):
+        path = tmp_path / "decisions.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "force_merge": ["  Jane.Doe@Example.COM "],
+                    "multi_keep": {" Shared@Example.COM ": "9821"},
+                }
+            )
+        )
+        d = load_decisions(str(path))
+        assert isinstance(d, Decisions)
+        # Emails normalized (lowercased, trimmed) on both sides.
+        assert d.force_merge == {"jane.doe@example.com"}
+        assert d.multi_keep == {"shared@example.com": "9821"}
+
+    def test_missing_file_yields_empty_defaults(self, tmp_path):
+        d = load_decisions(str(tmp_path / "nope.json"))
+        assert d.force_merge == set()
+        assert d.multi_keep == {}
+
+    def test_missing_keys_yield_empty_defaults(self, tmp_path):
+        path = tmp_path / "decisions.json"
+        path.write_text(json.dumps({}))
+        d = load_decisions(str(path))
+        assert d.force_merge == set()
+        assert d.multi_keep == {}
+
+    def test_none_path_yields_empty_defaults(self):
+        d = load_decisions(None)
+        assert d.force_merge == set()
+        assert d.multi_keep == {}

@@ -31,7 +31,7 @@ from jp_adopt_api.models import (
 from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.orm import sessionmaker
 
-from jp_adopt_etl.reconcile.track_a_duplicate_email import reconcile
+from jp_adopt_etl.reconcile.track_a_duplicate_email import Decisions, reconcile
 
 ETL_TEST_DATABASE_URL = os.environ.get(
     "ETL_TEST_DATABASE_URL",
@@ -1302,6 +1302,183 @@ def test_staff_assignment_on_target_is_not_clobbered(pg_session):
     # Staff override preserved — DT did NOT replace it.
     assert asg.user_subject_id == "staff-curated-9"
     assert asg.assigned_by == "amy@joshuaproject.net"
+
+
+# ─── operator decisions override layer ───────────────────────────────────────
+
+
+def test_force_merge_upgrades_review_to_merge_and_applies(pg_session):
+    """A reviewer-confirmed force_merge email upgrades an ambiguous-name
+    'review' plan to 'merge' and --apply actually merges it. A second
+    ambiguous email NOT in force_merge stays 'review'."""
+    forced_email = "forced@9test.dev"
+    other_email = "untouched@9test.dev"
+    forced = _seed_target(
+        pg_session, email=forced_email, name="Bob Jones",
+        source_id="9870", b2c_subject_id="subj-9-forced", phone=None,
+    )
+    _seed_target(
+        pg_session, email=other_email, name="Bob Jones",
+        source_id="9871", b2c_subject_id="subj-9-other",
+    )
+    _seed_loser(pg_session, source_id="9872", name="Jane Doe")
+    _seed_loser(pg_session, source_id="9873", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9872", email=forced_email)
+    _seed_conflict(pg_session, source_id="9873", email=other_email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9872": {"post_row": _post_row(9872, "Jane Doe"),
+                 "meta_rows": _meta(phone="555-FORCE")},
+        "9873": {"post_row": _post_row(9873, "Jane Doe"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(force_merge={forced_email})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Forced one upgraded + applied.
+    assert plans["9872"].status == "merge"
+    assert "operator override" in plans["9872"].reason
+    pg_session.refresh(forced)
+    assert forced.phone == "555-FORCE"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9872")
+    ).scalars().first() is None
+    # The other ambiguous email is untouched — still review.
+    assert plans["9873"].status == "review"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9873")
+    ).scalars().first() is not None
+
+
+def test_force_merge_does_not_override_protected(pg_session):
+    """force_merge must NOT punch through a safety carve-out: a do_not_engage
+    contact whose email is in force_merge stays skip_protected and is never
+    merged."""
+    email = "force-dne@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          source_id="9880", b2c_subject_id="subj-9-fdne2",
+                          phone=None)
+    target.adopter_status = "do_not_engage"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9881", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9881", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9881": {"post_row": _post_row(9881, "Jane Doe"),
+                  "meta_rows": _meta(status="engaged", phone="NEW")}}
+    )
+    decisions = Decisions(force_merge={email})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9881"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+    pg_session.refresh(target)
+    assert target.adopter_status == "do_not_engage"
+    assert target.phone is None
+    # Conflict still left for Amy.
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9881")
+    ).scalars().first() is not None
+
+
+def test_multi_keep_merges_chosen_keeper_and_supersedes_others(pg_session):
+    """multi_keep picks the ONE DT source_id to keep in a shared-email
+    cluster: that member flows through normal merge planning and applies; the
+    other stays skip_multi_collision; and no duplicate_email conflict remains
+    re-detectable for the kept source_id."""
+    email = "multikeep@9test.dev"
+    target = _seed_target(pg_session, email=email, name="Jane Doe",
+                          source_id="9500", b2c_subject_id="subj-9-mk",
+                          phone=None)
+    _seed_loser(pg_session, source_id="9890", name="Jane Doe")
+    _seed_loser(pg_session, source_id="9891", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9890", email=email)
+    _seed_conflict(pg_session, source_id="9891", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9890": {"post_row": _post_row(9890, "Jane Doe"),
+                 "meta_rows": _meta(phone="555-KEEP")},
+        "9891": {"post_row": _post_row(9891, "Jane Doe"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9890"})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Chosen keeper merged + applied.
+    assert plans["9890"].status == "merge"
+    pg_session.refresh(target)
+    assert target.phone == "555-KEEP"
+    # Keeper conflict resolved; target adopted the keeper's DT keys.
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9890")
+    ).scalars().first() is None
+    assert target.source_system == "dt"
+    assert target.source_id == "9890"
+    # No duplicate_email conflict re-detectable for the kept source_id: a
+    # re-plan finds nothing to merge for 9890 (the row is gone).
+    # The other member stays skip_multi_collision.
+    assert plans["9891"].status == "skip_multi_collision"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9891")
+    ).scalars().first() is not None
+
+
+def test_multi_keep_unknown_keeper_leaves_cluster_skipped(pg_session):
+    """If the chosen keeper source_id isn't a member of the cluster, the whole
+    cluster stays skip_multi_collision (nothing merges)."""
+    email = "badkeep@9test.dev"
+    _seed_target(pg_session, email=email, name="Jane Doe",
+                 source_id="9500", b2c_subject_id="subj-9-bk")
+    _seed_loser(pg_session, source_id="9895", name="Jane Doe")
+    _seed_loser(pg_session, source_id="9896", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9895", email=email)
+    _seed_conflict(pg_session, source_id="9896", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9895": {"post_row": _post_row(9895, "Jane Doe"), "meta_rows": _meta()},
+        "9896": {"post_row": _post_row(9896, "Jane Doe"), "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9999"})  # not in cluster
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9895"].status == "skip_multi_collision"
+    assert plans["9896"].status == "skip_multi_collision"
+    assert len(result.to_merge) == 0
+
+
+def test_no_decisions_behaves_as_today(pg_session):
+    """With no decisions, an ambiguous-name conflict still goes to review and
+    a shared-email cluster still goes to skip_multi_collision."""
+    amb_email = "amb@9test.dev"
+    _seed_target(pg_session, email=amb_email, name="Bob Jones",
+                 source_id="9897", b2c_subject_id="subj-9-amb")
+    _seed_loser(pg_session, source_id="9898", name="Jane Doe")
+    _seed_conflict(pg_session, source_id="9898", email=amb_email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9898": {"post_row": _post_row(9898, "Jane Doe"), "meta_rows": _meta()}}
+    )
+    result = reconcile(pg_session=pg_session, mysql_conn=object(),
+                       mode="production", dt_reader=reader)
+    plans = {p.source_id: p for p in result.planned}
+    assert plans["9898"].status == "review"
 
 
 def test_core_facilitator_do_not_engage_is_protected(pg_session):
