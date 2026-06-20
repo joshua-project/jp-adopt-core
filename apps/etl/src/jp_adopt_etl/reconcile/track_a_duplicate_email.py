@@ -197,6 +197,57 @@ DtReader = Callable[[Any, str], "tuple[dict[str, Any] | None, list[dict[str, Any
 
 
 @dataclass
+class Decisions:
+    """Operator review decisions fed back into planning after a human looks
+    at the ambiguous-name / shared-email cases.
+
+    * ``force_merge`` — normalized emails the reviewer confirmed are the SAME
+      person, so an ambiguous-name ``review`` plan is upgraded to ``merge``.
+      NEVER punches through a safety carve-out (open match / protected /
+      missing target).
+    * ``multi_keep`` — for a shared-email (multi-collision) cluster, the ONE
+      DT ``source_id`` to keep+merge (``{normalized_email: source_id}``). That
+      member flows through normal merge planning; the rest stay
+      ``skip_multi_collision``.
+    """
+
+    force_merge: set[str] = field(default_factory=set)
+    multi_keep: dict[str, str] = field(default_factory=dict)
+
+
+def load_decisions(path: str | None) -> Decisions:
+    """Load an operator decisions JSON file into a :class:`Decisions`.
+
+    Shape::
+
+        {
+          "force_merge": ["email1", ...],
+          "multi_keep": {"email": "source_id", ...}
+        }
+
+    Pure helper. A missing path / file or missing keys yield empty defaults;
+    every email key is normalized with ``normalize_email`` so it matches the
+    normalized emails used in planning.
+    """
+    if not path:
+        return Decisions()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return Decisions()
+    force_merge = {
+        normalize_email(e) for e in (raw.get("force_merge") or []) if e
+    }
+    multi_keep = {
+        normalize_email(email): source_id
+        for email, source_id in (raw.get("multi_keep") or {}).items()
+        if email
+    }
+    return Decisions(force_merge=force_merge, multi_keep=multi_keep)
+
+
+@dataclass
 class MergePlan:
     """One reconciliation decision for a single ``duplicate_email`` row."""
 
@@ -416,6 +467,7 @@ def plan_merges(
     mysql_conn: Any,
     dt_reader: DtReader = _default_dt_reader,
     mode: Mode = "dry_run",
+    decisions: Decisions | None = None,
 ) -> ReconcileResult:
     """Decide what to do with every ``duplicate_email`` conflict.
 
@@ -424,7 +476,14 @@ def plan_merges(
     needs Amy), ``skip_open_match`` / ``skip_protected`` /
     ``skip_multi_collision`` (routed to Amy), or ``skip_missing_target``
     (the merge target no longer carries the email; nothing to merge into).
+
+    ``decisions`` (optional) feeds reviewer overrides back in: ``force_merge``
+    upgrades an ambiguous-name ``review`` to ``merge`` (never punching through
+    a safety carve-out), and ``multi_keep`` lets the chosen keeper of a
+    shared-email cluster flow through normal merge planning while the rest stay
+    ``skip_multi_collision``. With no decisions the behavior is unchanged.
     """
+    decisions = decisions or Decisions()
     result = ReconcileResult()
     conflicts = _load_conflicts(pg_session)
 
@@ -472,18 +531,46 @@ def plan_merges(
 
         # Carve-out: multi-collision email — more than one DT post maps onto
         # this same email/contact. Not representable by single-key adoption;
-        # route every member to Amy.
+        # route every member to Amy — UNLESS the operator picked a keeper.
         if email_counts.get(email, 0) > 1:
-            plan.status = "skip_multi_collision"
-            plan.recommended_keep = recommended_keep_by_email.get(email)
-            plan.reason = (
-                f"email {email!r} collides from {email_counts[email]} DT "
-                "posts; many-to-one not auto-mergeable, left for Amy"
+            chosen_keeper = decisions.multi_keep.get(email)
+            # MULTI_KEEP override: the operator picked the ONE source_id to
+            # keep+merge. Only honor it when the chosen keeper is actually a
+            # member of this cluster (else leave the whole cluster skipped and
+            # warn). The chosen member falls through to normal merge planning;
+            # every OTHER member stays skip_multi_collision.
+            keeper_in_cluster = (
+                chosen_keeper is not None
+                and chosen_keeper in email_members.get(email, [])
             )
-            if plan.recommended_keep:
-                plan.reason += f" (recommended keep: {plan.recommended_keep})"
-            result.planned.append(plan)
-            continue
+            if chosen_keeper is not None and not keeper_in_cluster:
+                logger.warning(
+                    "track_a: multi_keep keeper %s not found in cluster for "
+                    "email %s; leaving whole cluster skip_multi_collision",
+                    chosen_keeper,
+                    email,
+                )
+            if not (keeper_in_cluster and source_id == chosen_keeper):
+                plan.status = "skip_multi_collision"
+                plan.recommended_keep = recommended_keep_by_email.get(email)
+                if keeper_in_cluster:
+                    plan.reason = (
+                        f"superseded by operator keeper {chosen_keeper}"
+                    )
+                else:
+                    plan.reason = (
+                        f"email {email!r} collides from {email_counts[email]} "
+                        "DT posts; many-to-one not auto-mergeable, left for Amy"
+                    )
+                    if plan.recommended_keep:
+                        plan.reason += (
+                            f" (recommended keep: {plan.recommended_keep})"
+                        )
+                result.planned.append(plan)
+                continue
+            # else: this conflict IS the operator-chosen keeper — fall through
+            # to the normal merge-planning path below (re-read DT, compute
+            # field_changes/children, run the open-match/protected checks).
 
         # (a) merge target — the surviving contact that kept this email.
         target = pg_session.execute(
@@ -584,10 +671,22 @@ def plan_merges(
         )
 
         # Ambiguity gate: same email but mismatched name => possible shared
-        # inbox. Route to the review list instead of auto-merging.
+        # inbox. Route to the review list instead of auto-merging — UNLESS the
+        # operator confirmed (force_merge) it is the same person. The
+        # dt_kwargs/field_changes/children were already computed above, so a
+        # force_merge override just flips status to 'merge'. This NEVER fires
+        # for a skip_open_match / skip_protected / skip_missing_target contact:
+        # those carve-outs already `continue`-d before reaching here, so the
+        # decision can only upgrade an ambiguous-name review, never punch
+        # through a safety skip.
         if not names_look_like_same_person(
             plan.dt_display_name, plan.target_display_name
         ):
+            if email in decisions.force_merge:
+                plan.status = "merge"
+                plan.reason = "operator override: confirmed same person"
+                result.planned.append(plan)
+                continue
             plan.status = "review"
             plan.reason = (
                 "email shared but names differ: DT "
@@ -1004,6 +1103,7 @@ def reconcile(
     mode: Mode = "dry_run",
     dt_reader: DtReader = _default_dt_reader,
     review_path: str | None = None,
+    decisions: Decisions | None = None,
 ) -> ReconcileResult:
     """Plan + (in production) apply the DT-authoritative duplicate_email merge.
 
@@ -1020,6 +1120,7 @@ def reconcile(
         mysql_conn=mysql_conn,
         dt_reader=dt_reader,
         mode=mode,
+        decisions=decisions,
     )
 
     run_row = EtlRun(
@@ -1130,6 +1231,7 @@ def run(
     postgres_url: str,
     mode: Mode = "dry_run",
     review_path: str | None = None,
+    decisions: Decisions | None = None,
 ) -> ReconcileResult:
     """Open both engines and reconcile. The MySQL engine is only
     ``.connect()``-ed; the gated reader does the actual queries. This is
@@ -1145,6 +1247,7 @@ def run(
                 mysql_conn=mysql_conn,
                 mode=mode,
                 review_path=review_path,
+                decisions=decisions,
             )
     finally:
         pg_engine.dispose()
@@ -1168,17 +1271,27 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Path for the ambiguous-match review list (.csv or .json).",
     )
+    parser.add_argument(
+        "--decisions",
+        default=None,
+        help=(
+            "Path to an operator decisions JSON (force_merge / multi_keep) "
+            "fed back in so --apply honors reviewer calls."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     mode: Mode = "production" if args.apply else "dry_run"
+    decisions = load_decisions(args.decisions) if args.decisions else None
     result = run(
         mysql_url=args.mysql_url,
         postgres_url=args.postgres_url,
         mode=mode,
         review_path=args.review_out,
+        decisions=decisions,
     )
     logger.info(
         "track_a duplicate_email: mode=%s planned=%d merged=%d review=%d skipped=%d",
@@ -1192,8 +1305,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
+    "Decisions",
     "MergePlan",
     "ReconcileResult",
+    "load_decisions",
     "main",
     "names_look_like_same_person",
     "plan_merges",
