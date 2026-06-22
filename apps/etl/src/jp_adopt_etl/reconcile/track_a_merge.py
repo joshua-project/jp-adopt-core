@@ -92,6 +92,34 @@ def is_real_name(name: str | None, email: str | None) -> bool:
     return candidate != local_part
 
 
+def resolve_display_name(
+    *, core_name: str | None, dt_name: str | None, email: str | None
+) -> str | None:
+    """Name-aware ``display_name`` merge — return the value to SET, or None.
+
+    DT-authoritative by default, with one safety carve-out: never replace a
+    real core name with DT's email-as-name fallback (the prod bug where core
+    "John Auer" was overwritten with "crossroads1947@yahoo.com" because that
+    was all DT stored for the name). Using ``is_real_name`` against the
+    conflict email:
+
+    * DT name is a REAL name -> DT wins (overwrite).
+    * DT name is NOT real (email-as-name) but core IS real -> keep core
+      (return None, no change).
+    * neither is real -> DT wins (authoritative default).
+
+    Returns None for "no change" when DT has no name to write or the value
+    already equals core (mirrors ``merge_descriptive``'s no-op skip).
+    """
+    if dt_name in (None, ""):
+        return None
+    if not is_real_name(dt_name, email) and is_real_name(core_name, email):
+        return None
+    if core_name == dt_name:
+        return None
+    return dt_name
+
+
 def pick_winner(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Pick the recommended-keep DT contact from a multi-collision cluster.
 
@@ -143,4 +171,5 @@ __all__ = [
     "is_real_name",
     "merge_descriptive",
     "pick_winner",
+    "resolve_display_name",
 ]

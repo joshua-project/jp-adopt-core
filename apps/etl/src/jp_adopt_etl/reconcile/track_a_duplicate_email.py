@@ -115,6 +115,7 @@ from jp_adopt_etl.reconcile.track_a_merge import (
     interests_to_add,
     merge_descriptive,
     pick_winner,
+    resolve_display_name,
 )
 
 # A core contact carrying any of these signals is PROTECTED — the
@@ -182,6 +183,12 @@ _MERGE_FIELDS = (
     "adopter_status",
     "facilitator_status",
 )
+
+# The subset of ``_MERGE_FIELDS`` that take the plain DT-wins-where-non-empty
+# behavior (``merge_descriptive``). ``display_name`` is excluded: it is merged
+# name-aware (``resolve_display_name``) so a real core name is never replaced
+# by DT's email-as-name fallback. See ``plan_merges``.
+_PLAIN_MERGE_FIELDS = tuple(f for f in _MERGE_FIELDS if f != "display_name")
 
 # Status values that are NOT valid members of the contacts CHECK
 # constraints (ck_contacts_adopter_status / _facilitator_status). The
@@ -654,13 +661,26 @@ def plan_merges(
         # DT-authoritative field plan: DT wins where DT has a value; the core
         # value is kept where DT is empty. Status columns whose DT value is
         # unmappable (``unknown``) are dropped so the overwrite never
-        # violates the contacts status CHECK constraints.
-        core_vals = {col: getattr(target, col, None) for col in _MERGE_FIELDS}
-        dt_vals = {col: dt_kwargs.get(col) for col in _MERGE_FIELDS}
+        # violates the contacts status CHECK constraints. ``display_name`` is
+        # NOT a plain DT-wins column — it is merged name-aware below so a real
+        # core name is never overwritten with DT's email-as-name fallback.
+        core_vals = {col: getattr(target, col, None) for col in _PLAIN_MERGE_FIELDS}
+        dt_vals = {col: dt_kwargs.get(col) for col in _PLAIN_MERGE_FIELDS}
         for col in _STATUS_FIELDS:
             if dt_vals.get(col) in _INVALID_STATUS_VALUES:
                 dt_vals[col] = None
         plan.field_changes = merge_descriptive(core=core_vals, dt=dt_vals)
+
+        # display_name: name-aware. DT wins UNLESS DT only stored the email as
+        # the name and core holds a real name (then keep core). The conflict
+        # email is the same one used elsewhere in planning.
+        resolved_name = resolve_display_name(
+            core_name=target.display_name,
+            dt_name=dt_kwargs.get("display_name"),
+            email=email,
+        )
+        if resolved_name is not None:
+            plan.field_changes["display_name"] = resolved_name
 
         # Child-table inputs from the same DT postmeta pivot. Carried on the
         # plan so the apply step merges them without re-reading DT.
@@ -672,19 +692,32 @@ def plan_merges(
 
         # Ambiguity gate: same email but mismatched name => possible shared
         # inbox. Route to the review list instead of auto-merging — UNLESS the
-        # operator confirmed (force_merge) it is the same person. The
-        # dt_kwargs/field_changes/children were already computed above, so a
-        # force_merge override just flips status to 'merge'. This NEVER fires
-        # for a skip_open_match / skip_protected / skip_missing_target contact:
-        # those carve-outs already `continue`-d before reaching here, so the
-        # decision can only upgrade an ambiguous-name review, never punch
+        # operator confirmed it is the same person, EITHER via force_merge OR
+        # by explicitly picking this conflict as the multi_keep keeper of its
+        # cluster (both are an operator override of the name-ambiguity check).
+        # The dt_kwargs/field_changes/children were already computed above, so
+        # an override just flips status to 'merge'. This NEVER fires for a
+        # skip_open_match / skip_protected / skip_missing_target contact: those
+        # safety carve-outs already `continue`-d before reaching here, so an
+        # override can only upgrade an ambiguous-name review, never punch
         # through a safety skip.
+        is_chosen_keeper = (
+            email_counts.get(email, 0) > 1
+            and decisions.multi_keep.get(email) == source_id
+        )
         if not names_look_like_same_person(
             plan.dt_display_name, plan.target_display_name
         ):
             if email in decisions.force_merge:
                 plan.status = "merge"
                 plan.reason = "operator override: confirmed same person"
+                result.planned.append(plan)
+                continue
+            if is_chosen_keeper:
+                plan.status = "merge"
+                plan.reason = (
+                    "operator keeper override: confirmed multi_keep keeper"
+                )
                 result.planned.append(plan)
                 continue
             plan.status = "review"

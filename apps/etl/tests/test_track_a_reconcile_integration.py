@@ -424,6 +424,69 @@ def test_dt_overwrites_nonempty_status_and_fields(pg_session):
     assert target.adopter_status == "contacted"
 
 
+# ─── name-aware display_name overwrite ───────────────────────────────────────
+
+
+def test_display_name_keeps_real_core_name_over_dt_email(pg_session):
+    """The prod bug: DT only stored the EMAIL as the contact's name. A real
+    core name ("John Auer") must NOT be overwritten with DT's email-as-name."""
+    email = "crossroads1947@9test.dev"
+    target = _seed_target(pg_session, email=email, name="John Auer",
+                          b2c_subject_id="subj-9-dn1")
+    _seed_loser(pg_session, source_id="9910", name=email)
+    _seed_conflict(pg_session, source_id="9910", email=email)
+    pg_session.commit()
+
+    # DT's post_title IS the email (fallback name).
+    reader = _make_dt_reader(
+        {"9910": {"post_row": _post_row(9910, email), "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "John Auer"  # core real name kept
+
+
+def test_display_name_dt_real_name_overwrites_core_email(pg_session):
+    """When DT has a real name and core only held the email, DT wins."""
+    email = "lolla@9test.dev"
+    target = _seed_target(pg_session, email=email, name=email,
+                          b2c_subject_id="subj-9-dn2")
+    _seed_loser(pg_session, source_id="9911", name="Lolla Cronje")
+    _seed_conflict(pg_session, source_id="9911", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9911": {"post_row": _post_row(9911, "Lolla Cronje"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "Lolla Cronje"  # DT real name wins
+
+
+def test_display_name_both_real_dt_wins(pg_session):
+    """Both names real but different => DT-authoritative default, DT wins. The
+    names must still look like the same person so it does not route to review
+    (shared surname 'Auer')."""
+    email = "jauer@9test.dev"
+    target = _seed_target(pg_session, email=email, name="John Auer",
+                          b2c_subject_id="subj-9-dn3")
+    _seed_loser(pg_session, source_id="9912", name="Jonathan Auer")
+    _seed_conflict(pg_session, source_id="9912", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9912": {"post_row": _post_row(9912, "Jonathan Auer"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "Jonathan Auer"  # DT wins, both real
+
+
 def _meta_with_profile(*, entity_size=None, **kw):
     rows = _meta(**kw)
     if entity_size is not None:
@@ -1432,6 +1495,85 @@ def test_multi_keep_merges_chosen_keeper_and_supersedes_others(pg_session):
     assert plans["9891"].status == "skip_multi_collision"
     assert pg_session.execute(
         select(MigrationConflict).where(MigrationConflict.source_id == "9891")
+    ).scalars().first() is not None
+
+
+def test_multi_keep_keeper_bypasses_ambiguity_gate(pg_session):
+    """The prod bug: a multi_keep chosen keeper whose DT name differs from the
+    core target's real name was still routed to 'review' by the ambiguity
+    gate, so the operator's explicit pick did NOT merge. The chosen keeper
+    must bypass the gate exactly like force_merge and classify 'merge'."""
+    email = "keeper-amb@9test.dev"
+    target = _seed_target(pg_session, email=email, name="SAVE INDIA MINISTRIES",
+                          source_id="9500", b2c_subject_id="subj-9-ka",
+                          phone=None)
+    # Keeper's DT name ("SURANJAN NAYAK") does NOT match the core target name.
+    _seed_loser(pg_session, source_id="9920", name="SURANJAN NAYAK")
+    _seed_loser(pg_session, source_id="9921", name="OTHER PERSON")
+    _seed_conflict(pg_session, source_id="9920", email=email)
+    _seed_conflict(pg_session, source_id="9921", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9920": {"post_row": _post_row(9920, "SURANJAN NAYAK"),
+                 "meta_rows": _meta(phone="555-KEEP")},
+        "9921": {"post_row": _post_row(9921, "OTHER PERSON"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9920"})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Keeper merged despite the name mismatch (gate bypassed).
+    assert plans["9920"].status == "merge"
+    assert "keeper override" in plans["9920"].reason
+    pg_session.refresh(target)
+    assert target.phone == "555-KEEP"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9920")
+    ).scalars().first() is None
+    # The other member stays skip_multi_collision.
+    assert plans["9921"].status == "skip_multi_collision"
+
+
+def test_multi_keep_keeper_still_respects_protected_safety(pg_session):
+    """The keeper override never punches through a safety guard: a chosen
+    keeper whose core target is do_not_engage (skip_protected) stays skipped,
+    identical to force_merge policy."""
+    email = "keeper-dne@9test.dev"
+    target = _seed_target(pg_session, email=email, name="SAVE INDIA MINISTRIES",
+                          source_id="9500", b2c_subject_id="subj-9-kd",
+                          phone=None)
+    target.adopter_status = "do_not_engage"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9930", name="SURANJAN NAYAK")
+    _seed_loser(pg_session, source_id="9931", name="OTHER PERSON")
+    _seed_conflict(pg_session, source_id="9930", email=email)
+    _seed_conflict(pg_session, source_id="9931", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9930": {"post_row": _post_row(9930, "SURANJAN NAYAK"),
+                 "meta_rows": _meta(status="engaged", phone="NEW")},
+        "9931": {"post_row": _post_row(9931, "OTHER PERSON"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9930"})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Even as the chosen keeper, the protected core target is not merged.
+    assert plans["9930"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+    pg_session.refresh(target)
+    assert target.adopter_status == "do_not_engage"
+    assert target.phone is None
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9930")
     ).scalars().first() is not None
 
 
