@@ -692,19 +692,32 @@ def plan_merges(
 
         # Ambiguity gate: same email but mismatched name => possible shared
         # inbox. Route to the review list instead of auto-merging — UNLESS the
-        # operator confirmed (force_merge) it is the same person. The
-        # dt_kwargs/field_changes/children were already computed above, so a
-        # force_merge override just flips status to 'merge'. This NEVER fires
-        # for a skip_open_match / skip_protected / skip_missing_target contact:
-        # those carve-outs already `continue`-d before reaching here, so the
-        # decision can only upgrade an ambiguous-name review, never punch
+        # operator confirmed it is the same person, EITHER via force_merge OR
+        # by explicitly picking this conflict as the multi_keep keeper of its
+        # cluster (both are an operator override of the name-ambiguity check).
+        # The dt_kwargs/field_changes/children were already computed above, so
+        # an override just flips status to 'merge'. This NEVER fires for a
+        # skip_open_match / skip_protected / skip_missing_target contact: those
+        # safety carve-outs already `continue`-d before reaching here, so an
+        # override can only upgrade an ambiguous-name review, never punch
         # through a safety skip.
+        is_chosen_keeper = (
+            email_counts.get(email, 0) > 1
+            and decisions.multi_keep.get(email) == source_id
+        )
         if not names_look_like_same_person(
             plan.dt_display_name, plan.target_display_name
         ):
             if email in decisions.force_merge:
                 plan.status = "merge"
                 plan.reason = "operator override: confirmed same person"
+                result.planned.append(plan)
+                continue
+            if is_chosen_keeper:
+                plan.status = "merge"
+                plan.reason = (
+                    "operator keeper override: confirmed multi_keep keeper"
+                )
                 result.planned.append(plan)
                 continue
             plan.status = "review"

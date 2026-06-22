@@ -1498,6 +1498,85 @@ def test_multi_keep_merges_chosen_keeper_and_supersedes_others(pg_session):
     ).scalars().first() is not None
 
 
+def test_multi_keep_keeper_bypasses_ambiguity_gate(pg_session):
+    """The prod bug: a multi_keep chosen keeper whose DT name differs from the
+    core target's real name was still routed to 'review' by the ambiguity
+    gate, so the operator's explicit pick did NOT merge. The chosen keeper
+    must bypass the gate exactly like force_merge and classify 'merge'."""
+    email = "keeper-amb@9test.dev"
+    target = _seed_target(pg_session, email=email, name="SAVE INDIA MINISTRIES",
+                          source_id="9500", b2c_subject_id="subj-9-ka",
+                          phone=None)
+    # Keeper's DT name ("SURANJAN NAYAK") does NOT match the core target name.
+    _seed_loser(pg_session, source_id="9920", name="SURANJAN NAYAK")
+    _seed_loser(pg_session, source_id="9921", name="OTHER PERSON")
+    _seed_conflict(pg_session, source_id="9920", email=email)
+    _seed_conflict(pg_session, source_id="9921", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9920": {"post_row": _post_row(9920, "SURANJAN NAYAK"),
+                 "meta_rows": _meta(phone="555-KEEP")},
+        "9921": {"post_row": _post_row(9921, "OTHER PERSON"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9920"})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Keeper merged despite the name mismatch (gate bypassed).
+    assert plans["9920"].status == "merge"
+    assert "keeper override" in plans["9920"].reason
+    pg_session.refresh(target)
+    assert target.phone == "555-KEEP"
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9920")
+    ).scalars().first() is None
+    # The other member stays skip_multi_collision.
+    assert plans["9921"].status == "skip_multi_collision"
+
+
+def test_multi_keep_keeper_still_respects_protected_safety(pg_session):
+    """The keeper override never punches through a safety guard: a chosen
+    keeper whose core target is do_not_engage (skip_protected) stays skipped,
+    identical to force_merge policy."""
+    email = "keeper-dne@9test.dev"
+    target = _seed_target(pg_session, email=email, name="SAVE INDIA MINISTRIES",
+                          source_id="9500", b2c_subject_id="subj-9-kd",
+                          phone=None)
+    target.adopter_status = "do_not_engage"
+    pg_session.flush()
+    _seed_loser(pg_session, source_id="9930", name="SURANJAN NAYAK")
+    _seed_loser(pg_session, source_id="9931", name="OTHER PERSON")
+    _seed_conflict(pg_session, source_id="9930", email=email)
+    _seed_conflict(pg_session, source_id="9931", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader({
+        "9930": {"post_row": _post_row(9930, "SURANJAN NAYAK"),
+                 "meta_rows": _meta(status="engaged", phone="NEW")},
+        "9931": {"post_row": _post_row(9931, "OTHER PERSON"),
+                 "meta_rows": _meta()},
+    })
+    decisions = Decisions(multi_keep={email: "9930"})
+    result = reconcile(
+        pg_session=pg_session, mysql_conn=object(),
+        mode="production", dt_reader=reader, decisions=decisions,
+    )
+    plans = {p.source_id: p for p in result.planned}
+    # Even as the chosen keeper, the protected core target is not merged.
+    assert plans["9930"].status == "skip_protected"
+    assert len(result.to_merge) == 0
+    pg_session.refresh(target)
+    assert target.adopter_status == "do_not_engage"
+    assert target.phone is None
+    assert pg_session.execute(
+        select(MigrationConflict).where(MigrationConflict.source_id == "9930")
+    ).scalars().first() is not None
+
+
 def test_multi_keep_unknown_keeper_leaves_cluster_skipped(pg_session):
     """If the chosen keeper source_id isn't a member of the cluster, the whole
     cluster stays skip_multi_collision (nothing merges)."""
