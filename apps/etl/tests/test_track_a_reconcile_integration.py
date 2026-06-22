@@ -424,6 +424,69 @@ def test_dt_overwrites_nonempty_status_and_fields(pg_session):
     assert target.adopter_status == "contacted"
 
 
+# ─── name-aware display_name overwrite ───────────────────────────────────────
+
+
+def test_display_name_keeps_real_core_name_over_dt_email(pg_session):
+    """The prod bug: DT only stored the EMAIL as the contact's name. A real
+    core name ("John Auer") must NOT be overwritten with DT's email-as-name."""
+    email = "crossroads1947@9test.dev"
+    target = _seed_target(pg_session, email=email, name="John Auer",
+                          b2c_subject_id="subj-9-dn1")
+    _seed_loser(pg_session, source_id="9910", name=email)
+    _seed_conflict(pg_session, source_id="9910", email=email)
+    pg_session.commit()
+
+    # DT's post_title IS the email (fallback name).
+    reader = _make_dt_reader(
+        {"9910": {"post_row": _post_row(9910, email), "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "John Auer"  # core real name kept
+
+
+def test_display_name_dt_real_name_overwrites_core_email(pg_session):
+    """When DT has a real name and core only held the email, DT wins."""
+    email = "lolla@9test.dev"
+    target = _seed_target(pg_session, email=email, name=email,
+                          b2c_subject_id="subj-9-dn2")
+    _seed_loser(pg_session, source_id="9911", name="Lolla Cronje")
+    _seed_conflict(pg_session, source_id="9911", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9911": {"post_row": _post_row(9911, "Lolla Cronje"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "Lolla Cronje"  # DT real name wins
+
+
+def test_display_name_both_real_dt_wins(pg_session):
+    """Both names real but different => DT-authoritative default, DT wins. The
+    names must still look like the same person so it does not route to review
+    (shared surname 'Auer')."""
+    email = "jauer@9test.dev"
+    target = _seed_target(pg_session, email=email, name="John Auer",
+                          b2c_subject_id="subj-9-dn3")
+    _seed_loser(pg_session, source_id="9912", name="Jonathan Auer")
+    _seed_conflict(pg_session, source_id="9912", email=email)
+    pg_session.commit()
+
+    reader = _make_dt_reader(
+        {"9912": {"post_row": _post_row(9912, "Jonathan Auer"),
+                  "meta_rows": _meta()}}
+    )
+    reconcile(pg_session=pg_session, mysql_conn=object(),
+              mode="production", dt_reader=reader)
+    pg_session.refresh(target)
+    assert target.display_name == "Jonathan Auer"  # DT wins, both real
+
+
 def _meta_with_profile(*, entity_size=None, **kw):
     rows = _meta(**kw)
     if entity_size is not None:

@@ -12,6 +12,7 @@ from jp_adopt_etl.reconcile.track_a_merge import (
     is_real_name,
     merge_descriptive,
     pick_winner,
+    resolve_display_name,
 )
 
 
@@ -139,3 +140,64 @@ def test_pick_winner_stable_by_source_id():
          "filled": 7, "created": "2020-01-01"},
     ]
     assert pick_winner(candidates)["source_id"] == "100"
+
+
+# ─── name-aware display_name merge: resolve_display_name ──────────────────────
+
+
+def test_resolve_display_name_keeps_core_when_dt_is_email():
+    # DT display_name IS the email (fallback name); core is a real name =>
+    # keep the core name, do not overwrite. Returns None for "no change".
+    out = resolve_display_name(
+        core_name="John Auer",
+        dt_name="crossroads1947@yahoo.com",
+        email="crossroads1947@yahoo.com",
+    )
+    assert out is None
+
+
+def test_resolve_display_name_dt_real_name_wins_over_core_email():
+    # DT is a real name, core is the email => DT wins (overwrite).
+    out = resolve_display_name(
+        core_name="lolla@example.com",
+        dt_name="Lolla Cronje",
+        email="lolla@example.com",
+    )
+    assert out == "Lolla Cronje"
+
+
+def test_resolve_display_name_both_real_dt_wins():
+    # Both real but different => DT-authoritative default, DT wins.
+    out = resolve_display_name(
+        core_name="John Auer",
+        dt_name="Jonathan Auer",
+        email="auer@example.com",
+    )
+    assert out == "Jonathan Auer"
+
+
+def test_resolve_display_name_neither_real_dt_wins():
+    # Neither is a real name (both email-as-name, but different) => DT wins
+    # (authoritative default).
+    out = resolve_display_name(
+        core_name="x",  # email local-part fallback
+        dt_name="x@example.com",  # full-email fallback
+        email="x@example.com",
+    )
+    assert out == "x@example.com"
+
+
+def test_resolve_display_name_dt_empty_is_no_change():
+    # DT has no name to write => no change (keep core).
+    assert resolve_display_name(
+        core_name="John Auer", dt_name=None, email="x@example.com"
+    ) is None
+    assert resolve_display_name(
+        core_name="John Auer", dt_name="", email="x@example.com"
+    ) is None
+
+
+def test_resolve_display_name_no_change_when_equal():
+    assert resolve_display_name(
+        core_name="John Auer", dt_name="John Auer", email="x@example.com"
+    ) is None
