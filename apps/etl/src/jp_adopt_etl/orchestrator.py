@@ -92,6 +92,12 @@ _ETL_ADVISORY_LOCK_KEY: Final[int] = int.from_bytes(
     hashlib.sha256(b"jp_adopt_dt_etl").digest()[:8], "big", signed=True
 )
 
+# DT wp_user_ids that are service accounts, not people — an assignment
+# pointing here has NO human owner. ``parse_assigned_user_id`` returns the
+# wp_user_id as a string, so these are matched as strings.
+#   "2" — api-forms intake bot — no human owner
+_SERVICE_ASSIGNEE_WP_USER_IDS: Final[frozenset[str]] = frozenset({"2"})
+
 
 def _release_etl_lock(session: Session) -> None:
     """Release the dt-etl advisory lock. Best-effort: logs and rolls back
@@ -828,7 +834,12 @@ def import_assignment(
     assignments are skipped and recorded as conflicts; a re-run picks them up
     once they sign in. ``wp_dt_share`` sub-assignments are out of scope
     (contact_assignment is 1:1)."""
-    counts = {"rows_in": 0, "rows_out_inserted": 0, "rows_out_skipped": 0}
+    counts = {
+        "rows_in": 0,
+        "rows_out_inserted": 0,
+        "rows_out_skipped": 0,
+        "rows_service_skipped": 0,
+    }
     post_to_contact = _load_existing_dt_post_id_to_contact(pg_session)
     user_to_subject = _load_dt_user_id_to_subject(pg_session)
 
@@ -865,6 +876,12 @@ def _flush_assignment_batch(
         meta = pivot_postmeta(meta_by_post.get(post_row["ID"], []))
         wp_user_id = parse_assigned_user_id(meta.get("assigned_to"))
         if wp_user_id is None:
+            continue
+        if wp_user_id in _SERVICE_ASSIGNEE_WP_USER_IDS:
+            # Service account (e.g. api-forms intake bot) — no human owner.
+            # Skip entirely: create no assignment and record no
+            # assignee_no_subject conflict, so these never pile up.
+            counts["rows_service_skipped"] += 1
             continue
         counts["rows_in"] += 1
         subject = user_to_subject.get(wp_user_id)
