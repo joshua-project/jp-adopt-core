@@ -831,6 +831,90 @@ def test_import_assignment_resolves_subject_and_records_conflict(
         pg_session.commit()
 
 
+def test_import_assignment_skips_service_account_assignee(
+    monkeypatch, pg_engine, pg_session
+):
+    """An assignment pointing at the DT service account (the api-forms
+    intake bot, wp_user 2) has no human owner: it is skipped entirely —
+    no contact_assignment is created and NO assignee_no_subject conflict
+    is recorded. A normal unmapped assignee still records the conflict."""
+    from jp_adopt_api.models import ContactAssignment, MigrationConflict
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    contacts = [
+        {"ID": 9601, "post_title": "BotOwned", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+        {"ID": 9602, "post_title": "GhostOwned", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9601: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-2"},  # service bot
+        ],
+        9602: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "assigned_to", "meta_value": "user-9777"},  # no link
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts", "contact_assignment"],
+            mode="production",
+            watermark=None,
+        )
+        # Only the non-service assignment counts as a real assignment row_in.
+        assert result["contact_assignment"]["rows_in"] == 1
+        assert result["contact_assignment"]["rows_out_inserted"] == 0
+        assert result["contact_assignment"]["rows_out_skipped"] == 1
+        assert result["contact_assignment"]["rows_service_skipped"] == 1
+
+        # Service-account contact: NO assignment row.
+        bot_owned = pg_session.execute(
+            select(Contact).where(Contact.source_id == "9601")
+        ).scalar_one()
+        assert (
+            pg_session.execute(
+                select(ContactAssignment).where(
+                    ContactAssignment.contact_id == bot_owned.id
+                )
+            ).first()
+            is None
+        )
+        # Service-account contact: NO assignee_no_subject conflict.
+        assert (
+            pg_session.execute(
+                select(MigrationConflict).where(
+                    MigrationConflict.table_name == "contact_assignment",
+                    MigrationConflict.source_id == "9601",
+                )
+            ).first()
+            is None
+        )
+
+        # The genuinely unmapped assignee still records the conflict.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contact_assignment",
+                MigrationConflict.source_id == "9602",
+            )
+        ).scalars().all()
+        assert len(conflicts) == 1
+        assert conflicts[0].conflict_type == "assignee_no_subject"
+    finally:
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id IN ('9601', '9602')")
+        )
+        pg_session.commit()
+
+
 def test_duplicate_email_keeps_contact_clears_email_records_conflict(
     monkeypatch, pg_engine, pg_session
 ):
