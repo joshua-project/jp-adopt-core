@@ -69,6 +69,12 @@ TABLE_NAME = "contact_assignment"
 CONFLICT_TYPE = "assignee_no_subject"
 SOURCE_SYSTEM = "dt"
 
+# Sentinel mapping value marking a handle as a DT service account (e.g. the
+# api-forms intake bot, wp_user 2) — no human owner. Such a handle's
+# conflicts are DELETED and NO assignment is created. JSON ``null`` is
+# accepted as an equivalent shorthand.
+SERVICE_SENTINEL = "__service__"
+
 DEFAULT_POSTGRES_URL = "postgresql+psycopg2://jp_adopt:jp_adopt@127.0.0.1:5434/jp_adopt"
 
 
@@ -118,12 +124,20 @@ class MappedSubject:
     # login) for this subject. Defaults False — Track B only needs the staff
     # link to clear the conflict.
     link_auth_identity: bool = False
+    # When True the handle is a DT service account (no human owner): its
+    # conflicts are cleared with NO assignment and NO subject backfill.
+    is_service: bool = False
 
     @classmethod
     def from_spec(cls, handle: str, spec: Any) -> MappedSubject:
+        # JSON null or the ``__service__`` sentinel marks a service account.
+        if spec is None or spec == SERVICE_SENTINEL:
+            return cls(handle=str(handle), subject_id="", is_service=True)
         if isinstance(spec, str):
             return cls(handle=str(handle), subject_id=spec)
         if isinstance(spec, dict):
+            if spec.get("service"):
+                return cls(handle=str(handle), subject_id="", is_service=True)
             subject = spec.get("subject") or spec.get("oid") or spec.get("subject_id")
             if not subject:
                 raise ValueError(
@@ -206,10 +220,18 @@ class ReconcilePlan:
     mapped_handles: dict[str, str] = field(default_factory=dict)
     # handles present in conflicts but absent from the operator mapping
     unmapped_handles: list[str] = field(default_factory=list)
+    # handles mapped to a service account (null/sentinel) → conflicts cleared,
+    # no assignment created
+    service_handles: list[str] = field(default_factory=list)
     staff_links_to_set: int = 0
     identity_links_to_set: int = 0
     assignments_to_resolve: int = 0
     conflicts_to_clear: int = 0
+    # service-account conflict rows cleared with no assignment created
+    service_handles_cleared: int = 0
+    # assignments deliberately NOT created because the owner is a service
+    # account (== service_handles_cleared; named for the discard semantics)
+    assignments_discarded: int = 0
     # conflicts whose contact could not be found locally (left in place)
     conflicts_unresolvable: list[str] = field(default_factory=list)
     applied: bool = False
@@ -219,11 +241,14 @@ class ReconcilePlan:
             "total_conflicts": self.total_conflicts,
             "distinct_handles": len(self.handles),
             "mapped_handles": len(self.mapped_handles),
+            "service_handles": len(self.service_handles),
             "unmapped_handles": len(self.unmapped_handles),
             "staff_links_to_set": self.staff_links_to_set,
             "identity_links_to_set": self.identity_links_to_set,
             "assignments_to_resolve": self.assignments_to_resolve,
             "conflicts_to_clear": self.conflicts_to_clear,
+            "service_handles_cleared": self.service_handles_cleared,
+            "assignments_discarded": self.assignments_discarded,
             "conflicts_unresolvable": len(self.conflicts_unresolvable),
             "applied": self.applied,
         }
@@ -265,6 +290,13 @@ def build_plan(session: Session, mapping: SubjectMapping) -> ReconcilePlan:
     distinct_subjects: set[str] = set()
     for stat in handles:
         mapped = mapping.get(stat.handle)
+        if mapped is not None and mapped.is_service:
+            # Service account (no human owner): clear its conflicts, create no
+            # assignment. Not unmapped — intentionally resolved.
+            plan.service_handles.append(stat.handle)
+            plan.service_handles_cleared += stat.count
+            plan.assignments_discarded += stat.count
+            continue
         if mapped is None or stat.wp_user_id is None:
             plan.unmapped_handles.append(stat.handle)
             continue
@@ -438,6 +470,13 @@ def reconcile(
             seen_users: set[str] = set()
             for stat in plan.handles:
                 mapped = mapping.get(stat.handle)
+                if mapped is not None and mapped.is_service:
+                    # Service account: delete every conflict for this handle,
+                    # create NO assignment and set NO subject.
+                    for sid in stat.source_ids:
+                        _delete_conflict(session, source_id=sid)
+                        counts["service_cleared"] += 1
+                    continue
                 if mapped is None or stat.wp_user_id is None:
                     continue
                 if stat.wp_user_id not in seen_users:
@@ -475,6 +514,8 @@ def reconcile(
     plan.identity_links_to_set = counts["identity_link"]
     plan.assignments_to_resolve = counts["assignment"]
     plan.conflicts_to_clear = counts["conflict_cleared"]
+    plan.service_handles_cleared = counts["service_cleared"]
+    plan.assignments_discarded = counts["service_cleared"]
     return plan
 
 
@@ -495,7 +536,12 @@ def _format_report(plan: ReconcilePlan, *, mapping: SubjectMapping) -> str:
     lines.append("distinct assigned_to handles (most frequent first):")
     for stat in plan.handles:
         mapped = mapping.get(stat.handle)
-        target = mapped.subject_id if mapped else "— UNMAPPED —"
+        if mapped is None:
+            target = "— UNMAPPED —"
+        elif mapped.is_service:
+            target = "— SERVICE (clear, no assignment) —"
+        else:
+            target = mapped.subject_id
         lines.append(
             f"  {stat.handle:<14} count={stat.count:<4} "
             f"wp_user_id={stat.wp_user_id or '?':<6} -> {target}"
@@ -514,6 +560,11 @@ def _format_report(plan: ReconcilePlan, *, mapping: SubjectMapping) -> str:
     lines.append(
         f"conflicts {'cleared' if plan.applied else 'would clear'}: "
         f"{s['conflicts_to_clear']}"
+    )
+    lines.append(
+        f"service-account conflicts {'cleared' if plan.applied else 'would clear'} "
+        f"(no assignment): {s['service_handles_cleared']} "
+        f"(assignments discarded: {s['assignments_discarded']})"
     )
     if plan.unmapped_handles:
         lines.append("")

@@ -424,3 +424,124 @@ def test_apply_with_auth_identity_link(pg_session):
         delete(IdentityLink).where(IdentityLink.b2c_subject_id == "subject-9801")
     )
     pg_session.commit()
+
+
+# ─── service-account handles ──────────────────────────────────────────────
+
+
+def test_service_handle_apply_clears_conflicts_without_assigning(pg_session):
+    """A handle marked as a service account (mapping value null) has its
+    conflict rows DELETED and creates NO contact_assignment. It is not
+    counted as unmapped; the discarded count is surfaced."""
+    cid1 = _seed_contact(pg_session, source_id="9A001")
+    cid2 = _seed_contact(pg_session, source_id="9A002")
+    # Two conflicts on the service handle.
+    _seed_conflict(pg_session, source_id="9A001", handle="user-2")
+    _seed_conflict(pg_session, source_id="9A002", handle="user-2")
+    pg_session.commit()
+
+    mapping = SubjectMapping.from_dict({"user-2": None})
+    plan = reconcile(pg_session, mapping, apply=True)
+
+    assert plan.applied is True
+    # Not unmapped — intentionally resolved as a service account.
+    assert "user-2" not in plan.unmapped_handles
+    assert plan.service_handles_cleared == 2
+    assert plan.assignments_discarded == 2
+    # No real assignment resolution happened for the service handle.
+    assert plan.assignments_to_resolve == 0
+
+    pg_session.expire_all()
+    # No assignment rows created.
+    for cid in (cid1, cid2):
+        assert (
+            pg_session.execute(
+                select(ContactAssignment).where(ContactAssignment.contact_id == cid)
+            ).first()
+            is None
+        )
+    # Conflicts deleted.
+    assert _conflicts(pg_session, ["9A001", "9A002"]) == []
+
+
+def test_service_handle_dry_run_writes_nothing(pg_session):
+    """Dry-run on a service handle reports the would-be clears but writes
+    nothing — the conflicts remain."""
+    cid = _seed_contact(pg_session, source_id="9B001")
+    _seed_conflict(pg_session, source_id="9B001", handle="user-2")
+    pg_session.commit()
+
+    mapping = SubjectMapping.from_dict({"user-2": "__service__"})
+    plan = reconcile(pg_session, mapping, apply=False)
+
+    assert plan.applied is False
+    assert "user-2" not in plan.unmapped_handles
+    assert plan.service_handles_cleared == 1
+    assert plan.assignments_discarded == 1
+
+    pg_session.expire_all()
+    # Nothing written: conflict still present, no assignment.
+    assert _conflicts(pg_session, ["9B001"]) == ["9B001"]
+    assert (
+        pg_session.execute(
+            select(ContactAssignment).where(ContactAssignment.contact_id == cid)
+        ).first()
+        is None
+    )
+    # No bulk/reconcile outbox event.
+    assert (
+        pg_session.execute(
+            text(
+                "SELECT count(*) FROM outbox WHERE event_type IN "
+                "('jp.adopt.v1.bulk_imported','jp.adopt.v1.assignee_reconciled') "
+                "AND created_at > now() - interval '5 minutes'"
+            )
+        ).scalar_one()
+        == 0
+    )
+
+
+def test_service_and_real_and_unmapped_handles_coexist(pg_session):
+    """A mixed run: a real-subject handle still resolves+assigns; a service
+    handle is cleared with no assignment; a truly-unmapped handle stays
+    unmapped and its conflict is left in place."""
+    cid_real = _seed_contact(pg_session, source_id="9C001")
+    cid_svc = _seed_contact(pg_session, source_id="9C002")
+    _seed_contact(pg_session, source_id="9C003")
+    _seed_staff_link(pg_session, dt_user_id="9510", email="recon-test-mix@x.dev")
+    _seed_conflict(pg_session, source_id="9C001", handle="user-9510")
+    _seed_conflict(pg_session, source_id="9C002", handle="user-2")
+    _seed_conflict(pg_session, source_id="9C003", handle="user-9999")  # unmapped
+    pg_session.commit()
+
+    mapping = SubjectMapping.from_dict(
+        {"user-9510": "subject-9510", "user-2": None}
+    )
+    plan = reconcile(pg_session, mapping, apply=True)
+
+    # Real handle resolved + assigned.
+    assert plan.assignments_to_resolve == 1
+    assert plan.conflicts_to_clear == 1
+    # Service handle discarded.
+    assert plan.service_handles_cleared == 1
+    assert plan.assignments_discarded == 1
+    # Truly-unmapped handle stays unmapped, conflict left in place.
+    assert "user-9999" in plan.unmapped_handles
+    assert "user-2" not in plan.unmapped_handles
+
+    pg_session.expire_all()
+    real_row = pg_session.execute(
+        select(ContactAssignment).where(ContactAssignment.contact_id == cid_real)
+    ).scalar_one()
+    assert real_row.user_subject_id == "subject-9510"
+    # Service contact: no assignment.
+    assert (
+        pg_session.execute(
+            select(ContactAssignment).where(ContactAssignment.contact_id == cid_svc)
+        ).first()
+        is None
+    )
+    # Real + service conflicts cleared; unmapped conflict remains.
+    assert _conflicts(pg_session, ["9C001"]) == []
+    assert _conflicts(pg_session, ["9C002"]) == []
+    assert _conflicts(pg_session, ["9C003"]) == ["9C003"]

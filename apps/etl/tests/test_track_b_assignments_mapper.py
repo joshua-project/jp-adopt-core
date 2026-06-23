@@ -70,3 +70,34 @@ def test_mapped_subject_wp_user_id_handles_garbage():
     assert MappedSubject(handle="not-a-handle", subject_id="s").wp_user_id is None
     assert MappedSubject(handle="user-0", subject_id="s").wp_user_id is None
     assert MappedSubject(handle="user-42", subject_id="s").wp_user_id == "42"
+
+
+def test_mapping_null_value_marks_service_account():
+    """A handle whose mapping value is JSON null means 'service account':
+    clear its conflicts, create no assignment. It carries no subject."""
+    m = SubjectMapping.from_dict({"user-2": None})
+    mapped = m.get("user-2")
+    assert mapped is not None
+    assert mapped.is_service is True
+    assert mapped.subject_id == ""
+
+
+def test_mapping_sentinel_string_marks_service_account():
+    """The explicit ``__service__`` sentinel string is equivalent to null."""
+    m = SubjectMapping.from_dict({"user-2": "__service__"})
+    mapped = m.get("user-2")
+    assert mapped.is_service is True
+    assert mapped.subject_id == ""
+
+
+def test_mapping_object_service_flag_marks_service_account():
+    """An object form ``{"service": true}`` also marks a service handle and
+    does not require a subject."""
+    m = SubjectMapping.from_dict({"user-2": {"service": True}})
+    mapped = m.get("user-2")
+    assert mapped.is_service is True
+
+
+def test_real_subject_is_not_service():
+    m = SubjectMapping.from_dict({"user-7": "oid-def"})
+    assert m.get("user-7").is_service is False
