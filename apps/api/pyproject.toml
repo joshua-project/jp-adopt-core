@@ -7,6 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.14.0",
     "asyncpg>=0.30.0",
+    # ACS email send (drip test-send endpoint). The send helper lives in this
+    # package so the API can send without importing the worker package, which
+    # the API runtime container does not ship.
+    "azure-communication-email>=1.0.0",
     "email-validator>=2.2.0",
     "fastapi>=0.115.0",
     # Plain-text alternative derived from authored drip body HTML. Beats the

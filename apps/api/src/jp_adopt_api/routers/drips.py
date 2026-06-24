@@ -47,6 +47,7 @@ from jp_adopt_api.domain.drips import (
     render_step_html,
     sanitize_body_html,
 )
+from jp_adopt_api.email_delivery import send_via_acs
 from jp_adopt_api.models import (
     Campaign,
     CampaignStep,
@@ -895,17 +896,8 @@ async def send_test_step(
 
     settings = get_settings()
     try:
-        from jp_adopt_worker.tasks.send_drip_step import send_drip_test
-    except Exception as e:  # pragma: no cover - worker pkg optional in some envs
-        logger.warning("drip.test_send.worker_pkg_unavailable err=%s", e)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "worker_unavailable", "message": "Send unavailable"},
-        ) from e
-
-    try:
-        message_id = await send_drip_test(
-            to_email=to_email,
+        message_id = await send_via_acs(
+            email=to_email,
             subject=step.subject,
             html=html,
             plain=plain,
