@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from jp_adopt_api.deps import STAFF_ROLES, DbSession, SettingsDep, require_role
 from jp_adopt_api.models import (
@@ -16,11 +17,14 @@ from jp_adopt_api.models import (
     Contact,
     ContactAssignment,
     ContactProfile,
+    DeletedContact,
     Enrollment,
     EnrollmentEvent,
     FacilitatingOrg,
     Fpg,
+    IdentityLink,
     Match,
+    MigrationConflict,
     TransitionAudit,
 )
 from jp_adopt_api.outbox_suppression import emit_outbox
@@ -52,6 +56,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/contacts", tags=["contacts"])
 
 EVENT_CONTACT_UPDATED = "jp.adopt.v1.contact.updated"
+EVENT_CONTACT_DELETED = "jp.adopt.v1.contact.deleted"
 
 # Staff roles allowed to read/write contacts. Without this gate,
 # `partner_tenants` membership (tenant-level) admits any JP-tenant Entra
@@ -123,6 +128,16 @@ async def list_contacts(
             ),
         ),
     ] = None,
+    q: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Case-insensitive substring search over display_name OR "
+                "email_normalized, across the whole dataset. Empty/"
+                "whitespace is treated as absent."
+            ),
+        ),
+    ] = None,
 ) -> ContactListResponse:
     # Validate status values against the known enum so a typo gets a 422
     # right away instead of silently returning an empty list.
@@ -160,6 +175,24 @@ async def list_contacts(
         conditions.append(Contact.adopter_status.in_(adopter_status))
     if party_kind == "facilitator" and facilitator_status:
         conditions.append(Contact.facilitator_status.in_(facilitator_status))
+    # Free-text search over name/email. ILIKE %term% is a seq scan but the
+    # contact set is small; this appends to ``conditions`` so it applies to
+    # BOTH the count and the page. Escape %/_ so a literal wildcard in the
+    # search term is matched literally rather than as a SQL wildcard.
+    q_trimmed = q.strip() if q is not None else ""
+    if q_trimmed:
+        escaped = (
+            q_trimmed.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped}%"
+        conditions.append(
+            or_(
+                Contact.display_name.ilike(pattern, escape="\\"),
+                Contact.email_normalized.ilike(pattern, escape="\\"),
+            )
+        )
 
     count_stmt = select(func.count()).select_from(Contact)
     list_stmt = select(Contact).order_by(Contact.created_at)
@@ -828,3 +861,148 @@ async def patch_contact(
     await db.commit()
     await db.refresh(contact)
     return await _contact_read_with_profile(db, contact)
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    user_with_roles: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> None:
+    """Hard-delete a contact and everything attached to it (Amy's spam path).
+
+    Irreversible. All of the following happens in a single transaction so a
+    crash can't leave the contact half-deleted:
+
+    1. ``SELECT ... FOR UPDATE`` the contact (404 if absent) — locks the row
+       against a concurrent ETL upsert for the duration.
+    2. Explicitly delete ``transition_audit`` rows. Unlike the other children
+       this FK has NO ``ON DELETE CASCADE`` (deliberately — audit rows outlive
+       state changes), so deleting the contact first would FK-violate.
+    3. Purge the no-FK orphans keyed off the contact's identity:
+       ``identity_link`` (by email_normalized / b2c_subject_id) and
+       ``migration_conflicts`` (by source_system + source_id). Neither has a
+       contact_id FK, so a cascade can't reach them.
+    4. ``DELETE`` the contact — this cascades profile / consent / assignment /
+       interest → match / activity / match_attempt / enrollment.
+    5. Record a ``deleted_contacts`` suppression row so the hourly DT ETL
+       won't silently re-import it (U6 reads this).
+    6. Emit ``EVENT_CONTACT_DELETED`` on the outbox in the same transaction.
+
+    Mirrors ``revoke_user_role`` (admin.py): do the work + ``emit_outbox`` +
+    a single ``commit``.
+    """
+    user, _roles = user_with_roles
+    contact = (
+        await db.execute(
+            select(Contact).where(Contact.id == contact_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+        )
+
+    # Snapshot identity before the row is gone — used for orphan purge and the
+    # suppression record.
+    source_system = contact.source_system
+    source_id = contact.source_id
+    email_normalized = contact.email_normalized
+    b2c_subject_id = contact.b2c_subject_id
+
+    # (2) transition_audit has no cascade — delete explicitly or the contact
+    # delete below FK-violates.
+    await db.execute(
+        delete(TransitionAudit).where(TransitionAudit.contact_id == contact_id)
+    )
+
+    # (3) Purge no-FK orphans tied to this contact's identity.
+    # IdentityLink.email_normalized is NOT globally unique — B2C links can
+    # share an email across different b2c_subject_ids. Only two identity
+    # classes are safe to purge:
+    #   - the link owning this contact's globally-unique b2c_subject_id (1:1),
+    #   - magic-link rows matched by email (the only email-unique class, per
+    #     the uq_identity_link_magic_email partial index).
+    # NEVER delete a non-magic-link link matched only by email — that could
+    # destroy a *different* user's login.
+    identity_predicates = []
+    if b2c_subject_id:
+        identity_predicates.append(
+            IdentityLink.b2c_subject_id == b2c_subject_id
+        )
+    if email_normalized:
+        identity_predicates.append(
+            (IdentityLink.email_normalized == email_normalized)
+            & (IdentityLink.idp_name == "magic_link")
+        )
+    if identity_predicates:
+        await db.execute(
+            delete(IdentityLink).where(or_(*identity_predicates))
+        )
+    if source_system is not None and source_id is not None:
+        await db.execute(
+            delete(MigrationConflict).where(
+                MigrationConflict.source_system == source_system,
+                MigrationConflict.source_id == source_id,
+            )
+        )
+
+    # (4) Delete the contact — cascades the FK-bearing children.
+    await db.execute(delete(Contact).where(Contact.id == contact_id))
+
+    # (5) Record suppression so the DT ETL won't re-import (interim bridge
+    # until DT shutoff). DT permits the same email on many contacts, so an
+    # email-keyed suppression would wrongly skip OTHER DT contacts sharing
+    # the email. For a DT-sourced contact (has source_id), suppress strictly
+    # by (source_system, source_id) and leave email_normalized NULL. Only a
+    # forms contact (no source_id) falls back to email suppression.
+    if source_id is not None:
+        # Partial-unique on (source_system, source_id) WHERE source_id IS NOT
+        # NULL — honor the predicate and no-op on a re-delete race.
+        await db.execute(
+            pg_insert(DeletedContact)
+            .values(
+                id=uuid.uuid4(),
+                source_system=source_system,
+                source_id=source_id,
+                email_normalized=None,
+                deleted_by=user.sub,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["source_system", "source_id"],
+                index_where=text("source_id IS NOT NULL"),
+            )
+        )
+    else:
+        # Forms contact: the partial index doesn't apply, so a plain insert
+        # is fine. Suppress by email_normalized.
+        db.add(
+            DeletedContact(
+                id=uuid.uuid4(),
+                source_system=source_system,
+                source_id=source_id,
+                email_normalized=email_normalized,
+                deleted_by=user.sub,
+            )
+        )
+
+    # (6) Outbox event in the same transaction.
+    emit_outbox(
+        db,
+        event_type=EVENT_CONTACT_DELETED,
+        payload={
+            "event": EVENT_CONTACT_DELETED,
+            "schema_version": "jp.adopt.v1",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "contact_id": str(contact_id),
+            "actor_subject_id": user.sub,
+            "data": {
+                "source_system": source_system,
+                "source_id": source_id,
+                "email_normalized": email_normalized,
+            },
+        },
+    )
+
+    await db.commit()
+    return None

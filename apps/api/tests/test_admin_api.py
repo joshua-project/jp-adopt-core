@@ -1211,3 +1211,151 @@ async def test_intake_db_key_starts_unused(
             delete(IntakeApiKey).where(IntakeApiKey.id == key_id)
         )
         await session.commit()
+
+
+# U3 — Facilitator FPG coverage count in the admin org list.
+
+
+@pytest.mark.asyncio
+async def test_admin_list_orgs_reports_coverage_count(
+    client: TestClient, session: AsyncSession
+) -> None:
+    # One org with 3 coverage rows, one with none, both visible in the
+    # admin list with distinct coverage_count values.
+    org_covered = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Covered {uuid.uuid4().hex[:6]}",
+        capacity_total=5,
+        active=True,
+    )
+    org_empty = FacilitatingOrg(
+        id=uuid.uuid4(),
+        name=f"TST Empty {uuid.uuid4().hex[:6]}",
+        capacity_total=5,
+        active=True,
+    )
+    session.add_all([org_covered, org_empty])
+    await session.flush()
+    fpgs = [
+        Fpg(
+            people_id3=f"T{uuid.uuid4().hex[:5].upper()}",
+            name=f"FPG {i}",
+            country_code="US",
+        )
+        for i in range(3)
+    ]
+    session.add_all(fpgs)
+    await session.flush()
+    for fpg in fpgs:
+        session.add(
+            FacilitatorFpgCoverage(
+                facilitator_org_id=org_covered.id, people_id3=fpg.people_id3
+            )
+        )
+    await session.commit()
+    try:
+        r = client.get(
+            "/v1/admin/facilitating-orgs", headers=_auth_headers()
+        )
+        assert r.status_code == 200, r.text
+        by_id = {item["id"]: item for item in r.json()["items"]}
+        assert by_id[str(org_covered.id)]["coverage_count"] == 3
+        assert by_id[str(org_empty.id)]["coverage_count"] == 0
+    finally:
+        await session.execute(
+            delete(FacilitatorFpgCoverage).where(
+                FacilitatorFpgCoverage.facilitator_org_id == org_covered.id
+            )
+        )
+        await session.execute(
+            delete(Fpg).where(
+                Fpg.people_id3.in_([f.people_id3 for f in fpgs])
+            )
+        )
+        await session.execute(
+            delete(FacilitatingOrg).where(
+                FacilitatingOrg.id.in_([org_covered.id, org_empty.id])
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_admin_list_orgs_coverage_count_single_aggregate_query(
+    client: TestClient, session: AsyncSession
+) -> None:
+    # Coverage counts must come from ONE grouped aggregate, not a
+    # per-org query (no N+1). Seed several covered orgs and assert the
+    # list endpoint issues exactly one query against the coverage
+    # table regardless of org count.
+    orgs = [
+        FacilitatingOrg(
+            id=uuid.uuid4(),
+            name=f"TST NPlus1 {uuid.uuid4().hex[:6]}",
+            capacity_total=5,
+            active=True,
+        )
+        for _ in range(3)
+    ]
+    session.add_all(orgs)
+    await session.flush()
+    fpgs: list[Fpg] = []
+    for idx, org in enumerate(orgs):
+        for _ in range(idx + 1):
+            fpg = Fpg(
+                people_id3=f"T{uuid.uuid4().hex[:5].upper()}",
+                name="FPG",
+                country_code="US",
+            )
+            fpgs.append(fpg)
+            session.add(fpg)
+            await session.flush()
+            session.add(
+                FacilitatorFpgCoverage(
+                    facilitator_org_id=org.id, people_id3=fpg.people_id3
+                )
+            )
+    await session.commit()
+
+    coverage_query_count = 0
+    real_execute = AsyncSession.execute
+
+    async def _counting_execute(self, statement, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal coverage_query_count
+        text = str(statement)
+        if "facilitator_fpg_coverage" in text and "count" in text.lower():
+            coverage_query_count += 1
+        return await real_execute(self, statement, *args, **kwargs)
+
+    from unittest.mock import patch
+
+    try:
+        with patch.object(AsyncSession, "execute", _counting_execute):
+            r = client.get(
+                "/v1/admin/facilitating-orgs", headers=_auth_headers()
+            )
+        assert r.status_code == 200, r.text
+        by_id = {item["id"]: item for item in r.json()["items"]}
+        for idx, org in enumerate(orgs):
+            assert by_id[str(org.id)]["coverage_count"] == idx + 1
+        # One aggregate over the coverage table for the whole list.
+        assert coverage_query_count == 1
+    finally:
+        await session.execute(
+            delete(FacilitatorFpgCoverage).where(
+                FacilitatorFpgCoverage.facilitator_org_id.in_(
+                    [o.id for o in orgs]
+                )
+            )
+        )
+        await session.execute(
+            delete(Fpg).where(
+                Fpg.people_id3.in_([f.people_id3 for f in fpgs])
+            )
+        )
+        await session.execute(
+            delete(FacilitatingOrg).where(
+                FacilitatingOrg.id.in_([o.id for o in orgs])
+            )
+        )
+        await session.commit()

@@ -99,6 +99,7 @@ class FacilitatingOrgAdminRead(BaseModel):
     active: bool
     source_system: str | None = None
     source_id: str | None = None
+    coverage_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -682,7 +683,23 @@ async def admin_list_facilitating_orgs(
             )
         )
     ).scalars().all()
-    items = [_admin_read(r) for r in rows]
+    # Single grouped aggregate for all orgs' FPG coverage counts —
+    # avoids an N+1 of per-org `_coverage_for` calls.
+    coverage_counts = dict(
+        (
+            await db.execute(
+                select(
+                    FacilitatorFpgCoverage.facilitator_org_id,
+                    sqlalchemy.func.count(),
+                ).group_by(FacilitatorFpgCoverage.facilitator_org_id)
+            )
+        ).all()
+    )
+    items = []
+    for r in rows:
+        item = _admin_read(r)
+        item.coverage_count = coverage_counts.get(r.id, 0)
+        items.append(item)
     return FacilitatingOrgAdminListResponse(items=items, total=len(items))
 
 
