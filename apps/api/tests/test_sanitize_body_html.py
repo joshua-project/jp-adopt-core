@@ -39,6 +39,23 @@ def test_strips_disallowed_tag_but_keeps_text() -> None:
     assert "kept" in out
 
 
+def test_strips_event_handlers_and_disallowed_attrs() -> None:
+    out = sanitize_body_html(
+        '<p onclick="alert(1)">x</p>'
+        '<a href="https://x" title="ok" id="drop">y</a>'
+    )
+    assert "onclick" not in out
+    assert 'id="drop"' not in out
+    assert 'title="ok"' in out  # title is allowlisted on <a>
+
+
+def test_strips_img_and_data_uri() -> None:
+    out = sanitize_body_html('<img src=x onerror=alert(1)>')
+    assert "<img" not in out and "onerror" not in out
+    out2 = sanitize_body_html('<a href="data:text/html,x">z</a>')
+    assert "data:" not in out2
+
+
 def test_merge_token_survives_byte_identical() -> None:
     # The load-bearing invariant: {{ }} placeholders are text, not markup, so
     # nh3 must leave them exactly as-is for Jinja to substitute later.

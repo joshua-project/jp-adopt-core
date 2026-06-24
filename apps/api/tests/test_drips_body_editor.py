@@ -137,6 +137,55 @@ async def test_patch_step_body_html_is_sanitized(
 
 
 @pytest.mark.asyncio
+async def test_patch_clearing_body_of_body_only_step_is_rejected(
+    client: TestClient, session: AsyncSession
+) -> None:
+    # A body-only step (no template) cannot have its body cleared — that would
+    # leave it with no content source and crash every future send.
+    campaign_id = _make_campaign(client)
+    try:
+        client.post(
+            f"/v1/drips/campaigns/{campaign_id}/steps",
+            json={
+                "position": 0,
+                "subject": "Hi",
+                "body_html": "<p>Hello</p>",
+            },
+            headers=_auth_headers(),
+        )
+        r = client.patch(
+            f"/v1/drips/campaigns/{campaign_id}/steps/0",
+            json={"body_html": None},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"]["code"] == "no_content_source"
+    finally:
+        await _delete_campaign(session, campaign_id)
+
+
+@pytest.mark.asyncio
+async def test_send_test_rejects_malformed_email(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign_id = _make_campaign(client)
+    try:
+        client.post(
+            f"/v1/drips/campaigns/{campaign_id}/steps",
+            json={"position": 0, "subject": "Hi", "body_html": "<p>x</p>"},
+            headers=_auth_headers(),
+        )
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign_id}/steps/0/send-test",
+            json={"to_email": "not-an-email"},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        await _delete_campaign(session, campaign_id)
+
+
+@pytest.mark.asyncio
 async def test_send_test_defaults_to_caller_email(
     client: TestClient, session: AsyncSession
 ) -> None:

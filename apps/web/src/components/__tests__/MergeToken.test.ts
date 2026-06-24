@@ -39,4 +39,37 @@ describe("MergeToken transforms", () => {
     const back = tokensToPlaceholders(editor);
     expect(back).toBe(stored);
   });
+
+  it("converts multiple/adjacent known placeholders independently", () => {
+    const out = placeholdersToTokens(
+      "{{ contact_display_name }}{{ contact_display_name }}",
+      TOKENS,
+    );
+    const matches = out.match(/data-merge-token="contact_display_name"/g);
+    expect(matches).toHaveLength(2);
+  });
+
+  it("collapses two adjacent chips back to two separate placeholders", () => {
+    const editor =
+      '<span data-merge-token="contact_display_name" data-label="Recipient name">Recipient name</span>' +
+      '<span data-merge-token="contact_display_name" data-label="Recipient name">Recipient name</span>';
+    expect(tokensToPlaceholders(editor)).toBe(
+      "{{ contact_display_name }}{{ contact_display_name }}",
+    );
+  });
+
+  it("normalizes whitespace-variant placeholders", () => {
+    const out = placeholdersToTokens("{{  contact_display_name  }}", TOKENS);
+    expect(out).toContain('data-merge-token="contact_display_name"');
+    expect(tokensToPlaceholders(out)).toBe("{{ contact_display_name }}");
+  });
+
+  it("escapes HTML-significant characters in a token label", () => {
+    const out = placeholdersToTokens("{{ x }}", [
+      { name: "x", label: 'A"<b>' },
+    ]);
+    expect(out).not.toContain('data-label="A"<b>"');
+    expect(out).toContain("&quot;");
+    expect(out).toContain("&lt;b&gt;");
+  });
 });

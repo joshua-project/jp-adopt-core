@@ -70,6 +70,14 @@ export function tokensToPlaceholders(html: string): string {
  * the chip span the MergeToken node parses. Unknown tokens are left as-is (they
  * render as plain text, surfacing the typo rather than silently vanishing).
  */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export function placeholdersToTokens(
   html: string,
   tokens: MergeTokenDef[],
@@ -78,6 +86,9 @@ export function placeholdersToTokens(
   return html.replace(PLACEHOLDER_RE, (whole, name) => {
     const label = labelByName.get(name);
     if (label === undefined) return whole;
-    return `<span data-merge-token="${name}" data-label="${label}">${label}</span>`;
+    // name is \w+ (matched by PLACEHOLDER_RE); escape the label in case a
+    // future server-provided label carries HTML-significant characters.
+    const safeLabel = escapeHtml(label);
+    return `<span data-merge-token="${name}" data-label="${safeLabel}">${safeLabel}</span>`;
   });
 }

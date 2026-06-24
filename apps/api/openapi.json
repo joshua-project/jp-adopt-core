@@ -8863,7 +8863,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 320
+                "format": "email"
               },
               {
                 "type": "null"

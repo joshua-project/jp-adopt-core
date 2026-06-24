@@ -217,6 +217,30 @@ async def _process_due_steps(
             )
             counts["exited"] += 1
             continue
+        except Exception as e:
+            # Isolate any other render failure (malformed authored body, a
+            # template that won't compile, etc.) to THIS enrollment. Without
+            # this, the exception would propagate out of the per-batch
+            # transaction, roll back every sibling's progress, fail the ARQ
+            # task, and re-claim the same poison step every tick forever —
+            # starving the whole campaign. Exit just this enrollment instead.
+            logger.warning(
+                "drip.render.failed enrollment=%s step=%s err=%s",
+                d.enrollment.id,
+                d.step.position,
+                e,
+            )
+            log_enrollment_event(
+                session,
+                d.enrollment.id,
+                event_type=EVENT_SEND_FAILED,
+                payload={"error": f"render_failed: {e}"},
+            )
+            await exit_enrollment(
+                session, d.enrollment, reason=EXIT_REASON_TEMPLATE_MISSING
+            )
+            counts["exited"] += 1
+            continue
 
         # Send
         if not contact_email:

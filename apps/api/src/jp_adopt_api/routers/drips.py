@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import delete, func, select
 
 from jp_adopt_api.auth import AuthUser
@@ -230,7 +230,9 @@ class SendTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Optional override; defaults to the authenticated staff member's email.
-    to_email: str | None = Field(default=None, max_length=320)
+    # EmailStr rejects a malformed address with 422 synchronously rather than
+    # 202-then-silently-failing in the background send.
+    to_email: EmailStr | None = Field(default=None)
 
 
 class SendTestResponse(BaseModel):
@@ -671,13 +673,29 @@ async def patch_step(
             await db.flush()
 
     # Sanitize authored body on save (DB is the trust boundary). An explicit
-    # null clears the body (revert to the template fallback).
+    # null clears the body (only valid when a template fallback remains).
     if updates.get("body_html") is not None:
         updates["body_html"] = sanitize_body_html(updates["body_html"])
 
     # Other field updates are straight setattr.
     for k, v in updates.items():
         setattr(step, k, v)
+
+    # A step must always have at least one content source. CampaignStepIn
+    # enforces this at create; enforce it here too so a PATCH that clears the
+    # body of a body-only step (no template fallback) can't leave the step
+    # uncontent-able and crash every future send.
+    if not step.body_html and not step.mjml_template_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "no_content_source",
+                "message": (
+                    "A step needs body content or a template; cannot clear "
+                    "the body of a step with no template fallback"
+                ),
+            },
+        )
 
     _bump_version_if_published(campaign)
     campaign.updated_at = datetime.now(UTC)

@@ -330,16 +330,23 @@ function StepEditForm({
   const [bodyHtml, setBodyHtml] = useState(step.body_html ?? "");
   const [sendAtHour, setSendAtHour] = useState(step.send_at_hour);
   const [sendAtMinute, setSendAtMinute] = useState(step.send_at_minute);
-  const [tokens, setTokens] = useState<MergeTokenDef[]>([]);
+  // null = not loaded yet. The editor must mount with tokens already present,
+  // or stored {{ token }} placeholders render as literal text instead of chips
+  // (placeholdersToTokens with an empty token list is a no-op).
+  const [tokens, setTokens] = useState<MergeTokenDef[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<string | null>(null);
   const [busy, startSave] = useTransition();
   const [testing, startTest] = useTransition();
 
   useEffect(() => {
+    let ignore = false;
     listMergeTokens(ctx)
-      .then((res) => setTokens(res.items))
-      .catch(() => setTokens([]));
+      .then((res) => !ignore && setTokens(res.items))
+      .catch(() => !ignore && setTokens([]));
+    return () => {
+      ignore = true;
+    };
   }, [ctx]);
 
   const onSave = () => {
@@ -445,11 +452,15 @@ function StepEditForm({
       <div className="block text-xs text-slate-600">
         Body
         <div className="mt-1">
-          <RichTextEditor
-            value={bodyHtml}
-            onChange={setBodyHtml}
-            tokens={tokens}
-          />
+          {tokens !== null ? (
+            <RichTextEditor
+              value={bodyHtml}
+              onChange={setBodyHtml}
+              tokens={tokens}
+            />
+          ) : (
+            <div className="min-h-[10rem] rounded border border-slate-300 bg-slate-50" />
+          )}
         </div>
       </div>
       {err ? (

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -489,15 +490,13 @@ def sanitize_body_html(raw: str) -> str:
     SAVE (the DB is the trust boundary; render treats the body as trusted).
 
     ``{{ token }}`` placeholders are plain text, not markup, so nh3 leaves them
-    untouched — but sanitize MUST run before Jinja render, never after (running
-    it over the rendered shell would strip the hand-built chrome). nh3 (Rust
-    ammonia) is used because ``bleach`` is deprecated.
+    untouched. Token substitution at render time is a plain text replace (see
+    ``substitute_body_tokens``), so the body is never compiled as a template.
+
+    Fails CLOSED: nh3 is a hard dependency, so an ImportError means the build is
+    broken — we raise rather than silently persisting unsanitized HTML.
     """
-    try:
-        import nh3
-    except Exception:  # pragma: no cover - nh3 optional in degraded envs
-        logger.warning("drip.sanitize.nh3_unavailable returning_raw")
-        return raw
+    import nh3
 
     return nh3.clean(
         raw,
@@ -542,10 +541,34 @@ def _html_to_plain(html: str) -> str:
         h.ignore_images = True
         return h.handle(html).strip()
     except Exception:  # pragma: no cover - html2text optional
-        import re
-
         plain = re.sub(r"<[^>]+>", "", html)
         return re.sub(r"\n\s*\n", "\n\n", plain).strip()
+
+
+_MERGE_TOKEN_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+
+
+def substitute_body_tokens(body_html: str, context: dict[str, Any]) -> str:
+    """Substitute ``{{ token }}`` placeholders in an authored body with their
+    HTML-escaped context values. Unknown tokens (not in ``context``) are left as
+    literal text.
+
+    Critically, this is a plain text substitution — the body is NEVER compiled
+    as a Jinja template. In-app-authored bodies are attacker-influenced (staff
+    can type anything, and nh3 sanitization does not strip ``{{ }}`` / ``{% %}``
+    text), so feeding them to ``Environment.from_string`` would be a
+    server-side-template-injection / RCE sink. Substituting only known tokens as
+    escaped values keeps personalization working with no template evaluation.
+    """
+    from markupsafe import escape as _escape
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in context:
+            return str(_escape(str(context[name])))
+        return match.group(0)  # unknown token → inert literal text
+
+    return _MERGE_TOKEN_RE.sub(_replace, body_html)
 
 
 def render_step_html(
@@ -559,16 +582,16 @@ def render_step_html(
 
     Content comes from one of two sources, ``body_html`` preferred:
 
-    * ``body_html`` — in-app-authored rich-text body (sanitized on save). It is
-      wrapped into the branded shell via ``{% extends %}`` at render time, so
-      the editor never touches the shell. This is the live path: edits reach
-      the next send without versioning.
-    * ``template_name`` — a file in ``email-templates/`` (the legacy/fallback
-      path, still used by digest and any step not yet migrated).
+    * ``body_html`` — in-app-authored rich-text body (sanitized on save). Its
+      ``{{ token }}`` placeholders are substituted as escaped values (NOT
+      compiled as a template — see ``substitute_body_tokens``), then the result
+      is injected as data into the branded shell. The editor never touches the
+      shell. This is the live path: edits reach the next send without versioning.
+    * ``template_name`` — a trusted, code-managed file in ``email-templates/``
+      (the legacy path, still used by the digest and any unmigrated step). These
+      ARE rendered as Jinja templates because they are code, not user input.
 
-    The content is interpreted as Jinja2 (substitution inside HTML; the
-    MJML → HTML conversion is deferred to v2). Plain-text is derived from the
-    rendered HTML.
+    Plain-text is derived from the rendered HTML.
     """
     if not body_html and not template_name:
         raise ValueError("render_step_html requires body_html or template_name")
@@ -599,37 +622,41 @@ def render_step_html(
             select_autoescape,
         )
     except ImportError as e:  # pragma: no cover - jinja2 is a fastapi transitive dep
-        # Hard fallback: jinja2 truly missing. Naive {{ key }} substitution so
-        # the worker doesn't crash — but `{% extends %}` won't resolve, so the
-        # branded chrome is lost. A render error under a present jinja2 (e.g. an
-        # unknown merge token via StrictUndefined) is NOT caught here and
-        # surfaces loudly, as intended.
+        # Hard fallback: jinja2 truly missing. Naive substitution so the worker
+        # doesn't crash — but `{% extends %}` won't resolve, so the branded
+        # chrome is lost. File templates lose StrictUndefined's loud failure too.
         logger.warning(
             "drip.render.jinja2_unavailable using_naive_substitution err=%s", e
         )
-        raw = body_html if body_html else path.read_text(encoding="utf-8")
-        html = raw
-        for k, v in full_context.items():
-            html = html.replace("{{ " + k + " }}", str(v))
-            html = html.replace("{{" + k + "}}", str(v))
+        if body_html:
+            html = substitute_body_tokens(body_html, full_context)
+        else:
+            html = path.read_text(encoding="utf-8")
+            for k, v in full_context.items():
+                html = html.replace("{{ " + k + " }}", str(v))
+                html = html.replace("{{" + k + "}}", str(v))
         return html, _html_to_plain(html)
 
-    # FileSystemLoader lets templates resolve `{% extends "_base.html.jinja" %}`,
-    # whether the body comes from a file or from a DB string. select_autoescape
-    # autoescapes string templates too (default_for_string=True), so merge
-    # values like the display name are HTML-escaped while the body's own literal
-    # tags pass through unchanged.
+    # FileSystemLoader lets templates resolve `{% extends "_base.html.jinja" %}`.
     env = Environment(
         loader=FileSystemLoader(str(base)),
         undefined=StrictUndefined,
         autoescape=select_autoescape(["html", "xml", "mjml"]),
     )
     if body_html:
-        source = (
+        # Substitute tokens first (escaped values, no template eval), then inject
+        # the result as DATA into a FIXED wrapper. The wrapper string is a
+        # constant — body_html never reaches the template compiler, so there is
+        # no SSTI surface. `| safe` keeps the already-sanitized body HTML intact;
+        # token values were HTML-escaped during substitution.
+        substituted = substitute_body_tokens(body_html, full_context)
+        wrapper = (
             "{% extends '" + BASE_SHELL_TEMPLATE + "' %}"
-            "{% block body %}" + body_html + "{% endblock %}"
+            "{% block body %}{{ body_content | safe }}{% endblock %}"
         )
-        html = env.from_string(source).render(**full_context)
+        html = env.from_string(wrapper).render(
+            body_content=substituted, **full_context
+        )
     else:
         html = env.get_template(template_name).render(**full_context)
 

@@ -96,16 +96,46 @@ def test_build_step_context_exposes_all_send_and_preview_keys() -> None:
     }
 
 
-def test_unknown_merge_token_raises_loudly() -> None:
-    # StrictUndefined: a typo'd / unknown token must fail loudly in
-    # preview/test, not silently render blank in production.
-    from jinja2 import UndefinedError
+def test_unknown_merge_token_renders_as_inert_literal() -> None:
+    # An unknown / typo'd token in an authored body must NOT crash the send
+    # (it would poison the whole drip batch). It renders as literal text.
+    html, _ = render_step_html(
+        body_html="<p>Hi {{ not_a_real_token }}</p>",
+        context=SAMPLE_CONTEXT,
+    )
+    assert "{{ not_a_real_token }}" in html
 
-    with pytest.raises(UndefinedError):
-        render_step_html(
-            body_html="<p>{{ not_a_real_token }}</p>",
-            context=SAMPLE_CONTEXT,
-        )
+
+def test_body_html_is_not_evaluated_as_a_template_ssti() -> None:
+    # Authored bodies are attacker-influenced (staff type anything; nh3 does not
+    # strip {{ }}/{% %}). They must be substituted as data, never compiled — or
+    # a body like the gadget below would achieve RCE. Assert it renders
+    # literally and is NOT evaluated.
+    payload = "<p>{{ 7 * 7 }} {% for x in range(3) %}x{% endfor %}</p>"
+    html, _ = render_step_html(body_html=payload, context=SAMPLE_CONTEXT)
+    assert "49" not in html
+    assert "xxx" not in html
+    assert "{{ 7 * 7 }}" in html  # left as literal text, unevaluated
+
+    gadget = "<p>{{ campaign_name.__class__.__mro__ }}</p>"
+    html2, _ = render_step_html(body_html=gadget, context=SAMPLE_CONTEXT)
+    assert "__mro__" in html2  # literal — object traversal never executed
+    assert "<class" not in html2
+
+
+def test_merge_value_is_html_escaped() -> None:
+    # A display name containing markup must be escaped, not injected as live HTML.
+    ctx = build_step_context(
+        contact_display_name="<b>Mallory</b>",
+        contact_email="m@example.com",
+        campaign_name="C",
+        step_position=0,
+    )
+    html, _ = render_step_html(
+        body_html="<p>Hi {{ contact_display_name }}</p>", context=ctx
+    )
+    assert "&lt;b&gt;Mallory&lt;/b&gt;" in html
+    assert "<b>Mallory</b>" not in html
 
 
 def test_requires_body_or_template() -> None:
