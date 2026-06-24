@@ -110,7 +110,7 @@ DO UPDATE SET b2c_subject_id = EXCLUDED.b2c_subject_id;
 
 # Role grant — idempotent via composite PK.
 psql_run "
-INSERT INTO user_roles (user_b2c_subject_id, role_id)
+INSERT INTO user_roles (user_subject_id, role_id)
 VALUES ('${DEV_LOCAL_SUB}', '${STAFF_ADMIN_ROLE_ID}')
 ON CONFLICT DO NOTHING;
 " >/dev/null
@@ -141,7 +141,7 @@ DO UPDATE SET b2c_subject_id = EXCLUDED.b2c_subject_id;
 " >/dev/null
 
     psql_run "
-INSERT INTO user_roles (user_b2c_subject_id, role_id)
+INSERT INTO user_roles (user_subject_id, role_id)
 VALUES ('${sub}', '${FACILITATOR_ROLE_ID}')
 ON CONFLICT DO NOTHING;
 " >/dev/null
@@ -156,7 +156,7 @@ ON CONFLICT DO NOTHING;
     code=$(curl -sS -X POST "${API_URL}/v1/admin/facilitator-memberships" \
         -H "Authorization: Bearer ${BEARER}" \
         -H "Content-Type: application/json" \
-        -d "{\"user_b2c_subject_id\": \"${sub}\", \"facilitator_org_id\": \"${org_id}\", \"role_in_org\": \"member\"}" \
+        -d "{\"user_subject_id\": \"${sub}\", \"facilitator_org_id\": \"${org_id}\", \"role_in_org\": \"member\"}" \
         -o /dev/null \
         -w "%{http_code}" 2>/dev/null || echo "000")
     case "$code" in

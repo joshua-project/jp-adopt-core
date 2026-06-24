@@ -21,7 +21,6 @@ state machine still advances.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -42,6 +41,7 @@ from jp_adopt_api.domain.drips import (
     log_enrollment_event,
     render_step_html,
 )
+from jp_adopt_api.email_delivery import send_via_acs
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -50,72 +50,10 @@ logger = logging.getLogger(__name__)
 DRIP_TICK_BATCH_SIZE = 50
 
 
-async def _send_via_acs(
-    *,
-    email: str,
-    subject: str,
-    html: str,
-    plain: str,
-    acs_connection_string: str | None,
-    acs_sender_address: str,
-) -> str | None:
-    """Send through ACS. Returns the message id on success or None when
-    ACS isn't configured (dev fallback). Raises on send failure."""
-    if not acs_connection_string:
-        logger.info(
-            "drip.email.dev_fallback recipient=%s subject=%s", email, subject
-        )
-        return None
-    try:
-        from azure.communication.email import EmailClient  # type: ignore
-    except Exception as e:  # pragma: no cover - optional dep
-        logger.warning(
-            "drip.email.acs_sdk_missing recipient=%s err=%s", email, e
-        )
-        return None
-
-    client = EmailClient.from_connection_string(acs_connection_string)
-    message = {
-        "senderAddress": acs_sender_address,
-        "recipients": {"to": [{"address": email}]},
-        "content": {
-            "subject": subject,
-            "plainText": plain,
-            "html": html,
-        },
-    }
-    poller = client.begin_send(message)
-    result = await asyncio.wait_for(
-        asyncio.to_thread(poller.result), timeout=30.0
-    )
-    return str(result)
-
-
-async def send_drip_test(
-    *,
-    to_email: str,
-    subject: str,
-    html: str,
-    plain: str,
-    acs_connection_string: str | None,
-    acs_sender_address: str,
-) -> str | None:
-    """One-shot test send of an already-rendered step, called synchronously from
-    the API (not the ARQ cron). Reuses the same ACS sender as the real drip path
-    so a passing test proves the live send path. No enrollment, no DB writes, no
-    outbox — a test send is not a contact state change.
-
-    Returns the ACS message id on a real send, or ``None`` when ACS isn't
-    configured (dev fallback — nothing was actually delivered). Raises on send
-    failure so the caller can surface it (the whole point of a test send)."""
-    return await _send_via_acs(
-        email=to_email,
-        subject=subject,
-        html=html,
-        plain=plain,
-        acs_connection_string=acs_connection_string,
-        acs_sender_address=acs_sender_address,
-    )
+# Single ACS-send implementation lives in jp_adopt_api so the API can reuse it
+# without importing this worker package. Aliased to the historical private name
+# to keep the call sites below unchanged.
+_send_via_acs = send_via_acs
 
 
 def _is_within_send_window(
@@ -321,5 +259,4 @@ async def send_drip_step(ctx: dict[str, Any]) -> None:
 __all__ = [
     "DRIP_TICK_BATCH_SIZE",
     "send_drip_step",
-    "send_drip_test",
 ]

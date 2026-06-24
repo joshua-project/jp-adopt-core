@@ -60,7 +60,7 @@ export function SiteHeader() {
             Staff console
           </span>
         </Link>
-        <div className="flex min-w-0 flex-1 flex-wrap items-stretch justify-end gap-4">
+        <div className="flex flex-wrap items-stretch justify-end gap-4">
           <nav className="flex items-stretch text-sm" aria-label="Primary">
             {NAV_ITEMS.map((item) => {
               const active =
