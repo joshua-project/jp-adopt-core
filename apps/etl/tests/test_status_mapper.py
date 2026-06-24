@@ -23,7 +23,7 @@ from jp_adopt_etl.mappers.status import (
         ("contacted", "new"),
         ("engaged", "contacted"),
         ("matched", "matched"),
-        ("active", "matched"),
+        ("active", "engaged"),
         ("inactive", "do_not_engage"),
     ],
 )
@@ -111,5 +111,7 @@ def test_closed_maps_to_do_not_engage_both_sides() -> None:
 
 
 def test_overall_status_active_maps_per_side() -> None:
-    assert map_adopter_status("active", mode="dry_run") == "matched"
+    # DT 'active' is engaged (not matched) on the adopter side; ready on the
+    # facilitator side. No adopter was ever matched in DT.
+    assert map_adopter_status("active", mode="dry_run") == "engaged"
     assert map_facilitator_status("active", mode="dry_run") == "ready"
