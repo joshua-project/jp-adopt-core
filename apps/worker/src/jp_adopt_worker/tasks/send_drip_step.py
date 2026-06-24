@@ -35,6 +35,7 @@ from jp_adopt_api.domain.drips import (
     EXIT_REASON_TEMPLATE_MISSING,
     TemplateMissingError,
     advance_enrollment,
+    build_step_context,
     claim_due_steps,
     exit_enrollment,
     is_suppressed,
@@ -157,12 +158,13 @@ async def _process_due_steps(
         try:
             html, plain = render_step_html(
                 template_name=d.step.mjml_template_name,
-                context={
-                    "contact_display_name": d.contact.display_name,
-                    "contact_email": contact_email or "",
-                    "campaign_name": d.campaign.name,
-                    "step_position": d.step.position,
-                },
+                body_html=d.step.body_html,
+                context=build_step_context(
+                    contact_display_name=d.contact.display_name,
+                    contact_email=contact_email or "",
+                    campaign_name=d.campaign.name,
+                    step_position=d.step.position,
+                ),
             )
         except TemplateMissingError as e:
             log_enrollment_event(

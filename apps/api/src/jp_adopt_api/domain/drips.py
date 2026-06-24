@@ -450,29 +450,85 @@ async def advance_enrollment(
 # ──────────────────────────────────────────────────────────────────────────
 
 
+# Name of the branded shell every step body is rendered into. Code-managed
+# (logo / footer / unsubscribe); never editable from the in-app editor.
+BASE_SHELL_TEMPLATE = "_base.html.jinja"
+
+
+def build_step_context(
+    *,
+    contact_display_name: str,
+    contact_email: str,
+    campaign_name: str,
+    step_position: int,
+) -> dict[str, Any]:
+    """Single source of truth for the merge fields available to a step body.
+    Used by the worker send path, the preview endpoint, and test-send so all
+    three render with identical keys (a missing key under StrictUndefined would
+    render fine in one path and raise in another)."""
+    return {
+        "contact_display_name": contact_display_name,
+        "contact_email": contact_email,
+        "campaign_name": campaign_name,
+        "step_position": step_position,
+    }
+
+
+def _html_to_plain(html: str) -> str:
+    """Derive a text/plain alternative from rendered HTML. Prefers html2text
+    (keeps link URLs and list structure); falls back to a tag-strip regex if
+    the library is unavailable so the worker never crashes."""
+    try:
+        import html2text
+
+        h = html2text.HTML2Text()
+        h.body_width = 0  # no hard wrapping
+        h.ignore_emphasis = True  # avoid *bold* / _italic_ markdown artifacts
+        h.ignore_images = True
+        return h.handle(html).strip()
+    except Exception:  # pragma: no cover - html2text optional
+        import re
+
+        plain = re.sub(r"<[^>]+>", "", html)
+        return re.sub(r"\n\s*\n", "\n\n", plain).strip()
+
+
 def render_step_html(
     *,
-    template_name: str,
+    template_name: str | None = None,
+    body_html: str | None = None,
     context: dict[str, Any],
     templates_dir: Path | None = None,
 ) -> tuple[str, str]:
-    """Render an email step. Returns ``(html, plain_text)``. The MJML
-    template file is interpreted as Jinja2 (we use Jinja2 substitution
-    inside the MJML source; the MJML → HTML conversion is deferred to
-    v2 — for now we treat the file as already-rendered HTML with Jinja2
-    placeholders).
+    """Render an email step. Returns ``(html, plain_text)``.
 
-    Plain-text fallback is derived by stripping HTML tags via a tiny
-    regex; senders should still author both forms in v2.
+    Content comes from one of two sources, ``body_html`` preferred:
+
+    * ``body_html`` — in-app-authored rich-text body (sanitized on save). It is
+      wrapped into the branded shell via ``{% extends %}`` at render time, so
+      the editor never touches the shell. This is the live path: edits reach
+      the next send without versioning.
+    * ``template_name`` — a file in ``email-templates/`` (the legacy/fallback
+      path, still used by digest and any step not yet migrated).
+
+    The content is interpreted as Jinja2 (substitution inside HTML; the
+    MJML → HTML conversion is deferred to v2). Plain-text is derived from the
+    rendered HTML.
     """
+    if not body_html and not template_name:
+        raise ValueError("render_step_html requires body_html or template_name")
+
     base = templates_dir or EMAIL_TEMPLATES_DIR
-    path = base / template_name
-    if not path.is_file():
-        raise TemplateMissingError(
-            f"Template not found: {path} "
-            f"(searched {base}; ensure apps/api/email-templates/ ships "
-            f"with the API container)"
-        )
+
+    path = None
+    if not body_html:
+        path = base / template_name
+        if not path.is_file():
+            raise TemplateMissingError(
+                f"Template not found: {path} "
+                f"(searched {base}; ensure apps/api/email-templates/ ships "
+                f"with the API container)"
+            )
 
     # Auto-inject `current_year` for the branded footer (`_base.html.jinja`).
     # Callers shouldn't have to remember it; it never differs per send.
@@ -482,36 +538,42 @@ def render_step_html(
 
     try:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-
-        # FileSystemLoader lets step templates do `{% extends "_base.html.jinja" %}`.
-        env = Environment(
-            loader=FileSystemLoader(str(base)),
-            undefined=StrictUndefined,
-            autoescape=select_autoescape(["html", "xml", "mjml"]),
-        )
-        html = env.get_template(template_name).render(**full_context)
-    except Exception as e:  # pragma: no cover - jinja optional
-        # Jinja2 should be available (it's a transitive dep of fastapi);
-        # if not, render the raw template with naive {{ key }} substitution
-        # so the worker doesn't crash on the dev box. This is a hard
-        # fallback — strict-undefined errors here become silent gaps, and
-        # `{% extends %}` won't resolve, so the branded chrome will be
-        # missing in this degraded path.
+    except ImportError as e:  # pragma: no cover - jinja2 is a fastapi transitive dep
+        # Hard fallback: jinja2 truly missing. Naive {{ key }} substitution so
+        # the worker doesn't crash — but `{% extends %}` won't resolve, so the
+        # branded chrome is lost. A render error under a present jinja2 (e.g. an
+        # unknown merge token via StrictUndefined) is NOT caught here and
+        # surfaces loudly, as intended.
         logger.warning(
-            "drip.render.jinja2_unavailable using_naive_substitution err=%s",
-            e,
+            "drip.render.jinja2_unavailable using_naive_substitution err=%s", e
         )
-        html = path.read_text(encoding="utf-8")
+        raw = body_html if body_html else path.read_text(encoding="utf-8")
+        html = raw
         for k, v in full_context.items():
             html = html.replace("{{ " + k + " }}", str(v))
             html = html.replace("{{" + k + "}}", str(v))
+        return html, _html_to_plain(html)
 
-    # Plain text fallback: strip tags. Cheap and OK for v1.
-    import re
+    # FileSystemLoader lets templates resolve `{% extends "_base.html.jinja" %}`,
+    # whether the body comes from a file or from a DB string. select_autoescape
+    # autoescapes string templates too (default_for_string=True), so merge
+    # values like the display name are HTML-escaped while the body's own literal
+    # tags pass through unchanged.
+    env = Environment(
+        loader=FileSystemLoader(str(base)),
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(["html", "xml", "mjml"]),
+    )
+    if body_html:
+        source = (
+            "{% extends '" + BASE_SHELL_TEMPLATE + "' %}"
+            "{% block body %}" + body_html + "{% endblock %}"
+        )
+        html = env.from_string(source).render(**full_context)
+    else:
+        html = env.get_template(template_name).render(**full_context)
 
-    plain = re.sub(r"<[^>]+>", "", html)
-    plain = re.sub(r"\n\s*\n", "\n\n", plain).strip()
-    return html, plain
+    return html, _html_to_plain(html)
 
 
 # ──────────────────────────────────────────────────────────────────────────

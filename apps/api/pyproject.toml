@@ -9,7 +9,14 @@ dependencies = [
     "asyncpg>=0.30.0",
     "email-validator>=2.2.0",
     "fastapi>=0.115.0",
+    # Plain-text alternative derived from authored drip body HTML. Beats the
+    # old tag-strip regex: preserves link URLs and list structure.
+    "html2text>=2024.2.26",
     "httpx>=0.28.0",
+    # HTML sanitizer (Rust/ammonia binding) for in-app-authored drip body
+    # content. Applied on save against a tight allowlist; `bleach` is
+    # deprecated (unmaintained html5lib), so we use nh3.
+    "nh3>=0.2.18",
     # Email-template rendering for drip and digest emails. Strictly
     # required: the `_base.html.jinja` shared shell uses Jinja's
     # `{% extends %}` block, which only works through FileSystemLoader.
