@@ -107,7 +107,32 @@ export interface paths {
         get: operations["get_contact_v1_contacts__contact_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Contact
+         * @description Hard-delete a contact and everything attached to it (Amy's spam path).
+         *
+         *     Irreversible. All of the following happens in a single transaction so a
+         *     crash can't leave the contact half-deleted:
+         *
+         *     1. ``SELECT ... FOR UPDATE`` the contact (404 if absent) — locks the row
+         *        against a concurrent ETL upsert for the duration.
+         *     2. Explicitly delete ``transition_audit`` rows. Unlike the other children
+         *        this FK has NO ``ON DELETE CASCADE`` (deliberately — audit rows outlive
+         *        state changes), so deleting the contact first would FK-violate.
+         *     3. Purge the no-FK orphans keyed off the contact's identity:
+         *        ``identity_link`` (by email_normalized / b2c_subject_id) and
+         *        ``migration_conflicts`` (by source_system + source_id). Neither has a
+         *        contact_id FK, so a cascade can't reach them.
+         *     4. ``DELETE`` the contact — this cascades profile / consent / assignment /
+         *        interest → match / activity / match_attempt / enrollment.
+         *     5. Record a ``deleted_contacts`` suppression row so the hourly DT ETL
+         *        won't silently re-import it (U6 reads this).
+         *     6. Emit ``EVENT_CONTACT_DELETED`` on the outbox in the same transaction.
+         *
+         *     Mirrors ``revoke_user_role`` (admin.py): do the work + ``emit_outbox`` +
+         *     a single ``commit``.
+         */
+        delete: operations["delete_contact_v1_contacts__contact_id__delete"];
         options?: never;
         head?: never;
         /** Patch Contact */
@@ -1921,6 +1946,11 @@ export interface components {
             /** Source Id */
             source_id?: string | null;
             /**
+             * Coverage Count
+             * @default 0
+             */
+            coverage_count: number;
+            /**
              * Created At
              * Format: date-time
              */
@@ -2738,6 +2768,8 @@ export interface operations {
                 adopter_status?: string[] | null;
                 /** @description Filter facilitators by status. Repeatable. Ignored when party_kind=adopter. */
                 facilitator_status?: string[] | null;
+                /** @description Case-insensitive substring search over display_name OR email_normalized, across the whole dataset. Empty/whitespace is treated as absent. */
+                q?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -2822,6 +2854,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContactRead"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_contact_v1_contacts__contact_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
