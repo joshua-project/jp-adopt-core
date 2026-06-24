@@ -19,6 +19,16 @@ SAMPLE_CONTEXT = build_step_context(
 )
 
 
+def test_email_templates_dir_resolves_to_the_shell() -> None:
+    # Regression: the installed-package container layout (no `src` level) made
+    # the old 4-levels-up computation point at a nonexistent dir, so
+    # `{% extends '_base.html.jinja' %}` raised TemplateNotFound at send time.
+    from jp_adopt_api.domain.drips import EMAIL_TEMPLATES_DIR
+
+    assert EMAIL_TEMPLATES_DIR.is_dir()
+    assert (EMAIL_TEMPLATES_DIR / "_base.html.jinja").is_file()
+
+
 def test_body_html_renders_into_branded_shell() -> None:
     body = (
         "<h2>Hello {{ contact_display_name }}</h2>"

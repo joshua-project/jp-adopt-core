@@ -210,11 +210,15 @@ export async function apiFetch<T = unknown>(
     signal: init.signal,
   });
   if (!res.ok) {
-    let payload: unknown = null;
+    // Read the body ONCE — a Response stream can only be consumed once, so
+    // attempting res.json() then res.text() on failure throws "body stream
+    // already read" and masks the real error. Read text, then try to parse.
+    const raw = await res.text();
+    let payload: unknown = raw;
     try {
-      payload = await res.json();
+      payload = raw ? JSON.parse(raw) : null;
     } catch {
-      payload = await res.text();
+      // Non-JSON error body (e.g. a proxy 502/504 HTML page) — keep the text.
     }
     throw new ApiError(res.status, payload);
   }
