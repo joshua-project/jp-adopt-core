@@ -611,8 +611,10 @@ _BODY_TAG_STYLES: dict[str, str] = {
     "h3": "margin:0 0 12px;color:#2C474B;font-size:16px",
     "p": "margin:0 0 16px;color:#374151",
     "a": "color:#eb5f1e",
-    "ul": "margin:0 0 16px;color:#374151;padding-left:24px",
-    "ol": "margin:0 0 16px;color:#374151;padding-left:24px",
+    # Explicit list-style-type so email clients that reset list styling
+    # (notably Outlook) still render markers.
+    "ul": "margin:0 0 16px;color:#374151;padding-left:24px;list-style-type:disc",
+    "ol": "margin:0 0 16px;color:#374151;padding-left:24px;list-style-type:decimal",
     "li": "margin:0 0 8px;color:#374151",
 }
 

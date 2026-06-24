@@ -168,6 +168,17 @@ def test_bare_authored_tags_get_brand_inline_styles() -> None:
     assert 'style="margin:0 0 16px;color:#374151"' in html
 
 
+def test_lists_get_explicit_markers_for_email_clients() -> None:
+    # Outlook resets list styling; render must inject explicit list-style-type
+    # so numbered/bulleted lists still show markers in email.
+    html, _ = render_step_html(
+        body_html="<ol><li><p>One</p></li></ol><ul><li><p>a</p></li></ul>",
+        context=SAMPLE_CONTEXT,
+    )
+    assert "list-style-type:decimal" in html
+    assert "list-style-type:disc" in html
+
+
 def test_authored_tags_keep_their_own_style() -> None:
     # A tag that already carries a style (e.g. seeded content) is left alone.
     html, _ = render_step_html(
