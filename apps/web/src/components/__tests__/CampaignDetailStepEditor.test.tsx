@@ -52,8 +52,8 @@ vi.mock("../../lib/api-client", () => ({
   patchCampaign: vi.fn(),
   pauseCampaign: vi.fn(),
   previewCampaignStep: vi.fn(),
-  // AddCampaignStepForm (rendered in the same tree) needs these.
-  listDripTemplates: vi.fn().mockResolvedValue({ items: [] }),
+  // AddCampaignStepForm (rendered in the same tree) calls addCampaignStep;
+  // listMergeTokens is mocked above.
   addCampaignStep: vi.fn(),
 }));
 
@@ -118,7 +118,10 @@ describe("CampaignDetail step body editor", () => {
   it("sends a test of the step", async () => {
     getCampaign.mockResolvedValue(campaignWithStep());
     listMergeTokens.mockResolvedValue({ items: [] });
-    sendTestStep.mockResolvedValue({ to_email: "amy@example.com" });
+    sendTestStep.mockResolvedValue({
+      to_email: "amy@example.com",
+      delivered: true,
+    });
 
     render(<CampaignDetail campaignId="11111111-1111-1111-1111-111111111111" />);
 

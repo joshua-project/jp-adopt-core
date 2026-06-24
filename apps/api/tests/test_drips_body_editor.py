@@ -205,9 +205,28 @@ async def test_send_test_defaults_to_caller_email(
             json={},
             headers=_auth_headers(),
         )
-        assert r.status_code == 202, r.text
+        assert r.status_code == 200, r.text
         # dev-local resolves to dev@local.invalid in the auth layer.
         assert "@" in r.json()["to_email"]
+        # No ACS configured in tests → render worked but nothing delivered.
+        assert r.json()["delivered"] is False
+    finally:
+        await _delete_campaign(session, campaign_id)
+
+
+@pytest.mark.asyncio
+async def test_send_test_unknown_position_404(
+    client: TestClient, session: AsyncSession
+) -> None:
+    campaign_id = _make_campaign(client)
+    try:
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign_id}/steps/9/send-test",
+            json={},
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"]["code"] == "step_not_found"
     finally:
         await _delete_campaign(session, campaign_id)
 
@@ -232,7 +251,7 @@ async def test_send_test_uses_explicit_recipient(
             json={"to_email": "amy@example.com"},
             headers=_auth_headers(),
         )
-        assert r.status_code == 202, r.text
+        assert r.status_code == 200, r.text
         assert r.json()["to_email"] == "amy@example.com"
     finally:
         await _delete_campaign(session, campaign_id)

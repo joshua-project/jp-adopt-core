@@ -1104,8 +1104,10 @@ export interface paths {
         /**
          * Send Test Step
          * @description Render a step against sample context and send it to the caller (or an
-         *     explicit ``to_email``) for a confidence check before activating. Reuses the
-         *     worker ACS sender; not a contact state change, so no enrollment/outbox.
+         *     explicit ``to_email``) for a confidence check before activating. Sends
+         *     SYNCHRONOUSLY so a failure surfaces (the whole point of a test) rather than
+         *     being swallowed in the background. Reuses the worker ACS sender; not a
+         *     contact state change, so no enrollment/outbox.
          */
         post: operations["send_test_step_v1_drips_campaigns__campaign_id__steps__position__send_test_post"];
         delete?: never;
@@ -2599,6 +2601,8 @@ export interface components {
         SendTestResponse: {
             /** To Email */
             to_email: string;
+            /** Delivered */
+            delivered: boolean;
         };
         /**
          * StepPreviewResponse
@@ -5109,7 +5113,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5139,6 +5143,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description The email service rejected the send */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

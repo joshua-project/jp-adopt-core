@@ -30,7 +30,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import delete, func, select
 
@@ -237,6 +237,9 @@ class SendTestRequest(BaseModel):
 
 class SendTestResponse(BaseModel):
     to_email: str
+    # False when no email service is configured (dev) — the render succeeded but
+    # nothing was actually delivered, so the UI shouldn't imply a real send.
+    delivered: bool
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -281,9 +284,11 @@ async def _serialize_campaign(db, campaign: Campaign) -> CampaignRead:
 
 
 def _bump_version_if_published(campaign: Campaign) -> None:
-    """Editing an active or paused campaign bumps its version so existing
-    enrollments stay pinned to the version they started under. Draft
-    campaigns are still being authored; no need to bump."""
+    """Bump the campaign version when editing an active/paused campaign so the
+    change is observable in the audit trail. Note: this does NOT pin step
+    *content* — the worker renders the live ``body_html``/template at send time,
+    so a body edit reaches every in-flight enrollment's next send by design (no
+    per-enrollment content snapshot). Draft campaigns don't bump."""
     if campaign.status in ("active", "paused"):
         campaign.version += 1
 
@@ -814,10 +819,10 @@ async def list_merge_tokens(
 @router.post(
     "/campaigns/{campaign_id}/steps/{position}/send-test",
     response_model=SendTestResponse,
-    status_code=status.HTTP_202_ACCEPTED,
     responses={
         400: {"description": "No recipient email could be determined"},
         404: {"description": "Campaign, step, or template not found"},
+        502: {"description": "The email service rejected the send"},
     },
 )
 async def send_test_step(
@@ -825,12 +830,13 @@ async def send_test_step(
     position: int,
     body: SendTestRequest,
     db: DbSession,
-    background_tasks: BackgroundTasks,
     actor: Annotated[tuple[AuthUser, frozenset[str]], Depends(_drips_dep)],
 ) -> SendTestResponse:
     """Render a step against sample context and send it to the caller (or an
-    explicit ``to_email``) for a confidence check before activating. Reuses the
-    worker ACS sender; not a contact state change, so no enrollment/outbox."""
+    explicit ``to_email``) for a confidence check before activating. Sends
+    SYNCHRONOUSLY so a failure surfaces (the whole point of a test) rather than
+    being swallowed in the background. Reuses the worker ACS sender; not a
+    contact state change, so no enrollment/outbox."""
     user, _roles = actor
     campaign = await _load_campaign(db, campaign_id)
     step = (
@@ -889,7 +895,7 @@ async def send_test_step(
 
     settings = get_settings()
     try:
-        from jp_adopt_worker.tasks.send_drip_step import send_drip_test_inline
+        from jp_adopt_worker.tasks.send_drip_step import send_drip_test
     except Exception as e:  # pragma: no cover - worker pkg optional in some envs
         logger.warning("drip.test_send.worker_pkg_unavailable err=%s", e)
         raise HTTPException(
@@ -897,16 +903,28 @@ async def send_test_step(
             detail={"code": "worker_unavailable", "message": "Send unavailable"},
         ) from e
 
-    background_tasks.add_task(
-        send_drip_test_inline,
-        to_email=to_email,
-        subject=step.subject,
-        html=html,
-        plain=plain,
-        acs_connection_string=settings.acs_connection_string,
-        acs_sender_address=settings.acs_sender_address,
-    )
-    return SendTestResponse(to_email=to_email)
+    try:
+        message_id = await send_drip_test(
+            to_email=to_email,
+            subject=step.subject,
+            html=html,
+            plain=plain,
+            acs_connection_string=settings.acs_connection_string,
+            acs_sender_address=settings.acs_sender_address,
+        )
+    except Exception as e:
+        logger.warning("drip.test_send.failed recipient=%s err=%s", to_email, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "send_failed",
+                "message": "Email service rejected the send",
+            },
+        ) from e
+
+    # message_id is None when ACS isn't configured (dev) — render worked but
+    # nothing was delivered.
+    return SendTestResponse(to_email=to_email, delivered=message_id is not None)
 
 
 @router.post(

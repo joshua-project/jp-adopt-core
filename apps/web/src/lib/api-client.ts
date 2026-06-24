@@ -441,8 +441,6 @@ type CampaignStepCreateBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["requestBody"]["content"]["application/json"];
 type CampaignStepReadBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["responses"]["201"]["content"]["application/json"];
-type TemplateListResponseBody =
-  paths["/v1/drips/templates"]["get"]["responses"]["200"]["content"]["application/json"];
 
 export async function getCampaign(
   ctx: ApiClientContext,
@@ -535,7 +533,7 @@ export async function previewCampaignStep(
 type SendTestRequestBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["requestBody"]["content"]["application/json"];
 type SendTestResponseBody =
-  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["responses"]["202"]["content"]["application/json"];
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["responses"]["200"]["content"]["application/json"];
 
 export async function sendTestStep(
   ctx: ApiClientContext,
@@ -572,15 +570,6 @@ export async function archiveCampaign(
   await apiFetch<void>(ctx, `/v1/drips/campaigns/${campaignId}`, {
     method: "DELETE",
   });
-}
-
-export async function listDripTemplates(
-  ctx: ApiClientContext,
-): Promise<TemplateListResponseBody> {
-  return _assertPresent(
-    await apiFetch<TemplateListResponseBody>(ctx, "/v1/drips/templates"),
-    "/v1/drips/templates",
-  );
 }
 
 // ── Admin: Graph user lookup (#97) ───────────────────────────────────────

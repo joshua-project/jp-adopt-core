@@ -385,7 +385,11 @@ function StepEditForm({
       void (async () => {
         try {
           const res = await sendTestStep(ctx, campaignId, step.position, {});
-          setTestMsg(`Test sent to ${res.to_email}.`);
+          setTestMsg(
+            res.delivered
+              ? `Test sent to ${res.to_email}.`
+              : `Rendered for ${res.to_email}, but no email service is configured here — nothing was delivered.`,
+          );
         } catch (e) {
           setErr(formatApiError(e));
         }

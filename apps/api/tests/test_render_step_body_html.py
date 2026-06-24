@@ -84,6 +84,16 @@ def test_plain_text_preserves_link_url_and_list_bullets() -> None:
     assert "<a" not in plain and "<li>" not in plain
 
 
+def test_every_merge_token_resolves_in_context() -> None:
+    # The editor's insertable tokens (MERGE_TOKENS) must all be keys the render
+    # context provides, or inserting one would render as inert literal text
+    # instead of personalizing. Guards against the two lists drifting.
+    from jp_adopt_api.domain.drips import MERGE_TOKENS
+
+    token_names = {name for name, _label in MERGE_TOKENS}
+    assert token_names <= set(SAMPLE_CONTEXT)
+
+
 def test_build_step_context_exposes_all_send_and_preview_keys() -> None:
     # Guard against preview/send context divergence (preview historically
     # omitted contact_email, which would render fine in send but raise under
@@ -136,6 +146,25 @@ def test_merge_value_is_html_escaped() -> None:
     )
     assert "&lt;b&gt;Mallory&lt;/b&gt;" in html
     assert "<b>Mallory</b>" not in html
+
+
+def test_bare_authored_tags_get_brand_inline_styles() -> None:
+    # Tiptap emits bare tags; render injects brand inline styles so authored
+    # bodies match the seeded copy (and email clients, which ignore <style>).
+    html, _ = render_step_html(
+        body_html="<h2>Title</h2><p>Body</p>", context=SAMPLE_CONTEXT
+    )
+    assert 'style="margin:0 0 16px;color:#2C474B;font-size:18px"' in html
+    assert 'style="margin:0 0 16px;color:#374151"' in html
+
+
+def test_authored_tags_keep_their_own_style() -> None:
+    # A tag that already carries a style (e.g. seeded content) is left alone.
+    html, _ = render_step_html(
+        body_html='<p style="color:red">x</p>', context=SAMPLE_CONTEXT
+    )
+    assert 'style="color:red"' in html
+    assert "color:#374151" not in html
 
 
 def test_requires_body_or_template() -> None:

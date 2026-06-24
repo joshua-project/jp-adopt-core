@@ -571,6 +571,43 @@ def substitute_body_tokens(body_html: str, context: dict[str, Any]) -> str:
     return _MERGE_TOKEN_RE.sub(_replace, body_html)
 
 
+# Brand styles applied at render time to authored-body tags that lack their own
+# inline style. Keeps editor-authored bodies (Tiptap emits bare tags) visually
+# consistent with the seeded copy, and keeps a seeded step looking the same after
+# its first edit strips the file's inline styles. Email clients ignore <style>
+# blocks, so the styling must be inline. Colors match the _base shell + the
+# original template copy (#2C474B headings, #374151 body, #eb5f1e accent links).
+_BODY_TAG_STYLES: dict[str, str] = {
+    "h1": "margin:0 0 16px;color:#2C474B;font-size:22px",
+    "h2": "margin:0 0 16px;color:#2C474B;font-size:18px",
+    "h3": "margin:0 0 12px;color:#2C474B;font-size:16px",
+    "p": "margin:0 0 16px;color:#374151",
+    "a": "color:#eb5f1e",
+    "ul": "margin:0 0 16px;color:#374151;padding-left:24px",
+    "ol": "margin:0 0 16px;color:#374151;padding-left:24px",
+    "li": "margin:0 0 8px;color:#374151",
+}
+
+_BODY_TAG_RE = re.compile(
+    r"<(" + "|".join(_BODY_TAG_STYLES) + r")(\s[^>]*)?>",
+    re.IGNORECASE,
+)
+
+
+def apply_body_styles(html: str) -> str:
+    """Inject brand inline styles into body tags that don't already carry a
+    ``style=`` attribute. Tags with an author/seed style are left untouched."""
+
+    def _style(match: re.Match[str]) -> str:
+        tag = match.group(1).lower()
+        attrs = match.group(2) or ""
+        if "style=" in attrs.lower():
+            return match.group(0)
+        return f'<{match.group(1)}{attrs} style="{_BODY_TAG_STYLES[tag]}">'
+
+    return _BODY_TAG_RE.sub(_style, html)
+
+
 def render_step_html(
     *,
     template_name: str | None = None,
@@ -649,7 +686,9 @@ def render_step_html(
         # constant — body_html never reaches the template compiler, so there is
         # no SSTI surface. `| safe` keeps the already-sanitized body HTML intact;
         # token values were HTML-escaped during substitution.
-        substituted = substitute_body_tokens(body_html, full_context)
+        substituted = apply_body_styles(
+            substitute_body_tokens(body_html, full_context)
+        )
         wrapper = (
             "{% extends '" + BASE_SHELL_TEMPLATE + "' %}"
             "{% block body %}{{ body_content | safe }}{% endblock %}"

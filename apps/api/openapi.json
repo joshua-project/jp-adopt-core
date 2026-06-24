@@ -4299,7 +4299,7 @@
           "drips"
         ],
         "summary": "Send Test Step",
-        "description": "Render a step against sample context and send it to the caller (or an\nexplicit ``to_email``) for a confidence check before activating. Reuses the\nworker ACS sender; not a contact state change, so no enrollment/outbox.",
+        "description": "Render a step against sample context and send it to the caller (or an\nexplicit ``to_email``) for a confidence check before activating. Sends\nSYNCHRONOUSLY so a failure surfaces (the whole point of a test) rather than\nbeing swallowed in the background. Reuses the worker ACS sender; not a\ncontact state change, so no enrollment/outbox.",
         "operationId": "send_test_step_v1_drips_campaigns__campaign_id__steps__position__send_test_post",
         "parameters": [
           {
@@ -4349,7 +4349,7 @@
           }
         },
         "responses": {
-          "202": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -4364,6 +4364,9 @@
           },
           "404": {
             "description": "Campaign, step, or template not found"
+          },
+          "502": {
+            "description": "The email service rejected the send"
           },
           "422": {
             "description": "Validation Error",
@@ -8881,11 +8884,16 @@
           "to_email": {
             "type": "string",
             "title": "To Email"
+          },
+          "delivered": {
+            "type": "boolean",
+            "title": "Delivered"
           }
         },
         "type": "object",
         "required": [
-          "to_email"
+          "to_email",
+          "delivered"
         ],
         "title": "SendTestResponse"
       },

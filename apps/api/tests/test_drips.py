@@ -876,6 +876,80 @@ async def test_worker_tick_renders_and_advances_enrollment(
         await _cleanup_contact(session, contact)
 
 
+@pytest.mark.asyncio
+async def test_worker_tick_renders_body_html_step(
+    session: AsyncSession,
+) -> None:
+    """A step authored in-app (body_html set) sends through the worker tick.
+    The template name points at a NON-EXISTENT file, so a successful send proves
+    the worker used body_html, not the template fallback."""
+    from jp_adopt_worker.tasks.send_drip_step import _process_due_steps
+
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session, status="active")
+    step = await _make_step(
+        session, campaign, position=0, send_at_hour=0,
+        template_name="does-not-exist.mjml",
+    )
+    step.body_html = "<p>Hi {{ contact_display_name }}</p>"
+    await session.commit()
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    try:
+        counts = await _process_due_steps(
+            session,
+            acs_connection_string=None,
+            acs_sender_address="no-reply@example.com",
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+        assert counts["sent"] == 1
+        enrollment = await session.get(Enrollment, outcome.enrollment_id)
+        assert enrollment is not None and enrollment.state == "completed"
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
+@pytest.mark.asyncio
+async def test_worker_tick_isolates_unrenderable_step(
+    session: AsyncSession,
+) -> None:
+    """A step with no content source (both body_html and template null) raises
+    at render. The worker must exit just that enrollment, NOT crash the whole
+    batch tick (which would roll back siblings and re-fire forever)."""
+    from jp_adopt_worker.tasks.send_drip_step import _process_due_steps
+
+    contact = await _make_contact(session)
+    campaign = await _make_campaign(session, status="active")
+    step = await _make_step(session, campaign, position=0, send_at_hour=0)
+    step.mjml_template_name = None
+    step.body_html = None
+    await session.commit()
+    outcome = await enroll_contact_in_campaign(
+        session, campaign=campaign, contact=contact
+    )
+    await session.commit()
+    try:
+        # Must not raise.
+        counts = await _process_due_steps(
+            session,
+            acs_connection_string=None,
+            acs_sender_address="no-reply@example.com",
+            now=datetime.now(UTC),
+        )
+        await session.commit()
+        assert counts["exited"] == 1
+        assert counts["sent"] == 0
+        enrollment = await session.get(Enrollment, outcome.enrollment_id)
+        assert enrollment is not None and enrollment.state == "exited"
+    finally:
+        await _cleanup_campaign(session, campaign)
+        await _cleanup_contact(session, contact)
+
+
 # ─── Step PATCH + reorder ──────────────────────────────────────────────────
 
 
