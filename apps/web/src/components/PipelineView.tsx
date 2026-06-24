@@ -30,7 +30,14 @@ export interface PipelineViewProps {
   /** Optional empty-state copy when there's nothing at all. */
   emptyTitle?: string;
   emptyBody?: string;
+  /**
+   * Injectable so unit tests can pass `0` and skip the debounce timer
+   * entirely. The default 250ms is what real users see.
+   */
+  searchDebounceMs?: number;
 }
+
+const DEFAULT_DEBOUNCE_MS = 250;
 
 const STATUS_TONE_DEFAULT: Record<
   string,
@@ -70,6 +77,7 @@ export function PipelineView({
   statuses,
   emptyTitle,
   emptyBody,
+  searchDebounceMs = DEFAULT_DEBOUNCE_MS,
 }: PipelineViewProps) {
   const ctx = useApiContext();
 
@@ -81,6 +89,9 @@ export function PipelineView({
   const [view, setView] = useState<ViewMode>("table");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // Raw input value vs the debounced value that actually drives fetches.
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
 
   const statusParam =
     partyKind === "adopter" ? "adopter_status" : "facilitator_status";
@@ -95,47 +106,76 @@ export function PipelineView({
     [selected],
   );
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const qs = new URLSearchParams();
-      qs.set("party_kind", partyKind);
-      qs.set("limit", "200");
-      for (const s of selected) {
-        if (s === "__unset__") continue; // server can't filter NULLs yet
-        qs.append(statusParam, s);
-      }
-      const [listResp, countsResp] = await Promise.all([
-        apiFetch<ContactsResponse>(ctx, `/v1/contacts?${qs.toString()}`),
-        apiFetch<StatusCountsResponse>(
-          ctx,
-          `/v1/contacts/status_counts?party_kind=${partyKind}`,
-        ),
-      ]);
-      if (listResp) {
-        setItems(listResp.items);
-        setTotal(listResp.total);
-      }
-      if (countsResp) {
-        setCounts(countsResp.counts);
-        setCountsTotal(countsResp.total);
-      }
-    } catch (e) {
-      setErr(
-        e instanceof ApiError
-          ? e.message
-          : e instanceof Error
+  const fetchData = useCallback(
+    async (signal?: AbortSignal) => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const qs = new URLSearchParams();
+        qs.set("party_kind", partyKind);
+        qs.set("limit", "200");
+        // New query starts back at the first page.
+        qs.set("offset", "0");
+        for (const s of selected) {
+          if (s === "__unset__") continue; // server can't filter NULLs yet
+          qs.append(statusParam, s);
+        }
+        if (debouncedQ) qs.set("q", debouncedQ);
+        const [listResp, countsResp] = await Promise.all([
+          apiFetch<ContactsResponse>(ctx, `/v1/contacts?${qs.toString()}`, {
+            signal,
+          }),
+          apiFetch<StatusCountsResponse>(
+            ctx,
+            `/v1/contacts/status_counts?party_kind=${partyKind}`,
+            { signal },
+          ),
+        ]);
+        if (signal?.aborted) return;
+        if (listResp) {
+          setItems(listResp.items);
+          setTotal(listResp.total);
+        }
+        if (countsResp) {
+          setCounts(countsResp.counts);
+          setCountsTotal(countsResp.total);
+        }
+      } catch (e) {
+        // A fresh query aborts the prior request; don't surface that as
+        // an error or let it overwrite the newer results.
+        if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+          return;
+        }
+        setErr(
+          e instanceof ApiError
             ? e.message
-            : "Failed to load",
-      );
-    } finally {
-      setLoading(false);
+            : e instanceof Error
+              ? e.message
+              : "Failed to load",
+        );
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [ctx, partyKind, selectedKey, statusParam, debouncedQ], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // Debounce the raw search input into the value that drives fetches.
+  // ``searchDebounceMs=0`` skips the timer entirely — used by unit tests
+  // so there's no pending setTimeout to keep the worker alive (see #106).
+  useEffect(() => {
+    if (searchDebounceMs === 0) {
+      setDebouncedQ(q.trim());
+      return;
     }
-  }, [ctx, partyKind, selectedKey, statusParam]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = window.setTimeout(() => setDebouncedQ(q.trim()), searchDebounceMs);
+    return () => window.clearTimeout(t);
+  }, [q, searchDebounceMs]);
 
   useEffect(() => {
-    void fetchData();
+    const ctrl = new AbortController();
+    void fetchData(ctrl.signal);
+    return () => ctrl.abort();
   }, [fetchData]);
 
   const statusField =
@@ -163,6 +203,21 @@ export function PipelineView({
           </button>
         </div>
       </header>
+
+      <label className="block">
+        <span className="text-sm font-medium text-slate-700">
+          Search by name or email
+        </span>
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or email…"
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
 
       <StatusFilter
         statuses={statuses}

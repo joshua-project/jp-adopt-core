@@ -140,6 +140,27 @@ export function humanizeEnrollReason(value: string): string {
   return ENROLL_REASON_LABELS[value] ?? humanize(value);
 }
 
+/**
+ * Labels for the "Remove contact" affordance (Amy contact-management).
+ * Spam → permanent hard-delete; hostile → mark do_not_engage. Kept here so
+ * the destructive copy stays out of the component and reads consistently.
+ */
+const REMOVE_CONTACT_LABELS = {
+  trigger: "Remove contact",
+  spam: "Spam — delete permanently",
+  hostile: "Hostile — do not engage",
+  spamConfirm:
+    "Permanently delete this contact? This removes all of their data and cannot be undone.",
+  hostileConfirm:
+    "Mark this contact as do-not-engage? They will be kept but flagged and excluded from outreach.",
+} as const;
+
+export function removeContactLabel(
+  key: keyof typeof REMOVE_CONTACT_LABELS,
+): string {
+  return REMOVE_CONTACT_LABELS[key];
+}
+
 export function humanize(s: string): string {
   return s
     .replace(/_/g, " ")

@@ -349,6 +349,15 @@ export async function runMatch(
   );
 }
 
+export async function deleteContact(
+  ctx: ApiClientContext,
+  contactId: string,
+): Promise<void> {
+  await apiFetch<void>(ctx, `/v1/contacts/${contactId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function transitionContact(
   ctx: ApiClientContext,
   contactId: string,

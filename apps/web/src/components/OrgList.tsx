@@ -101,6 +101,7 @@ export function OrgList() {
               const meta = [
                 o.country_code ? `Country: ${o.country_code}` : null,
                 `Capacity: ${o.capacity_committed}/${o.capacity_total}`,
+                `Coverage: ${o.coverage_count}`,
                 o.is_triage_org ? "Triage" : null,
                 o.accepting_potential_adopters ? "Accepting potential" : null,
               ].filter(Boolean);
