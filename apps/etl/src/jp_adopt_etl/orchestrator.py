@@ -45,6 +45,7 @@ from jp_adopt_api.models import (
     Contact,
     ContactAssignment,
     ContactProfile,
+    DeletedContact,
     EtlDeletedInSource,
     EtlRun,
     Fpg,
@@ -373,6 +374,32 @@ def _load_email_owners(
     return {r.email_normalized: (r.source_system, r.source_id) for r in rows}
 
 
+def _load_suppressed_contacts(
+    pg_session: Session,
+) -> tuple[set[tuple[str | None, str | None]], set[str]]:
+    """Pre-load the ``deleted_contacts`` suppression set for one ETL run.
+
+    Returns ``(suppressed_keys, suppressed_emails)`` where ``suppressed_keys``
+    is the set of ``(source_system, source_id)`` tuples and
+    ``suppressed_emails`` is the set of ``email_normalized`` values. A DT post
+    matching either is skipped at import so a core-side hard-delete (U5) is not
+    silently re-imported while DT still syncs."""
+    rows = pg_session.execute(
+        select(
+            DeletedContact.source_system,
+            DeletedContact.source_id,
+            DeletedContact.email_normalized,
+        )
+    ).all()
+    suppressed_keys = {
+        (r.source_system, r.source_id) for r in rows if r.source_id is not None
+    }
+    suppressed_emails = {
+        r.email_normalized for r in rows if r.email_normalized is not None
+    }
+    return suppressed_keys, suppressed_emails
+
+
 def import_contacts(
     *,
     mysql_conn: Connection,
@@ -392,18 +419,36 @@ def import_contacts(
         "rows_out_updated": 0,
         "rows_out_skipped": 0,
         "rows_in_conflict": 0,
+        "rows_suppressed": 0,
     }
     email_owner = _load_email_owners(pg_session)
+    suppressed_keys, suppressed_emails = _load_suppressed_contacts(pg_session)
     batch: list[dict[str, Any]] = []
     for post in iter_contacts(mysql_conn, watermark=watermark, batch_size=batch_size):
         batch.append(post)
         if len(batch) >= batch_size:
             _flush_contact_batch(
-                mysql_conn, pg_session, batch, mode, counts, email_owner
+                mysql_conn,
+                pg_session,
+                batch,
+                mode,
+                counts,
+                email_owner,
+                suppressed_keys,
+                suppressed_emails,
             )
             batch.clear()
     if batch:
-        _flush_contact_batch(mysql_conn, pg_session, batch, mode, counts, email_owner)
+        _flush_contact_batch(
+            mysql_conn,
+            pg_session,
+            batch,
+            mode,
+            counts,
+            email_owner,
+            suppressed_keys,
+            suppressed_emails,
+        )
     return counts
 
 
@@ -414,6 +459,8 @@ def _flush_contact_batch(
     mode: Mode,
     counts: dict[str, int],
     email_owner: dict[str, tuple[str | None, str | None]],
+    suppressed_keys: set[tuple[str | None, str | None]],
+    suppressed_emails: set[str],
 ) -> None:
     batch_list = list(batch)
     post_ids = [row["ID"] for row in batch_list]
@@ -422,6 +469,16 @@ def _flush_contact_batch(
         counts["rows_in"] += 1
         source_id = str(post_row["ID"])
         meta_rows = meta_by_post.get(post_row["ID"], [])
+        # Suppression skip (U6) — by (source_system, source_id). A contact
+        # hard-deleted core-side (U5) records a deleted_contacts row; skip it
+        # entirely (create no Contact, record no conflict) so an hourly DT
+        # re-import never resurrects it. This runs BEFORE map_contact so a
+        # suppressed row with an unmappable status never records a conflict.
+        # Mirrors the _SERVICE_ASSIGNEE_WP_USER_IDS skip: bump a counter and
+        # continue.
+        if ("dt", source_id) in suppressed_keys:
+            counts["rows_suppressed"] += 1
+            continue
         try:
             kwargs = map_contact(post_row=post_row, meta_rows=meta_rows, mode=mode)
         except UnmappedStatusError as e:
@@ -438,10 +495,16 @@ def _flush_contact_batch(
                 raise
             counts["rows_out_skipped"] += 1
             continue
+        email = kwargs.get("email_normalized")
+        # Email-fallback suppression (forms contacts with no source_id record
+        # a deleted_contacts row keyed only on email_normalized). This needs
+        # the mapped email, so it runs after map_contact.
+        if email is not None and email in suppressed_emails:
+            counts["rows_suppressed"] += 1
+            continue
         # Honor the partial unique index on email_normalized. DT permits the
         # same email on multiple contacts; the new system does not. Keep the
         # contact but drop the colliding email and flag it for review.
-        email = kwargs.get("email_normalized")
         if email:
             owner = email_owner.get(email)
             if owner is not None and owner != ("dt", source_id):
