@@ -16,7 +16,6 @@
     "@azure/msal-react": "^5.3.2",
     "@jp-adopt/contracts": "workspace:*",
     "@tiptap/core": "^3",
-    "@tiptap/extension-link": "^3",
     "@tiptap/pm": "^3",
     "@tiptap/react": "^3",
     "@tiptap/starter-kit": "^3",

@@ -2,7 +2,6 @@
 
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Link from "@tiptap/extension-link";
 
 import {
   MergeToken,
@@ -63,13 +62,15 @@ export function RichTextEditor({
     extensions: [
       StarterKit.configure({
         // Trim to the supported surface — no images, code blocks, quotes, etc.
+        // Link ships inside StarterKit v3; configure it here (adding the
+        // separate @tiptap/extension-link would duplicate the extension).
         heading: { levels: [1, 2, 3] },
         codeBlock: false,
         blockquote: false,
         horizontalRule: false,
         strike: false,
+        link: { openOnClick: false, autolink: true },
       }),
-      Link.configure({ openOnClick: false, autolink: true }),
       MergeToken,
     ],
     content: placeholdersToTokens(value, tokens),
