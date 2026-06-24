@@ -1070,6 +1070,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/drips/merge-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Merge Tokens
+         * @description The personalization tokens the body editor may insert. Single source of
+         *     truth (``domain.drips.MERGE_TOKENS``) shared with the render context so the
+         *     picker can only emit tokens the renderer knows about.
+         */
+        get: operations["list_merge_tokens_v1_drips_merge_tokens_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Test Step
+         * @description Render a step against sample context and send it to the caller (or an
+         *     explicit ``to_email``) for a confidence check before activating. Reuses the
+         *     worker ACS sender; not a contact state change, so no enrollment/outbox.
+         */
+        post: operations["send_test_step_v1_drips_campaigns__campaign_id__steps__position__send_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns/{campaign_id}/enroll": {
         parameters: {
             query?: never;
@@ -1267,7 +1311,9 @@ export interface components {
              */
             delay_days: number;
             /** Mjml Template Name */
-            mjml_template_name: string;
+            mjml_template_name?: string | null;
+            /** Body Html */
+            body_html?: string | null;
             /** Subject */
             subject: string;
             /**
@@ -1298,6 +1344,8 @@ export interface components {
             delay_days?: number | null;
             /** Mjml Template Name */
             mjml_template_name?: string | null;
+            /** Body Html */
+            body_html?: string | null;
             /** Subject */
             subject?: string | null;
             /** Send At Hour */
@@ -1322,7 +1370,9 @@ export interface components {
             /** Delay Days */
             delay_days: number;
             /** Mjml Template Name */
-            mjml_template_name: string;
+            mjml_template_name: string | null;
+            /** Body Html */
+            body_html: string | null;
             /** Subject */
             subject: string;
             /** Send At Hour */
@@ -2397,6 +2447,21 @@ export interface components {
             /** Candidates */
             candidates?: components["schemas"]["MatchCandidate"][];
         };
+        /**
+         * MergeToken
+         * @description A personalization token the editor can insert as an atomic chip.
+         */
+        MergeToken: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+        };
+        /** MergeTokenListResponse */
+        MergeTokenListResponse: {
+            /** Items */
+            items: components["schemas"]["MergeToken"][];
+        };
         /** MigrationConflictListResponse */
         MigrationConflictListResponse: {
             /** Items */
@@ -2525,6 +2590,16 @@ export interface components {
             /** Theological */
             theological?: number | null;
         };
+        /** SendTestRequest */
+        SendTestRequest: {
+            /** To Email */
+            to_email?: string | null;
+        };
+        /** SendTestResponse */
+        SendTestResponse: {
+            /** To Email */
+            to_email: string;
+        };
         /**
          * StepPreviewResponse
          * @description Rendered preview of a campaign step with sample context.
@@ -2542,7 +2617,7 @@ export interface components {
             /** Position */
             position: number;
             /** Mjml Template Name */
-            mjml_template_name: string;
+            mjml_template_name: string | null;
             /** Subject */
             subject: string;
             /** Html */
@@ -4967,6 +5042,89 @@ export interface operations {
                 };
             };
             /** @description Campaign, step at position, or template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_merge_tokens_v1_drips_merge_tokens_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeTokenListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_test_step_v1_drips_campaigns__campaign_id__steps__position__send_test_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                campaign_id: string;
+                position: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SendTestResponse"];
+                };
+            };
+            /** @description No recipient email could be determined */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Campaign, step, or template not found */
             404: {
                 headers: {
                     [name: string]: unknown;
