@@ -532,6 +532,39 @@ export async function previewCampaignStep(
   );
 }
 
+type SendTestRequestBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["requestBody"]["content"]["application/json"];
+type SendTestResponseBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["responses"]["202"]["content"]["application/json"];
+
+export async function sendTestStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+  body: SendTestRequestBody = {},
+): Promise<SendTestResponseBody> {
+  return _assertPresent(
+    await apiFetch<SendTestResponseBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps/${position}/send-test`,
+      { method: "POST", body },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps/${position}/send-test`,
+  );
+}
+
+type MergeTokenListBody =
+  paths["/v1/drips/merge-tokens"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function listMergeTokens(
+  ctx: ApiClientContext,
+): Promise<MergeTokenListBody> {
+  return _assertPresent(
+    await apiFetch<MergeTokenListBody>(ctx, "/v1/drips/merge-tokens"),
+    "/v1/drips/merge-tokens",
+  );
+}
+
 export async function archiveCampaign(
   ctx: ApiClientContext,
   campaignId: string,
