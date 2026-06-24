@@ -6,7 +6,7 @@
     {{ recipient_kind }}   — all_staff | adoption_manager | facilitator
     {{ match_count }}      — count of matches in this digest
     {{ matches }}          — list of dicts with contact_display_name,
-                              rop3, facilitator_name, status,
+                              people_id3, facilitator_name, status,
                               recommended_at (ISO 8601)
 #}
 {% extends "_base.html.jinja" %}
@@ -34,7 +34,7 @@
       {% for m in matches %}
       <tr style="border-top:1px solid #e5e7eb">
         <td style="padding:8px;color:#1f2937">{{ m.contact_display_name }}</td>
-        <td style="padding:8px;color:#1f2937">{{ m.rop3 }}</td>
+        <td style="padding:8px;color:#1f2937">{{ m.people_id3 }}</td>
         <td style="padding:8px;color:#1f2937">{{ m.facilitator_name }}</td>
         <td style="padding:8px;color:#1f2937">{{ m.status }}</td>
       </tr>

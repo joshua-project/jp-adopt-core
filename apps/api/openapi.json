@@ -4243,6 +4243,144 @@
         }
       }
     },
+    "/v1/drips/merge-tokens": {
+      "get": {
+        "tags": [
+          "drips"
+        ],
+        "summary": "List Merge Tokens",
+        "description": "The personalization tokens the body editor may insert. Single source of\ntruth (``domain.drips.MERGE_TOKENS``) shared with the render context so the\npicker can only emit tokens the renderer knows about.",
+        "operationId": "list_merge_tokens_v1_drips_merge_tokens_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeTokenListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test": {
+      "post": {
+        "tags": [
+          "drips"
+        ],
+        "summary": "Send Test Step",
+        "description": "Render a step against sample context and send it to the caller (or an\nexplicit ``to_email``) for a confidence check before activating. Sends\nSYNCHRONOUSLY so a failure surfaces (the whole point of a test) rather than\nbeing swallowed in the background. Reuses the worker ACS sender; not a\ncontact state change, so no enrollment/outbox.",
+        "operationId": "send_test_step_v1_drips_campaigns__campaign_id__steps__position__send_test_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "position",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Position"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendTestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No recipient email could be determined"
+          },
+          "404": {
+            "description": "Campaign, step, or template not found"
+          },
+          "502": {
+            "description": "The email service rejected the send"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns/{campaign_id}/enroll": {
       "post": {
         "tags": [
@@ -4886,10 +5024,29 @@
             "default": 0
           },
           "mjml_template_name": {
-            "type": "string",
-            "maxLength": 512,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Mjml Template Name"
+          },
+          "body_html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Html"
           },
           "subject": {
             "type": "string",
@@ -4916,7 +5073,6 @@
         "type": "object",
         "required": [
           "position",
-          "mjml_template_name",
           "subject"
         ],
         "title": "CampaignStepIn"
@@ -4959,6 +5115,18 @@
               }
             ],
             "title": "Mjml Template Name"
+          },
+          "body_html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Html"
           },
           "subject": {
             "anyOf": [
@@ -5026,8 +5194,26 @@
             "title": "Delay Days"
           },
           "mjml_template_name": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Mjml Template Name"
+          },
+          "body_html": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Html"
           },
           "subject": {
             "type": "string",
@@ -5054,6 +5240,7 @@
           "position",
           "delay_days",
           "mjml_template_name",
+          "body_html",
           "subject",
           "send_at_hour",
           "send_at_minute",
@@ -8321,6 +8508,41 @@
         "title": "MatchSummary",
         "description": "One open Match row in the queue, with embedded alternatives."
       },
+      "MergeToken": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label"
+        ],
+        "title": "MergeToken",
+        "description": "A personalization token the editor can insert as an atomic chip."
+      },
+      "MergeTokenListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MergeToken"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "MergeTokenListResponse"
+      },
       "MigrationConflictListResponse": {
         "properties": {
           "items": {
@@ -8638,6 +8860,43 @@
         "type": "object",
         "title": "ScoreBreakdown"
       },
+      "SendTestRequest": {
+        "properties": {
+          "to_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SendTestRequest"
+      },
+      "SendTestResponse": {
+        "properties": {
+          "to_email": {
+            "type": "string",
+            "title": "To Email"
+          },
+          "delivered": {
+            "type": "boolean",
+            "title": "Delivered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_email",
+          "delivered"
+        ],
+        "title": "SendTestResponse"
+      },
       "StepPreviewResponse": {
         "properties": {
           "campaign_id": {
@@ -8650,7 +8909,14 @@
             "title": "Position"
           },
           "mjml_template_name": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Mjml Template Name"
           },
           "subject": {

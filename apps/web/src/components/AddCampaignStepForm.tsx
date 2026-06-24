@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 
 import {
   addCampaignStep,
   formatApiError,
-  listDripTemplates,
+  listMergeTokens,
 } from "../lib/api-client";
 import { BTN_PRIMARY, BTN_SECONDARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
+import type { MergeTokenDef } from "./editor/MergeToken";
+
+const RichTextEditor = dynamic(
+  () => import("./editor/RichTextEditor").then((m) => m.RichTextEditor),
+  { ssr: false },
+);
 
 export function AddCampaignStepForm({
   campaignId,
@@ -21,12 +28,11 @@ export function AddCampaignStepForm({
 }) {
   const ctx = useApiContext();
   const [open, setOpen] = useState(false);
-  const [templates, setTemplates] = useState<string[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [templatesErr, setTemplatesErr] = useState<string | null>(null);
+  // null = tokens not loaded yet; the editor must mount with tokens present.
+  const [tokens, setTokens] = useState<MergeTokenDef[] | null>(null);
   const [position, setPosition] = useState(suggestedPosition);
   const [delayDays, setDelayDays] = useState(0);
-  const [template, setTemplate] = useState("");
+  const [bodyHtml, setBodyHtml] = useState("");
   const [subject, setSubject] = useState("");
   const [sendAtHour, setSendAtHour] = useState(9);
   const [sendAtMinute, setSendAtMinute] = useState(0);
@@ -39,25 +45,20 @@ export function AddCampaignStepForm({
 
   useEffect(() => {
     if (!open) return;
-    setTemplatesLoading(true);
-    setTemplatesErr(null);
-    listDripTemplates(ctx)
-      .then((res) => {
-        const names = res.items.map((t) => t.name);
-        setTemplates(names);
-        if (names.length > 0 && !template) setTemplate(names[0]);
-      })
-      .catch((e) => setTemplatesErr(formatApiError(e)))
-      .finally(() => setTemplatesLoading(false));
-    // We intentionally re-fetch on open only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let ignore = false;
+    listMergeTokens(ctx)
+      .then((res) => !ignore && setTokens(res.items))
+      .catch(() => !ignore && setTokens([]));
+    return () => {
+      ignore = true;
+    };
   }, [open, ctx]);
 
   const reset = () => {
     setOpen(false);
     setPosition(suggestedPosition);
     setDelayDays(0);
-    setTemplate(templates[0] ?? "");
+    setBodyHtml("");
     setSubject("");
     setSendAtHour(9);
     setSendAtMinute(0);
@@ -66,12 +67,12 @@ export function AddCampaignStepForm({
 
   const onSubmit = () => {
     const trimmedSubject = subject.trim();
-    if (!template) {
-      setErr("Pick a template.");
-      return;
-    }
     if (!trimmedSubject) {
       setErr("Subject is required.");
+      return;
+    }
+    if (!bodyHtml.trim()) {
+      setErr("Body is required.");
       return;
     }
     setErr(null);
@@ -81,7 +82,7 @@ export function AddCampaignStepForm({
           await addCampaignStep(ctx, campaignId, {
             position,
             delay_days: delayDays,
-            mjml_template_name: template,
+            body_html: bodyHtml,
             subject: trimmedSubject,
             send_at_hour: sendAtHour,
             send_at_minute: sendAtMinute,
@@ -106,17 +107,6 @@ export function AddCampaignStepForm({
   return (
     <div className="space-y-3 rounded border border-slate-200 bg-slate-50/80 p-4">
       <h3 className="text-sm font-medium text-slate-800">Add step</h3>
-      {templatesErr ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-          {templatesErr}
-        </div>
-      ) : null}
-      {!templatesLoading && templates.length === 0 ? (
-        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          No MJML templates available — drop a file in{" "}
-          <code className="font-mono">apps/api/email-templates/</code>.
-        </div>
-      ) : null}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <label className="block text-xs text-slate-600">
           Position
@@ -168,27 +158,6 @@ export function AddCampaignStepForm({
         </label>
       </div>
       <label className="block text-xs text-slate-600">
-        Template
-        <select
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono"
-          value={template}
-          onChange={(e) => setTemplate(e.target.value)}
-          disabled={templatesLoading || templates.length === 0}
-        >
-          {templatesLoading ? (
-            <option value="">Loading…</option>
-          ) : templates.length === 0 ? (
-            <option value="">No templates</option>
-          ) : (
-            templates.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))
-          )}
-        </select>
-      </label>
-      <label className="block text-xs text-slate-600">
         Subject
         <input
           className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
@@ -198,6 +167,20 @@ export function AddCampaignStepForm({
           placeholder="Welcome to the cohort"
         />
       </label>
+      <div className="block text-xs text-slate-600">
+        Body
+        <div className="mt-1">
+          {tokens !== null ? (
+            <RichTextEditor
+              value={bodyHtml}
+              onChange={setBodyHtml}
+              tokens={tokens}
+            />
+          ) : (
+            <div className="min-h-[10rem] rounded border border-slate-300 bg-slate-50" />
+          )}
+        </div>
+      </div>
       {err ? (
         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
           {err}
@@ -215,7 +198,7 @@ export function AddCampaignStepForm({
         <button
           type="button"
           className={BTN_PRIMARY}
-          disabled={busy || !template || !subject.trim()}
+          disabled={busy || !subject.trim() || !bodyHtml.trim()}
           onClick={onSubmit}
         >
           {busy ? "Adding…" : "Add step"}

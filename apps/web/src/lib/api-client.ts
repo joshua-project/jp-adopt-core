@@ -441,8 +441,6 @@ type CampaignStepCreateBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["requestBody"]["content"]["application/json"];
 type CampaignStepReadBody =
   paths["/v1/drips/campaigns/{campaign_id}/steps"]["post"]["responses"]["201"]["content"]["application/json"];
-type TemplateListResponseBody =
-  paths["/v1/drips/templates"]["get"]["responses"]["200"]["content"]["application/json"];
 
 export async function getCampaign(
   ctx: ApiClientContext,
@@ -532,6 +530,39 @@ export async function previewCampaignStep(
   );
 }
 
+type SendTestRequestBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["requestBody"]["content"]["application/json"];
+type SendTestResponseBody =
+  paths["/v1/drips/campaigns/{campaign_id}/steps/{position}/send-test"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export async function sendTestStep(
+  ctx: ApiClientContext,
+  campaignId: string,
+  position: number,
+  body: SendTestRequestBody = {},
+): Promise<SendTestResponseBody> {
+  return _assertPresent(
+    await apiFetch<SendTestResponseBody>(
+      ctx,
+      `/v1/drips/campaigns/${campaignId}/steps/${position}/send-test`,
+      { method: "POST", body },
+    ),
+    `/v1/drips/campaigns/${campaignId}/steps/${position}/send-test`,
+  );
+}
+
+type MergeTokenListBody =
+  paths["/v1/drips/merge-tokens"]["get"]["responses"]["200"]["content"]["application/json"];
+
+export async function listMergeTokens(
+  ctx: ApiClientContext,
+): Promise<MergeTokenListBody> {
+  return _assertPresent(
+    await apiFetch<MergeTokenListBody>(ctx, "/v1/drips/merge-tokens"),
+    "/v1/drips/merge-tokens",
+  );
+}
+
 export async function archiveCampaign(
   ctx: ApiClientContext,
   campaignId: string,
@@ -539,15 +570,6 @@ export async function archiveCampaign(
   await apiFetch<void>(ctx, `/v1/drips/campaigns/${campaignId}`, {
     method: "DELETE",
   });
-}
-
-export async function listDripTemplates(
-  ctx: ApiClientContext,
-): Promise<TemplateListResponseBody> {
-  return _assertPresent(
-    await apiFetch<TemplateListResponseBody>(ctx, "/v1/drips/templates"),
-    "/v1/drips/templates",
-  );
 }
 
 // ── Admin: Graph user lookup (#97) ───────────────────────────────────────

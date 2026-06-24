@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 
 import type { paths } from "@jp-adopt/contracts";
@@ -12,17 +13,25 @@ import {
   deleteCampaignStep,
   formatApiError,
   getCampaign,
-  listDripTemplates,
+  listMergeTokens,
   patchCampaign,
   patchCampaignStep,
   pauseCampaign,
   previewCampaignStep,
+  sendTestStep,
 } from "../lib/api-client";
 import { BTN_DANGER, BTN_PRIMARY, BTN_SECONDARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
 import { formatTimestamp } from "../lib/vocab";
 import { AddCampaignStepForm } from "./AddCampaignStepForm";
+import type { MergeTokenDef } from "./editor/MergeToken";
 import { StatusBadge } from "./StatusBadge";
+
+// Tiptap is client-only; load it without SSR to avoid hydration mismatch.
+const RichTextEditor = dynamic(
+  () => import("./editor/RichTextEditor").then((m) => m.RichTextEditor),
+  { ssr: false },
+);
 
 type CampaignRead =
   paths["/v1/drips/campaigns/{campaign_id}"]["get"]["responses"]["200"]["content"]["application/json"];
@@ -265,7 +274,9 @@ function StepRow({
           <span className="font-medium text-slate-900">{step.subject}</span>
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
-          <span className="font-mono">{step.mjml_template_name}</span>
+          <span className="font-mono">
+            {step.body_html ? "custom body" : step.mjml_template_name}
+          </span>
           <span>delay {step.delay_days}d</span>
           <span>
             send at {pad2(step.send_at_hour)}:{pad2(step.send_at_minute)}
@@ -316,17 +327,26 @@ function StepEditForm({
   const ctx = useApiContext();
   const [subject, setSubject] = useState(step.subject);
   const [delayDays, setDelayDays] = useState(step.delay_days);
-  const [template, setTemplate] = useState(step.mjml_template_name);
+  const [bodyHtml, setBodyHtml] = useState(step.body_html ?? "");
   const [sendAtHour, setSendAtHour] = useState(step.send_at_hour);
   const [sendAtMinute, setSendAtMinute] = useState(step.send_at_minute);
-  const [templates, setTemplates] = useState<string[]>([]);
+  // null = not loaded yet. The editor must mount with tokens already present,
+  // or stored {{ token }} placeholders render as literal text instead of chips
+  // (placeholdersToTokens with an empty token list is a no-op).
+  const [tokens, setTokens] = useState<MergeTokenDef[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
   const [busy, startSave] = useTransition();
+  const [testing, startTest] = useTransition();
 
   useEffect(() => {
-    listDripTemplates(ctx)
-      .then((res) => setTemplates(res.items.map((t) => t.name)))
-      .catch(() => setTemplates([]));
+    let ignore = false;
+    listMergeTokens(ctx)
+      .then((res) => !ignore && setTokens(res.items))
+      .catch(() => !ignore && setTokens([]));
+    return () => {
+      ignore = true;
+    };
   }, [ctx]);
 
   const onSave = () => {
@@ -335,8 +355,8 @@ function StepEditForm({
       setErr("Subject is required.");
       return;
     }
-    if (!template) {
-      setErr("Pick a template.");
+    if (!bodyHtml.trim()) {
+      setErr("Body is required.");
       return;
     }
     setErr(null);
@@ -346,11 +366,30 @@ function StepEditForm({
           await patchCampaignStep(ctx, campaignId, step.position, {
             subject: trimmedSubject,
             delay_days: delayDays,
-            mjml_template_name: template,
+            body_html: bodyHtml,
             send_at_hour: sendAtHour,
             send_at_minute: sendAtMinute,
           });
           onSaved();
+        } catch (e) {
+          setErr(formatApiError(e));
+        }
+      })();
+    });
+  };
+
+  const onSendTest = () => {
+    setErr(null);
+    setTestMsg(null);
+    startTest(() => {
+      void (async () => {
+        try {
+          const res = await sendTestStep(ctx, campaignId, step.position, {});
+          setTestMsg(
+            res.delivered
+              ? `Test sent to ${res.to_email}.`
+              : `Rendered for ${res.to_email}, but no email service is configured here — nothing was delivered.`,
+          );
         } catch (e) {
           setErr(formatApiError(e));
         }
@@ -414,31 +453,39 @@ function StepEditForm({
           />
         </label>
       </div>
-      <label className="block text-xs text-slate-600">
-        Template
-        <select
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono"
-          value={template}
-          onChange={(e) => setTemplate(e.target.value)}
-        >
-          {/* Always include the current template so we don't silently
-              drop it if it's missing from the filesystem listing. */}
-          {!templates.includes(template) ? (
-            <option value={template}>{template} (current)</option>
-          ) : null}
-          {templates.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="block text-xs text-slate-600">
+        Body
+        <div className="mt-1">
+          {tokens !== null ? (
+            <RichTextEditor
+              value={bodyHtml}
+              onChange={setBodyHtml}
+              tokens={tokens}
+            />
+          ) : (
+            <div className="min-h-[10rem] rounded border border-slate-300 bg-slate-50" />
+          )}
+        </div>
+      </div>
       {err ? (
         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
           {err}
         </div>
       ) : null}
+      {testMsg ? (
+        <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          {testMsg}
+        </div>
+      ) : null}
       <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          className={BTN_SECONDARY}
+          disabled={busy || testing}
+          onClick={onSendTest}
+        >
+          {testing ? "Sending…" : "Send test to me"}
+        </button>
         <button
           type="button"
           className={BTN_SECONDARY}
@@ -450,7 +497,7 @@ function StepEditForm({
         <button
           type="button"
           className={BTN_PRIMARY}
-          disabled={busy || !subject.trim() || !template}
+          disabled={busy || !subject.trim() || !bodyHtml.trim()}
           onClick={onSave}
         >
           {busy ? "Saving…" : "Save"}
@@ -487,7 +534,9 @@ function PreviewModal({
             </h3>
             {preview ? (
               <p className="mt-0.5 truncate text-xs text-slate-500">
-                <span className="font-mono">{preview.mjml_template_name}</span>
+                <span className="font-mono">
+                  {preview.mjml_template_name ?? "custom body"}
+                </span>
                 {" · "}
                 Sample contact:{" "}
                 <span className="font-medium">

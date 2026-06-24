@@ -1276,7 +1276,9 @@ class Campaign(Base):
 
 class CampaignStep(Base):
     """U10: one ordered step in a campaign. ``mjml_template_name`` is a
-    filename in ``apps/api/email-templates/``, not inline content."""
+    filename in ``apps/api/email-templates/``, used as a fallback when
+    ``body_html`` is null. ``body_html`` holds in-app-authored rich-text body
+    content, rendered into the branded shell at send time."""
 
     __tablename__ = "campaign_step"
     __table_args__ = (
@@ -1314,7 +1316,8 @@ class CampaignStep(Base):
     delay_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0"), default=0
     )
-    mjml_template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    mjml_template_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     send_at_hour: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("9"), default=9

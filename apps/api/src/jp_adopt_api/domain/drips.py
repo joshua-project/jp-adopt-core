@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -450,29 +451,199 @@ async def advance_enrollment(
 # ──────────────────────────────────────────────────────────────────────────
 
 
+# Name of the branded shell every step body is rendered into. Code-managed
+# (logo / footer / unsubscribe); never editable from the in-app editor.
+BASE_SHELL_TEMPLATE = "_base.html.jinja"
+
+
+# Merge tokens an authored step body may reference. The in-app editor inserts
+# these as atomic chips that serialize to literal ``{{ name }}``; the keys here
+# are the single source of truth shared by the editor (via the API) and the
+# render context (``build_step_context``). Adding a token means adding its key
+# here AND to ``build_step_context``.
+MERGE_TOKENS: tuple[tuple[str, str], ...] = (
+    ("contact_display_name", "Recipient name"),
+)
+
+
+# Tags/attributes the authored body may keep. Matches the editor's toolbar
+# exactly (headings, bold/italic, links, lists). Everything else is stripped.
+_ALLOWED_TAGS = {
+    "h1",
+    "h2",
+    "h3",
+    "p",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "br",
+}
+
+
+def sanitize_body_html(raw: str) -> str:
+    """Sanitize in-app-authored body HTML against a tight allowlist. Applied on
+    SAVE (the DB is the trust boundary; render treats the body as trusted).
+
+    ``{{ token }}`` placeholders are plain text, not markup, so nh3 leaves them
+    untouched. Token substitution at render time is a plain text replace (see
+    ``substitute_body_tokens``), so the body is never compiled as a template.
+
+    Fails CLOSED: nh3 is a hard dependency, so an ImportError means the build is
+    broken — we raise rather than silently persisting unsanitized HTML.
+    """
+    import nh3
+
+    return nh3.clean(
+        raw,
+        tags=_ALLOWED_TAGS,
+        attributes={"a": {"href", "title"}},
+        url_schemes={"http", "https", "mailto"},
+        link_rel="noopener noreferrer",
+        # Drop the *content* of disallowed script/style, not just the tags.
+        clean_content_tags={"script", "style"},
+    )
+
+
+def build_step_context(
+    *,
+    contact_display_name: str,
+    contact_email: str,
+    campaign_name: str,
+    step_position: int,
+) -> dict[str, Any]:
+    """Single source of truth for the merge fields available to a step body.
+    Used by the worker send path, the preview endpoint, and test-send so all
+    three render with identical keys (a missing key under StrictUndefined would
+    render fine in one path and raise in another)."""
+    return {
+        "contact_display_name": contact_display_name,
+        "contact_email": contact_email,
+        "campaign_name": campaign_name,
+        "step_position": step_position,
+    }
+
+
+def _html_to_plain(html: str) -> str:
+    """Derive a text/plain alternative from rendered HTML. Prefers html2text
+    (keeps link URLs and list structure); falls back to a tag-strip regex if
+    the library is unavailable so the worker never crashes."""
+    try:
+        import html2text
+
+        h = html2text.HTML2Text()
+        h.body_width = 0  # no hard wrapping
+        h.ignore_emphasis = True  # avoid *bold* / _italic_ markdown artifacts
+        h.ignore_images = True
+        return h.handle(html).strip()
+    except Exception:  # pragma: no cover - html2text optional
+        plain = re.sub(r"<[^>]+>", "", html)
+        return re.sub(r"\n\s*\n", "\n\n", plain).strip()
+
+
+_MERGE_TOKEN_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+
+
+def substitute_body_tokens(body_html: str, context: dict[str, Any]) -> str:
+    """Substitute ``{{ token }}`` placeholders in an authored body with their
+    HTML-escaped context values. Unknown tokens (not in ``context``) are left as
+    literal text.
+
+    Critically, this is a plain text substitution — the body is NEVER compiled
+    as a Jinja template. In-app-authored bodies are attacker-influenced (staff
+    can type anything, and nh3 sanitization does not strip ``{{ }}`` / ``{% %}``
+    text), so feeding them to ``Environment.from_string`` would be a
+    server-side-template-injection / RCE sink. Substituting only known tokens as
+    escaped values keeps personalization working with no template evaluation.
+    """
+    from markupsafe import escape as _escape
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in context:
+            return str(_escape(str(context[name])))
+        return match.group(0)  # unknown token → inert literal text
+
+    return _MERGE_TOKEN_RE.sub(_replace, body_html)
+
+
+# Brand styles applied at render time to authored-body tags that lack their own
+# inline style. Keeps editor-authored bodies (Tiptap emits bare tags) visually
+# consistent with the seeded copy, and keeps a seeded step looking the same after
+# its first edit strips the file's inline styles. Email clients ignore <style>
+# blocks, so the styling must be inline. Colors match the _base shell + the
+# original template copy (#2C474B headings, #374151 body, #eb5f1e accent links).
+_BODY_TAG_STYLES: dict[str, str] = {
+    "h1": "margin:0 0 16px;color:#2C474B;font-size:22px",
+    "h2": "margin:0 0 16px;color:#2C474B;font-size:18px",
+    "h3": "margin:0 0 12px;color:#2C474B;font-size:16px",
+    "p": "margin:0 0 16px;color:#374151",
+    "a": "color:#eb5f1e",
+    "ul": "margin:0 0 16px;color:#374151;padding-left:24px",
+    "ol": "margin:0 0 16px;color:#374151;padding-left:24px",
+    "li": "margin:0 0 8px;color:#374151",
+}
+
+_BODY_TAG_RE = re.compile(
+    r"<(" + "|".join(_BODY_TAG_STYLES) + r")(\s[^>]*)?>",
+    re.IGNORECASE,
+)
+
+
+def apply_body_styles(html: str) -> str:
+    """Inject brand inline styles into body tags that don't already carry a
+    ``style=`` attribute. Tags with an author/seed style are left untouched."""
+
+    def _style(match: re.Match[str]) -> str:
+        tag = match.group(1).lower()
+        attrs = match.group(2) or ""
+        if "style=" in attrs.lower():
+            return match.group(0)
+        return f'<{match.group(1)}{attrs} style="{_BODY_TAG_STYLES[tag]}">'
+
+    return _BODY_TAG_RE.sub(_style, html)
+
+
 def render_step_html(
     *,
-    template_name: str,
+    template_name: str | None = None,
+    body_html: str | None = None,
     context: dict[str, Any],
     templates_dir: Path | None = None,
 ) -> tuple[str, str]:
-    """Render an email step. Returns ``(html, plain_text)``. The MJML
-    template file is interpreted as Jinja2 (we use Jinja2 substitution
-    inside the MJML source; the MJML → HTML conversion is deferred to
-    v2 — for now we treat the file as already-rendered HTML with Jinja2
-    placeholders).
+    """Render an email step. Returns ``(html, plain_text)``.
 
-    Plain-text fallback is derived by stripping HTML tags via a tiny
-    regex; senders should still author both forms in v2.
+    Content comes from one of two sources, ``body_html`` preferred:
+
+    * ``body_html`` — in-app-authored rich-text body (sanitized on save). Its
+      ``{{ token }}`` placeholders are substituted as escaped values (NOT
+      compiled as a template — see ``substitute_body_tokens``), then the result
+      is injected as data into the branded shell. The editor never touches the
+      shell. This is the live path: edits reach the next send without versioning.
+    * ``template_name`` — a trusted, code-managed file in ``email-templates/``
+      (the legacy path, still used by the digest and any unmigrated step). These
+      ARE rendered as Jinja templates because they are code, not user input.
+
+    Plain-text is derived from the rendered HTML.
     """
+    if not body_html and not template_name:
+        raise ValueError("render_step_html requires body_html or template_name")
+
     base = templates_dir or EMAIL_TEMPLATES_DIR
-    path = base / template_name
-    if not path.is_file():
-        raise TemplateMissingError(
-            f"Template not found: {path} "
-            f"(searched {base}; ensure apps/api/email-templates/ ships "
-            f"with the API container)"
-        )
+
+    path = None
+    if not body_html:
+        path = base / template_name
+        if not path.is_file():
+            raise TemplateMissingError(
+                f"Template not found: {path} "
+                f"(searched {base}; ensure apps/api/email-templates/ ships "
+                f"with the API container)"
+            )
 
     # Auto-inject `current_year` for the branded footer (`_base.html.jinja`).
     # Callers shouldn't have to remember it; it never differs per send.
@@ -481,37 +652,54 @@ def render_step_html(
     full_context = {"current_year": _dt.datetime.now(_dt.UTC).year, **context}
 
     try:
-        from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-
-        # FileSystemLoader lets step templates do `{% extends "_base.html.jinja" %}`.
-        env = Environment(
-            loader=FileSystemLoader(str(base)),
-            undefined=StrictUndefined,
-            autoescape=select_autoescape(["html", "xml", "mjml"]),
+        from jinja2 import (
+            Environment,
+            FileSystemLoader,
+            StrictUndefined,
+            select_autoescape,
         )
-        html = env.get_template(template_name).render(**full_context)
-    except Exception as e:  # pragma: no cover - jinja optional
-        # Jinja2 should be available (it's a transitive dep of fastapi);
-        # if not, render the raw template with naive {{ key }} substitution
-        # so the worker doesn't crash on the dev box. This is a hard
-        # fallback — strict-undefined errors here become silent gaps, and
-        # `{% extends %}` won't resolve, so the branded chrome will be
-        # missing in this degraded path.
+    except ImportError as e:  # pragma: no cover - jinja2 is a fastapi transitive dep
+        # Hard fallback: jinja2 truly missing. Naive substitution so the worker
+        # doesn't crash — but `{% extends %}` won't resolve, so the branded
+        # chrome is lost. File templates lose StrictUndefined's loud failure too.
         logger.warning(
-            "drip.render.jinja2_unavailable using_naive_substitution err=%s",
-            e,
+            "drip.render.jinja2_unavailable using_naive_substitution err=%s", e
         )
-        html = path.read_text(encoding="utf-8")
-        for k, v in full_context.items():
-            html = html.replace("{{ " + k + " }}", str(v))
-            html = html.replace("{{" + k + "}}", str(v))
+        if body_html:
+            html = substitute_body_tokens(body_html, full_context)
+        else:
+            html = path.read_text(encoding="utf-8")
+            for k, v in full_context.items():
+                html = html.replace("{{ " + k + " }}", str(v))
+                html = html.replace("{{" + k + "}}", str(v))
+        return html, _html_to_plain(html)
 
-    # Plain text fallback: strip tags. Cheap and OK for v1.
-    import re
+    # FileSystemLoader lets templates resolve `{% extends "_base.html.jinja" %}`.
+    env = Environment(
+        loader=FileSystemLoader(str(base)),
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(["html", "xml", "mjml"]),
+    )
+    if body_html:
+        # Substitute tokens first (escaped values, no template eval), then inject
+        # the result as DATA into a FIXED wrapper. The wrapper string is a
+        # constant — body_html never reaches the template compiler, so there is
+        # no SSTI surface. `| safe` keeps the already-sanitized body HTML intact;
+        # token values were HTML-escaped during substitution.
+        substituted = apply_body_styles(
+            substitute_body_tokens(body_html, full_context)
+        )
+        wrapper = (
+            "{% extends '" + BASE_SHELL_TEMPLATE + "' %}"
+            "{% block body %}{{ body_content | safe }}{% endblock %}"
+        )
+        html = env.from_string(wrapper).render(
+            body_content=substituted, **full_context
+        )
+    else:
+        html = env.get_template(template_name).render(**full_context)
 
-    plain = re.sub(r"<[^>]+>", "", html)
-    plain = re.sub(r"\n\s*\n", "\n\n", plain).strip()
-    return html, plain
+    return html, _html_to_plain(html)
 
 
 # ──────────────────────────────────────────────────────────────────────────

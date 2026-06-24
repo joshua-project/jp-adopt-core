@@ -35,6 +35,7 @@ from jp_adopt_api.domain.drips import (
     EXIT_REASON_TEMPLATE_MISSING,
     TemplateMissingError,
     advance_enrollment,
+    build_step_context,
     claim_due_steps,
     exit_enrollment,
     is_suppressed,
@@ -88,6 +89,33 @@ async def _send_via_acs(
         asyncio.to_thread(poller.result), timeout=30.0
     )
     return str(result)
+
+
+async def send_drip_test(
+    *,
+    to_email: str,
+    subject: str,
+    html: str,
+    plain: str,
+    acs_connection_string: str | None,
+    acs_sender_address: str,
+) -> str | None:
+    """One-shot test send of an already-rendered step, called synchronously from
+    the API (not the ARQ cron). Reuses the same ACS sender as the real drip path
+    so a passing test proves the live send path. No enrollment, no DB writes, no
+    outbox — a test send is not a contact state change.
+
+    Returns the ACS message id on a real send, or ``None`` when ACS isn't
+    configured (dev fallback — nothing was actually delivered). Raises on send
+    failure so the caller can surface it (the whole point of a test send)."""
+    return await _send_via_acs(
+        email=to_email,
+        subject=subject,
+        html=html,
+        plain=plain,
+        acs_connection_string=acs_connection_string,
+        acs_sender_address=acs_sender_address,
+    )
 
 
 def _is_within_send_window(
@@ -157,12 +185,13 @@ async def _process_due_steps(
         try:
             html, plain = render_step_html(
                 template_name=d.step.mjml_template_name,
-                context={
-                    "contact_display_name": d.contact.display_name,
-                    "contact_email": contact_email or "",
-                    "campaign_name": d.campaign.name,
-                    "step_position": d.step.position,
-                },
+                body_html=d.step.body_html,
+                context=build_step_context(
+                    contact_display_name=d.contact.display_name,
+                    contact_email=contact_email or "",
+                    campaign_name=d.campaign.name,
+                    step_position=d.step.position,
+                ),
             )
         except TemplateMissingError as e:
             log_enrollment_event(
@@ -178,6 +207,30 @@ async def _process_due_steps(
                 session,
                 d.enrollment,
                 reason=EXIT_REASON_TEMPLATE_MISSING,
+            )
+            counts["exited"] += 1
+            continue
+        except Exception as e:
+            # Isolate any other render failure (malformed authored body, a
+            # template that won't compile, etc.) to THIS enrollment. Without
+            # this, the exception would propagate out of the per-batch
+            # transaction, roll back every sibling's progress, fail the ARQ
+            # task, and re-claim the same poison step every tick forever —
+            # starving the whole campaign. Exit just this enrollment instead.
+            logger.warning(
+                "drip.render.failed enrollment=%s step=%s err=%s",
+                d.enrollment.id,
+                d.step.position,
+                e,
+            )
+            log_enrollment_event(
+                session,
+                d.enrollment.id,
+                event_type=EVENT_SEND_FAILED,
+                payload={"error": f"render_failed: {e}"},
+            )
+            await exit_enrollment(
+                session, d.enrollment, reason=EXIT_REASON_TEMPLATE_MISSING
             )
             counts["exited"] += 1
             continue
@@ -268,4 +321,5 @@ async def send_drip_step(ctx: dict[str, Any]) -> None:
 __all__ = [
     "DRIP_TICK_BATCH_SIZE",
     "send_drip_step",
+    "send_drip_test",
 ]

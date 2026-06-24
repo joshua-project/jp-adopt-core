@@ -9,13 +9,18 @@ Endpoints (staff-only):
   * ``POST   /v1/drips/campaigns/{id}/activate``  — flip status → active
   * ``POST   /v1/drips/campaigns/{id}/pause``     — flip status → paused
   * ``POST   /v1/drips/campaigns/{id}/steps``     — add a step
+  * ``PATCH  /v1/drips/campaigns/{id}/steps/{position}`` — edit a step
   * ``DELETE /v1/drips/campaigns/{id}/steps/{position}`` — remove a step
+  * ``POST   /v1/drips/campaigns/{id}/steps/{position}/preview`` — render preview
+  * ``POST   /v1/drips/campaigns/{id}/steps/{position}/send-test`` — test send
+  * ``GET    /v1/drips/merge-tokens``             — personalization tokens
   * ``POST   /v1/drips/campaigns/{id}/enroll``    — manual enroll a contact
 
-No preview / send-test endpoints in week-1 per the plan; authoring UI
-defers to v2. Activation does NOT auto-enroll existing contacts unless
-``auto_enroll_existing=true`` on the campaign — even then the bulk
-back-fill is a future endpoint, not this CRUD.
+Steps carry either in-app-authored ``body_html`` (rendered into the
+code-managed branded shell) or a legacy ``mjml_template_name`` file; body
+content is sanitized on save. Activation does NOT auto-enroll existing
+contacts unless ``auto_enroll_existing=true`` on the campaign — even then the
+bulk back-fill is a future endpoint, not this CRUD.
 """
 
 from __future__ import annotations
@@ -26,22 +31,28 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import delete, func, select
 
+from jp_adopt_api.auth import AuthUser
+from jp_adopt_api.config import get_settings
 from jp_adopt_api.deps import STAFF_ROLES, DbSession, require_role
 from jp_adopt_api.domain.drips import (
     EMAIL_TEMPLATES_DIR,
     EXIT_REASON_MANUAL,
+    MERGE_TOKENS,
     TemplateMissingError,
+    build_step_context,
     enroll_contact_in_campaign,
     render_step_html,
+    sanitize_body_html,
 )
 from jp_adopt_api.models import (
     Campaign,
     CampaignStep,
     Contact,
     Enrollment,
+    StaffProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,15 +69,33 @@ CampaignStatus = Literal["draft", "active", "paused", "archived"]
 CampaignTriggerType = Literal["event", "manual"]
 
 
+# Authored body content can be a few KB of HTML; cap it generously to bound
+# the sanitize cost and reject pathological payloads.
+_BODY_HTML_MAX = 50_000
+
+
 class CampaignStepIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     position: int = Field(ge=0)
     delay_days: int = Field(ge=0, default=0)
-    mjml_template_name: str = Field(min_length=1, max_length=512)
+    # A step carries EITHER inline body_html (in-app authored) OR a template
+    # filename (legacy). At least one is required (validated below).
+    mjml_template_name: str | None = Field(
+        default=None, min_length=1, max_length=512
+    )
+    body_html: str | None = Field(default=None, max_length=_BODY_HTML_MAX)
     subject: str = Field(min_length=1, max_length=512)
     send_at_hour: int = Field(ge=0, le=23, default=9)
     send_at_minute: int = Field(ge=0, le=59, default=0)
+
+    @model_validator(mode="after")
+    def _require_content_source(self) -> CampaignStepIn:
+        if not self.mjml_template_name and not self.body_html:
+            raise ValueError(
+                "a step requires either body_html or mjml_template_name"
+            )
+        return self
 
 
 class CampaignStepPatch(BaseModel):
@@ -86,6 +115,7 @@ class CampaignStepPatch(BaseModel):
     mjml_template_name: str | None = Field(
         default=None, min_length=1, max_length=512
     )
+    body_html: str | None = Field(default=None, max_length=_BODY_HTML_MAX)
     subject: str | None = Field(default=None, min_length=1, max_length=512)
     send_at_hour: int | None = Field(default=None, ge=0, le=23)
     send_at_minute: int | None = Field(default=None, ge=0, le=59)
@@ -98,7 +128,8 @@ class CampaignStepRead(BaseModel):
     campaign_id: uuid.UUID
     position: int
     delay_days: int
-    mjml_template_name: str
+    mjml_template_name: str | None
+    body_html: str | None
     subject: str
     send_at_hour: int
     send_at_minute: int
@@ -177,11 +208,38 @@ class StepPreviewResponse(BaseModel):
 
     campaign_id: uuid.UUID
     position: int
-    mjml_template_name: str
+    mjml_template_name: str | None
     subject: str
     html: str
     plain: str
     sample_context: dict[str, str]
+
+
+class MergeToken(BaseModel):
+    """A personalization token the editor can insert as an atomic chip."""
+
+    name: str  # the literal token, e.g. "contact_display_name"
+    label: str  # friendly label shown in the picker, e.g. "Recipient name"
+
+
+class MergeTokenListResponse(BaseModel):
+    items: list[MergeToken]
+
+
+class SendTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Optional override; defaults to the authenticated staff member's email.
+    # EmailStr rejects a malformed address with 422 synchronously rather than
+    # 202-then-silently-failing in the background send.
+    to_email: EmailStr | None = Field(default=None)
+
+
+class SendTestResponse(BaseModel):
+    to_email: str
+    # False when no email service is configured (dev) — the render succeeded but
+    # nothing was actually delivered, so the UI shouldn't imply a real send.
+    delivered: bool
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -226,9 +284,11 @@ async def _serialize_campaign(db, campaign: Campaign) -> CampaignRead:
 
 
 def _bump_version_if_published(campaign: Campaign) -> None:
-    """Editing an active or paused campaign bumps its version so existing
-    enrollments stay pinned to the version they started under. Draft
-    campaigns are still being authored; no need to bump."""
+    """Bump the campaign version when editing an active/paused campaign so the
+    change is observable in the audit trail. Note: this does NOT pin step
+    *content* — the worker renders the live ``body_html``/template at send time,
+    so a body edit reaches every in-flight enrollment's next send by design (no
+    per-enrollment content snapshot). Draft campaigns don't bump."""
     if campaign.status in ("active", "paused"):
         campaign.version += 1
 
@@ -520,6 +580,13 @@ async def add_step(
         position=body.position,
         delay_days=body.delay_days,
         mjml_template_name=body.mjml_template_name,
+        # Sanitize on save — the DB is the trust boundary (see
+        # domain.drips.sanitize_body_html). {{ }} tokens survive untouched.
+        body_html=(
+            sanitize_body_html(body.body_html)
+            if body.body_html is not None
+            else None
+        ),
         subject=body.subject,
         send_at_hour=body.send_at_hour,
         send_at_minute=body.send_at_minute,
@@ -610,9 +677,30 @@ async def patch_step(
             step.position = new_position
             await db.flush()
 
+    # Sanitize authored body on save (DB is the trust boundary). An explicit
+    # null clears the body (only valid when a template fallback remains).
+    if updates.get("body_html") is not None:
+        updates["body_html"] = sanitize_body_html(updates["body_html"])
+
     # Other field updates are straight setattr.
     for k, v in updates.items():
         setattr(step, k, v)
+
+    # A step must always have at least one content source. CampaignStepIn
+    # enforces this at create; enforce it here too so a PATCH that clears the
+    # body of a body-only step (no template fallback) can't leave the step
+    # uncontent-able and crash every future send.
+    if not step.body_html and not step.mjml_template_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "no_content_source",
+                "message": (
+                    "A step needs body content or a template; cannot clear "
+                    "the body of a step with no template fallback"
+                ),
+            },
+        )
 
     _bump_version_if_published(campaign)
     campaign.updated_at = datetime.now(UTC)
@@ -685,15 +773,17 @@ async def preview_step(
                 "message": f"Campaign has no step at position {position}",
             },
         )
-    sample_context: dict[str, str] = {
-        "contact_display_name": "Alex Smith",
-        "campaign_name": campaign.name,
-        "step_position": str(step.position),
-    }
+    context = build_step_context(
+        contact_display_name="Alex Smith",
+        contact_email="alex.smith@example.com",
+        campaign_name=campaign.name,
+        step_position=step.position,
+    )
     try:
         html, plain = render_step_html(
             template_name=step.mjml_template_name,
-            context=sample_context,
+            body_html=step.body_html,
+            context=context,
         )
     except TemplateMissingError as e:
         raise HTTPException(
@@ -710,8 +800,131 @@ async def preview_step(
         subject=step.subject,
         html=html,
         plain=plain,
-        sample_context=sample_context,
+        sample_context={k: str(v) for k, v in context.items()},
     )
+
+
+@router.get("/merge-tokens", response_model=MergeTokenListResponse)
+async def list_merge_tokens(
+    _: Annotated[tuple[object, frozenset[str]], Depends(_drips_dep)],
+) -> MergeTokenListResponse:
+    """The personalization tokens the body editor may insert. Single source of
+    truth (``domain.drips.MERGE_TOKENS``) shared with the render context so the
+    picker can only emit tokens the renderer knows about."""
+    return MergeTokenListResponse(
+        items=[MergeToken(name=name, label=label) for name, label in MERGE_TOKENS]
+    )
+
+
+@router.post(
+    "/campaigns/{campaign_id}/steps/{position}/send-test",
+    response_model=SendTestResponse,
+    responses={
+        400: {"description": "No recipient email could be determined"},
+        404: {"description": "Campaign, step, or template not found"},
+        502: {"description": "The email service rejected the send"},
+    },
+)
+async def send_test_step(
+    campaign_id: uuid.UUID,
+    position: int,
+    body: SendTestRequest,
+    db: DbSession,
+    actor: Annotated[tuple[AuthUser, frozenset[str]], Depends(_drips_dep)],
+) -> SendTestResponse:
+    """Render a step against sample context and send it to the caller (or an
+    explicit ``to_email``) for a confidence check before activating. Sends
+    SYNCHRONOUSLY so a failure surfaces (the whole point of a test) rather than
+    being swallowed in the background. Reuses the worker ACS sender; not a
+    contact state change, so no enrollment/outbox."""
+    user, _roles = actor
+    campaign = await _load_campaign(db, campaign_id)
+    step = (
+        await db.execute(
+            select(CampaignStep).where(
+                CampaignStep.campaign_id == campaign_id,
+                CampaignStep.position == position,
+            )
+        )
+    ).scalar_one_or_none()
+    if step is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "step_not_found",
+                "message": f"Campaign has no step at position {position}",
+            },
+        )
+
+    to_email = body.to_email or user.email
+    if not to_email:
+        # Fall back to the staff profile's recorded email (token may omit it).
+        to_email = (
+            await db.execute(
+                select(StaffProfile.email_normalized).where(
+                    StaffProfile.b2c_subject_id == user.sub
+                )
+            )
+        ).scalar_one_or_none()
+    if not to_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "no_recipient",
+                "message": "No to_email provided and no email on file for caller",
+            },
+        )
+
+    context = build_step_context(
+        contact_display_name="Alex Smith",
+        contact_email=to_email,
+        campaign_name=campaign.name,
+        step_position=step.position,
+    )
+    try:
+        html, plain = render_step_html(
+            template_name=step.mjml_template_name,
+            body_html=step.body_html,
+            context=context,
+        )
+    except TemplateMissingError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "template_not_found", "message": str(e)},
+        ) from e
+
+    settings = get_settings()
+    try:
+        from jp_adopt_worker.tasks.send_drip_step import send_drip_test
+    except Exception as e:  # pragma: no cover - worker pkg optional in some envs
+        logger.warning("drip.test_send.worker_pkg_unavailable err=%s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "worker_unavailable", "message": "Send unavailable"},
+        ) from e
+
+    try:
+        message_id = await send_drip_test(
+            to_email=to_email,
+            subject=step.subject,
+            html=html,
+            plain=plain,
+            acs_connection_string=settings.acs_connection_string,
+            acs_sender_address=settings.acs_sender_address,
+        )
+    except Exception as e:
+        logger.warning("drip.test_send.failed recipient=%s err=%s", to_email, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "send_failed",
+                "message": "Email service rejected the send",
+            },
+        ) from e
+
+    # message_id is None when ACS isn't configured (dev) — render worked but
+    # nothing was delivered.
+    return SendTestResponse(to_email=to_email, delivered=message_id is not None)
 
 
 @router.post(
