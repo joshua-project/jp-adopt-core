@@ -32,7 +32,10 @@ ADOPTER_STATUS_MAP: Final[dict[str, str]] = {
     "contacted": "new",  # DT's "contacted" was lighter touch than ours
     "engaged": "contacted",
     "matched": "matched",
-    "active": "matched",  # DT collapsed active into matched
+    # DT "active" is an actively-engaged adopter, NOT a match — no adopter was
+    # ever matched in DT (verified 2026-06-24: all 203 core 'matched' rows were
+    # DT 'active', 0 had a real match). Map to core 'engaged', not 'matched'.
+    "active": "engaged",
     "inactive": "do_not_engage",
     # overall_status is the authoritative DT lifecycle source (see
     # .dt-inspection/decisions.md). 'unassignable' = closed / not pursued.
