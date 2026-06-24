@@ -91,6 +91,40 @@ async def _send_via_acs(
     return str(result)
 
 
+async def send_drip_test_inline(
+    *,
+    to_email: str,
+    subject: str,
+    html: str,
+    plain: str,
+    acs_connection_string: str | None,
+    acs_sender_address: str,
+) -> None:
+    """One-shot test send of an already-rendered step, dispatched from the API
+    via ``BackgroundTasks`` (not the ARQ cron). Reuses the same ACS sender as
+    the real drip path so a passing test proves the live send path. No
+    enrollment, no DB writes, no outbox — a test send is not a contact state
+    change."""
+    try:
+        await _send_via_acs(
+            email=to_email,
+            subject=subject,
+            html=html,
+            plain=plain,
+            acs_connection_string=acs_connection_string,
+            acs_sender_address=acs_sender_address,
+        )
+    except Exception as e:  # pragma: no cover - defensive; background task
+        # Background tasks have no caller to surface to; log and swallow so a
+        # transient ACS error doesn't crash the event loop.
+        logger.warning(
+            "drip.test_send.failed recipient=%s subject=%s err=%s",
+            to_email,
+            subject,
+            e,
+        )
+
+
 def _is_within_send_window(
     *, now: datetime, send_at_hour: int, send_at_minute: int
 ) -> bool:
@@ -270,4 +304,5 @@ async def send_drip_step(ctx: dict[str, Any]) -> None:
 __all__ = [
     "DRIP_TICK_BATCH_SIZE",
     "send_drip_step",
+    "send_drip_test_inline",
 ]

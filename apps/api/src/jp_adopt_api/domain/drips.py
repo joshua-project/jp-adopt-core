@@ -455,6 +455,61 @@ async def advance_enrollment(
 BASE_SHELL_TEMPLATE = "_base.html.jinja"
 
 
+# Merge tokens an authored step body may reference. The in-app editor inserts
+# these as atomic chips that serialize to literal ``{{ name }}``; the keys here
+# are the single source of truth shared by the editor (via the API) and the
+# render context (``build_step_context``). Adding a token means adding its key
+# here AND to ``build_step_context``.
+MERGE_TOKENS: tuple[tuple[str, str], ...] = (
+    ("contact_display_name", "Recipient name"),
+)
+
+
+# Tags/attributes the authored body may keep. Matches the editor's toolbar
+# exactly (headings, bold/italic, links, lists). Everything else is stripped.
+_ALLOWED_TAGS = {
+    "h1",
+    "h2",
+    "h3",
+    "p",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "br",
+}
+
+
+def sanitize_body_html(raw: str) -> str:
+    """Sanitize in-app-authored body HTML against a tight allowlist. Applied on
+    SAVE (the DB is the trust boundary; render treats the body as trusted).
+
+    ``{{ token }}`` placeholders are plain text, not markup, so nh3 leaves them
+    untouched — but sanitize MUST run before Jinja render, never after (running
+    it over the rendered shell would strip the hand-built chrome). nh3 (Rust
+    ammonia) is used because ``bleach`` is deprecated.
+    """
+    try:
+        import nh3
+    except Exception:  # pragma: no cover - nh3 optional in degraded envs
+        logger.warning("drip.sanitize.nh3_unavailable returning_raw")
+        return raw
+
+    return nh3.clean(
+        raw,
+        tags=_ALLOWED_TAGS,
+        attributes={"a": {"href", "title"}},
+        url_schemes={"http", "https", "mailto"},
+        link_rel="noopener noreferrer",
+        # Drop the *content* of disallowed script/style, not just the tags.
+        clean_content_tags={"script", "style"},
+    )
+
+
 def build_step_context(
     *,
     contact_display_name: str,
@@ -537,7 +592,12 @@ def render_step_html(
     full_context = {"current_year": _dt.datetime.now(_dt.UTC).year, **context}
 
     try:
-        from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+        from jinja2 import (
+            Environment,
+            FileSystemLoader,
+            StrictUndefined,
+            select_autoescape,
+        )
     except ImportError as e:  # pragma: no cover - jinja2 is a fastapi transitive dep
         # Hard fallback: jinja2 truly missing. Naive {{ key }} substitution so
         # the worker doesn't crash — but `{% extends %}` won't resolve, so the
