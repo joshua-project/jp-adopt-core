@@ -153,6 +153,24 @@
             "description": "Filter facilitators by status. Repeatable. Ignored when party_kind=adopter."
           },
           {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring search over display_name OR email_normalized, across the whole dataset. Empty/whitespace is treated as absent.",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring search over display_name OR email_normalized, across the whole dataset. Empty/whitespace is treated as absent."
+          },
+          {
             "name": "authorization",
             "in": "header",
             "required": false,
@@ -370,6 +388,57 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Delete Contact",
+        "description": "Hard-delete a contact and everything attached to it (Amy's spam path).\n\nIrreversible. All of the following happens in a single transaction so a\ncrash can't leave the contact half-deleted:\n\n1. ``SELECT ... FOR UPDATE`` the contact (404 if absent) \u2014 locks the row\n   against a concurrent ETL upsert for the duration.\n2. Explicitly delete ``transition_audit`` rows. Unlike the other children\n   this FK has NO ``ON DELETE CASCADE`` (deliberately \u2014 audit rows outlive\n   state changes), so deleting the contact first would FK-violate.\n3. Purge the no-FK orphans keyed off the contact's identity:\n   ``identity_link`` (by email_normalized / b2c_subject_id) and\n   ``migration_conflicts`` (by source_system + source_id). Neither has a\n   contact_id FK, so a cascade can't reach them.\n4. ``DELETE`` the contact \u2014 this cascades profile / consent / assignment /\n   interest \u2192 match / activity / match_attempt / enrollment.\n5. Record a ``deleted_contacts`` suppression row so the hourly DT ETL\n   won't silently re-import it (U6 reads this).\n6. Emit ``EVENT_CONTACT_DELETED`` on the outbox in the same transaction.\n\nMirrors ``revoke_user_role`` (admin.py): do the work + ``emit_outbox`` +\na single ``commit``.",
+        "operationId": "delete_contact_v1_contacts__contact_id__delete",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -7100,6 +7169,11 @@
               }
             ],
             "title": "Source Id"
+          },
+          "coverage_count": {
+            "type": "integer",
+            "title": "Coverage Count",
+            "default": 0
           },
           "created_at": {
             "type": "string",

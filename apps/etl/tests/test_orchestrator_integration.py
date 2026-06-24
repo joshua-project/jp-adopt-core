@@ -1376,6 +1376,395 @@ def test_full_run_records_deleted_in_source(monkeypatch, pg_engine, pg_session):
         pg_session.commit()
 
 
+def test_suppressed_dt_contact_is_not_reimported(
+    monkeypatch, pg_engine, pg_session
+):
+    """A DT post whose (dt, source_id) is recorded in deleted_contacts is
+    NOT inserted and records NO migration conflict; rows_suppressed
+    increments. Mirrors the service-account skip shape (counter + continue)."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # Record a core-side hard-delete for post 9450 keyed on (dt, source_id).
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system="dt",
+            source_id="9450",
+            email_normalized=None,
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9450, "post_title": "Spam", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9450: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email", "meta_value": "spam@example.com"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_in"] == 1
+        assert result["contacts"]["rows_suppressed"] == 1
+        assert result["contacts"]["rows_out_inserted"] == 0
+
+        # No contact row persisted.
+        rows = pg_session.execute(
+            select(Contact).where(
+                Contact.source_system == "dt", Contact.source_id == "9450"
+            )
+        ).scalars().all()
+        assert rows == []
+
+        # No migration conflict recorded for the suppressed post.
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contacts",
+                MigrationConflict.source_id == "9450",
+            )
+        ).scalars().all()
+        assert conflicts == []
+    finally:
+        pg_session.execute(
+            text("DELETE FROM deleted_contacts WHERE source_id = '9450'")
+        )
+        pg_session.commit()
+
+
+def test_suppressed_dt_contact_with_unmappable_status_records_no_conflict(
+    monkeypatch, pg_engine, pg_session
+):
+    """MINOR 4 regression: the (dt, source_id) suppression check runs BEFORE
+    map_contact, so a suppressed post whose status is unmappable is skipped
+    entirely — it must NOT record an unmapped_status migration_conflict."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system="dt",
+            source_id="9460",
+            email_normalized=None,
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9460, "post_title": "SpamUnmappable", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9460: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "totally_unknown"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_suppressed"] == 1
+        assert result["contacts"]["rows_out_inserted"] == 0
+        # Suppressed before map_contact → no conflict of any kind.
+        assert result["contacts"]["rows_in_conflict"] == 0
+
+        conflicts = pg_session.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.table_name == "contacts",
+                MigrationConflict.source_id == "9460",
+            )
+        ).scalars().all()
+        assert conflicts == []
+    finally:
+        pg_session.execute(
+            text("DELETE FROM deleted_contacts WHERE source_id = '9460'")
+        )
+        pg_session.execute(
+            text("DELETE FROM migration_conflicts WHERE source_id = '9460'")
+        )
+        pg_session.commit()
+
+
+def test_hard_deleting_dt_contact_does_not_suppress_email_sharing_dt_contact(
+    monkeypatch, pg_engine, pg_session
+):
+    """MAJOR 2 regression at the ETL layer: a DT-sourced suppression carries a
+    NULL email, so a DIFFERENT DT contact that reuses the same email is NOT
+    suppressed and imports normally."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # Suppression for DT post 9461, with NULL email (the MAJOR-2 fix shape).
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system="dt",
+            source_id="9461",
+            email_normalized=None,
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    # A different DT post (9462) that reuses the deleted contact's email.
+    contacts = [
+        {"ID": 9462, "post_title": "Sibling", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9462: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_aaa", "meta_value": "shared@example.com"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_suppressed"] == 0
+        assert result["contacts"]["rows_out_inserted"] == 1
+
+        contact = pg_session.execute(
+            select(Contact).where(
+                Contact.source_system == "dt", Contact.source_id == "9462"
+            )
+        ).scalar_one()
+        assert contact.email_normalized == "shared@example.com"
+    finally:
+        pg_session.execute(
+            text("DELETE FROM deleted_contacts WHERE source_id = '9461'")
+        )
+        pg_session.commit()
+
+
+def test_suppressed_by_email_fallback_is_not_reimported(
+    monkeypatch, pg_engine, pg_session
+):
+    """A DT post whose source_id is NOT suppressed but whose email matches a
+    suppressed email_normalized (the forms-contact fallback) is skipped."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # Suppression keyed only on email (no source_id — e.g. a forms contact).
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system=None,
+            source_id=None,
+            email_normalized="hostile@example.com",
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9451, "post_title": "Spam2", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9451: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_aaa", "meta_value": "hostile@example.com"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_suppressed"] == 1
+        assert result["contacts"]["rows_out_inserted"] == 0
+
+        rows = pg_session.execute(
+            select(Contact).where(
+                Contact.source_system == "dt", Contact.source_id == "9451"
+            )
+        ).scalars().all()
+        assert rows == []
+    finally:
+        pg_session.execute(
+            text(
+                "DELETE FROM deleted_contacts "
+                "WHERE email_normalized = 'hostile@example.com'"
+            )
+        )
+        pg_session.commit()
+
+
+def test_non_suppressed_contact_still_imports(monkeypatch, pg_engine, pg_session):
+    """Regression: a normal (non-suppressed) DT post imports as before even
+    when a deleted_contacts row exists for a *different* contact."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    # A suppression that must NOT affect the unrelated post below.
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system="dt",
+            source_id="9998",
+            email_normalized="someone-else@example.com",
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9452, "post_title": "Legit", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9452: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "contact_email_aaa", "meta_value": "legit@example.com"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        result = run_etl(
+            mysql_url="mysql+pymysql://ignored",
+            postgres_url=ETL_TEST_DATABASE_URL,
+            tables=["contacts"],
+            mode="production",
+            watermark=None,
+        )
+        assert result["contacts"]["rows_suppressed"] == 0
+        assert result["contacts"]["rows_out_inserted"] == 1
+
+        contact = pg_session.execute(
+            select(Contact).where(
+                Contact.source_system == "dt", Contact.source_id == "9452"
+            )
+        ).scalar_one()
+        assert contact.email_normalized == "legit@example.com"
+    finally:
+        pg_session.execute(
+            text("DELETE FROM deleted_contacts WHERE source_id = '9998'")
+        )
+        pg_session.commit()
+
+
+def test_suppression_is_idempotent_across_runs(
+    monkeypatch, pg_engine, pg_session
+):
+    """Re-running the import keeps a suppressed contact skipped — it never
+    reappears across runs."""
+    import uuid as _uuid
+
+    from jp_adopt_api.models import DeletedContact
+
+    from jp_adopt_etl.orchestrator import run_etl
+
+    pg_session.add(
+        DeletedContact(
+            id=_uuid.uuid4(),
+            source_system="dt",
+            source_id="9453",
+            email_normalized=None,
+            deleted_by="sub-amy",
+        )
+    )
+    pg_session.commit()
+
+    contacts = [
+        {"ID": 9453, "post_title": "Spam3", "post_status": "publish",
+         "post_date": None, "post_date_gmt": None},
+    ]
+    postmeta = {
+        9453: [
+            {"meta_key": "sub_type", "meta_value": "adopter"},
+            {"meta_key": "overall_status", "meta_value": "new"},
+        ],
+    }
+    mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
+    _patch_dt_source(monkeypatch, mock)
+    _open_engine_returns_pg(monkeypatch, pg_engine)
+
+    try:
+        for _ in range(2):
+            result = run_etl(
+                mysql_url="mysql+pymysql://ignored",
+                postgres_url=ETL_TEST_DATABASE_URL,
+                tables=["contacts"],
+                mode="production",
+                watermark=None,
+            )
+            assert result["contacts"]["rows_suppressed"] == 1
+            rows = pg_session.execute(
+                select(Contact).where(
+                    Contact.source_system == "dt", Contact.source_id == "9453"
+                )
+            ).scalars().all()
+            assert rows == []
+    finally:
+        pg_session.execute(
+            text("DELETE FROM deleted_contacts WHERE source_id = '9453'")
+        )
+        pg_session.commit()
+
+
 def test_resolve_auto_watermark(monkeypatch, pg_engine, pg_session):
     """`resolve_auto_watermark` returns MIN(MAX(source_max_modified_at))
     per table across prior successful production runs. Failed runs

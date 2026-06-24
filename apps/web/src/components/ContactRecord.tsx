@@ -2,18 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
 import type { paths } from "@jp-adopt/contracts";
 
 import {
   apiFetch,
+  deleteContact,
   enrollInCampaign,
   formatApiError,
   listCampaigns,
   sendContactEmail,
+  transitionContact,
 } from "../lib/api-client";
-import { BTN, BTN_PRIMARY } from "../lib/button-styles";
+import { BTN, BTN_DANGER, BTN_PRIMARY } from "../lib/button-styles";
 import { useApiContext } from "../lib/useApiContext";
 import {
   formatTimestamp,
@@ -23,6 +26,7 @@ import {
   humanizePartyKind,
   humanizeReasonCode,
   humanizeStatus,
+  removeContactLabel,
 } from "../lib/vocab";
 
 /** Format a date-only value (YYYY-MM-DD) without the new Date() UTC→local
@@ -212,6 +216,7 @@ function Empty({ children }: { children: ReactNode }) {
 
 export function ContactRecord({ contactId }: { contactId: string }) {
   const ctx = useApiContext();
+  const router = useRouter();
   const [contact, setContact] = useState<Contact | null>(null);
   const [matches, setMatches] = useState<Matches | null>(null);
   const [transitions, setTransitions] = useState<Transitions | null>(null);
@@ -227,6 +232,9 @@ export function ContactRecord({ contactId }: { contactId: string }) {
 
   const [editingProfile, setEditingProfile] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
+
+  // Remove-contact affordance: spam → hard-delete, hostile → do_not_engage.
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   // send-email modal
   const [emailOpen, setEmailOpen] = useState(false);
@@ -404,6 +412,43 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       setBusy(false);
     }
   }, [ctx, contactId, load]);
+
+  const removeSpam = useCallback(async () => {
+    if (!window.confirm(removeContactLabel("spamConfirm"))) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await deleteContact(ctx, contactId);
+      setRemoveOpen(false);
+      // The record no longer exists; leave the now-dead page.
+      router.push("/contacts");
+    } catch (e) {
+      setActionErr(formatApiError(e));
+      setBusy(false);
+    }
+  }, [ctx, contactId, router]);
+
+  const removeHostile = useCallback(async () => {
+    if (!contact) return;
+    if (!window.confirm(removeContactLabel("hostileConfirm"))) return;
+    const kind = contact.party_kind === "adopter" ? "adopter" : "facilitator";
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await transitionContact(ctx, contactId, {
+        kind,
+        to_state: "do_not_engage",
+        reason_code: "other",
+        reason_text: "Marked do-not-engage (hostile) from contact record.",
+      });
+      setRemoveOpen(false);
+      await load();
+    } catch (e) {
+      setActionErr(formatApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [ctx, contactId, contact, load]);
 
   const startEditProfile = useCallback(() => {
     const p = (contact?.profile ?? {}) as Partial<Profile>;
@@ -586,7 +631,35 @@ export function ContactRecord({ contactId }: { contactId: string }) {
                 Assign to me
               </button>
             )}
+            <button
+              type="button"
+              className={BTN_DANGER}
+              disabled={busy}
+              onClick={() => setRemoveOpen((o) => !o)}
+            >
+              {removeContactLabel("trigger")}
+            </button>
           </div>
+          {removeOpen ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className={BTN_DANGER}
+                disabled={busy}
+                onClick={removeSpam}
+              >
+                {removeContactLabel("spam")}
+              </button>
+              <button
+                type="button"
+                className={BTN}
+                disabled={busy}
+                onClick={removeHostile}
+              >
+                {removeContactLabel("hostile")}
+              </button>
+            </div>
+          ) : null}
           <p className="text-xs text-slate-500">
             {contact.assigned_to ? (
               <>Assigned to <span className="font-medium text-slate-700">{contact.assigned_to}</span></>

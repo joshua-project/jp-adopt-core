@@ -49,16 +49,22 @@ async def _make_contact(
     adopter_status: str | None = None,
     facilitator_status: str | None = None,
     suffix: str | None = None,
+    display_name: str | None = None,
+    email_normalized: str | None = None,
 ) -> Contact:
     """Insert a fresh contact tagged with origin='filter_test' so the
     cleanup helper can scoop them up at the end."""
     contact = Contact(
         id=uuid.uuid4(),
         party_kind=party_kind,
-        display_name=f"Filter Test {suffix or uuid.uuid4().hex[:6]}",
+        display_name=display_name
+        if display_name is not None
+        else f"Filter Test {suffix or uuid.uuid4().hex[:6]}",
         adopter_status=adopter_status,
         facilitator_status=facilitator_status,
-        email_normalized=f"filter-{uuid.uuid4().hex[:10]}@example.com",
+        email_normalized=email_normalized
+        if email_normalized is not None
+        else f"filter-{uuid.uuid4().hex[:10]}@example.com",
         origin="filter_test",
     )
     session.add(contact)
@@ -195,6 +201,248 @@ async def test_filter_total_matches_filtered_count(
             # when limit isn't reached.
             assert body["total"] == len(body["items"])
             assert body["total"] >= 2
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+# ─── q search tests (U1) ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_q_matches_name_or_email(
+    session: AsyncSession,
+) -> None:
+    """q returns contacts whose display_name contains the term (case-
+    insensitive) AND contacts whose email contains it; non-matches are
+    excluded."""
+    by_name = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name="Filter Test Jane Doe",
+        email_normalized=f"unrelated-{uuid.uuid4().hex[:10]}@example.com",
+    )
+    by_email = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name="Filter Test Bob Smith",
+        email_normalized=f"jane-{uuid.uuid4().hex[:10]}@example.com",
+    )
+    nonmatch = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name="Filter Test Carol King",
+        email_normalized=f"carol-{uuid.uuid4().hex[:10]}@example.com",
+    )
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            # Case-insensitive: search uppercase, names/emails are mixed case.
+            r = client.get(
+                "/v1/contacts?q=JANE&limit=200",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            ids = {item["id"] for item in r.json()["items"]}
+            assert str(by_name.id) in ids
+            assert str(by_email.id) in ids
+            assert str(nonmatch.id) not in ids
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+@pytest.mark.asyncio
+async def test_q_filters_across_pages(
+    session: AsyncSession,
+) -> None:
+    """A q match on a contact that would land on 'page 2' is returned at
+    offset 0 — proves SQL-level filtering, not page-local filtering."""
+    target_token = uuid.uuid4().hex[:8]
+    # Create several decoy contacts that do NOT match the token, plus one
+    # that does. With a small limit, the matching one would otherwise be
+    # paged out.
+    for _ in range(5):
+        await _make_contact(
+            session,
+            party_kind="adopter",
+            adopter_status="new",
+            display_name="Filter Test Decoy",
+        )
+    target = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test Needle {target_token}",
+    )
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            r = client.get(
+                f"/v1/contacts?q={target_token}&limit=2&offset=0",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            ids = {item["id"] for item in body["items"]}
+            assert str(target.id) in ids
+            assert body["total"] == 1
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+@pytest.mark.asyncio
+async def test_q_combines_with_party_kind_and_status(
+    session: AsyncSession,
+) -> None:
+    """q combines with party_kind/status filters using AND semantics."""
+    token = uuid.uuid4().hex[:8]
+    wanted = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="matched",
+        display_name=f"Filter Test {token} Wanted",
+    )
+    # Same token but wrong status — excluded by AND.
+    await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test {token} WrongStatus",
+    )
+    # Same token but wrong party kind — excluded by AND.
+    await _make_contact(
+        session,
+        party_kind="facilitator",
+        facilitator_status="ready",
+        display_name=f"Filter Test {token} WrongKind",
+    )
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            r = client.get(
+                "/v1/contacts"
+                "?party_kind=adopter"
+                "&adopter_status=matched"
+                f"&q={token}"
+                "&limit=200",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            ids = {item["id"] for item in body["items"]}
+            assert ids == {str(wanted.id)}
+            assert body["total"] == 1
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+@pytest.mark.asyncio
+async def test_q_escapes_sql_wildcards(
+    session: AsyncSession,
+) -> None:
+    """A literal % or _ in q is matched literally (escaped), not treated
+    as a SQL wildcard that would match everything."""
+    token = uuid.uuid4().hex[:8]
+    literal = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test {token}_pct%end",
+    )
+    # A contact that would match if '%' / '_' were treated as wildcards but
+    # does NOT contain the literal sequence.
+    decoy = await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test {token}XpctYend",
+    )
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            # Search for the literal "_pct%end"; only `literal` contains it.
+            r = client.get(
+                f"/v1/contacts?q={token}_pct%25end&limit=200",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            ids = {item["id"] for item in r.json()["items"]}
+            assert str(literal.id) in ids
+            assert str(decoy.id) not in ids
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+@pytest.mark.asyncio
+async def test_q_empty_or_whitespace_is_absent(
+    session: AsyncSession,
+) -> None:
+    """Empty/whitespace q behaves identically to no q (full list)."""
+    await _make_contact(session, party_kind="adopter", adopter_status="new")
+    await _make_contact(session, party_kind="adopter", adopter_status="new")
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            base = client.get(
+                "/v1/contacts?limit=500",
+                headers=_auth_headers(),
+            )
+            assert base.status_code == 200, base.text
+            empty = client.get(
+                "/v1/contacts?q=&limit=500",
+                headers=_auth_headers(),
+            )
+            assert empty.status_code == 200, empty.text
+            whitespace = client.get(
+                "/v1/contacts?q=%20%20%20&limit=500",
+                headers=_auth_headers(),
+            )
+            assert whitespace.status_code == 200, whitespace.text
+            assert empty.json()["total"] == base.json()["total"]
+            assert whitespace.json()["total"] == base.json()["total"]
+    finally:
+        await _cleanup_filter_test_contacts(session)
+
+
+@pytest.mark.asyncio
+async def test_q_total_reflects_filtered_count(
+    session: AsyncSession,
+) -> None:
+    """total reflects the filtered count, not the table size."""
+    token = uuid.uuid4().hex[:8]
+    await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test {token} A",
+    )
+    await _make_contact(
+        session,
+        party_kind="adopter",
+        adopter_status="new",
+        display_name=f"Filter Test {token} B",
+    )
+    # An unrelated contact that must NOT count toward the filtered total.
+    await _make_contact(session, party_kind="adopter", adopter_status="new")
+    try:
+        with TestClient(
+            __import__("jp_adopt_api.main", fromlist=["app"]).app
+        ) as client:
+            r = client.get(
+                f"/v1/contacts?q={token}&limit=200",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["total"] == 2
+            assert len(body["items"]) == 2
     finally:
         await _cleanup_filter_test_contacts(session)
 

@@ -1042,6 +1042,48 @@ class EtlDeletedInSource(Base):
     )
 
 
+class DeletedContact(Base):
+    """U4: records a core-side hard-delete so the hourly DT contacts ETL
+    won't silently re-import the removed contact. The inverse of
+    ``EtlDeletedInSource`` (which records source-side deletions for Amy to
+    review): this records *our* deletions so the importer skips them.
+
+    Interim bridge until DT is decommissioned. Keyed on
+    ``(source_system, source_id)`` (the contacts idempotency convention, so
+    an ``ON CONFLICT`` lookup works) with an ``email_normalized`` fallback
+    for forms-sourced contacts that have no source_id.
+    """
+
+    __tablename__ = "deleted_contacts"
+    __table_args__ = (
+        # Partial unique index mirroring ``uq_contacts_source_system_source_id``
+        # so the ETL suppression lookup has a stable target and re-deletes
+        # don't duplicate rows.
+        Index(
+            "uq_deleted_contacts_source",
+            "source_system",
+            "source_id",
+            unique=True,
+            postgresql_where="source_id IS NOT NULL",
+        ),
+        Index(
+            "ix_deleted_contacts_email_normalized",
+            "email_normalized",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class FacilitatorOrgMembership(Base):
     """U8: M:N link between a B2C-authenticated user and the facilitator orgs
     they belong to. The facilitator portal filters Match rows by
