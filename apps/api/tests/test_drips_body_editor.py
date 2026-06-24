@@ -194,3 +194,30 @@ def test_merge_tokens_lists_contact_display_name(client: TestClient) -> None:
     assert r.status_code == 200, r.text
     names = {t["name"] for t in r.json()["items"]}
     assert "contact_display_name" in names
+
+
+@pytest.mark.asyncio
+async def test_activate_campaign_with_body_only_step(
+    client: TestClient, session: AsyncSession
+) -> None:
+    # Regression for the U1 nullable relax: a body-only step (no
+    # mjml_template_name) must still activate.
+    campaign_id = _make_campaign(client)
+    try:
+        client.post(
+            f"/v1/drips/campaigns/{campaign_id}/steps",
+            json={
+                "position": 0,
+                "subject": "Hi",
+                "body_html": "<p>Hello {{ contact_display_name }}</p>",
+            },
+            headers=_auth_headers(),
+        )
+        r = client.post(
+            f"/v1/drips/campaigns/{campaign_id}/activate",
+            headers=_auth_headers(),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "active"
+    finally:
+        await _delete_campaign(session, campaign_id)
