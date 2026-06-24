@@ -1,7 +1,7 @@
 ---
 title: "feat: Drip email template editor — in-app body authoring, preview, test-send, activation"
 type: feat
-status: active
+status: completed
 created: 2026-06-24
 depth: standard
 origin: docs/brainstorms/2026-06-24-drip-template-editor-requirements.md
