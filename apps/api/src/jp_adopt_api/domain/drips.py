@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import uuid
 from collections.abc import Iterable
@@ -58,12 +59,39 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────
 
 
-# Default location for MJML templates. Each step references a filename
-# in this directory. Resolved via importlib so the path follows the
-# installed package, not the current working directory.
-EMAIL_TEMPLATES_DIR = (
-    Path(__file__).resolve().parent.parent.parent.parent / "email-templates"
-)
+def _resolve_email_templates_dir() -> Path:
+    """Locate ``email-templates/`` across the layouts this code runs in.
+
+    In the source tree ``drips.py`` lives at
+    ``apps/api/src/jp_adopt_api/domain/`` so the templates are 4 levels up.
+    But the production containers install the package NON-editable
+    (``uv sync --no-editable``), so at runtime ``__file__`` is
+    ``.../site-packages/jp_adopt_api/domain/drips.py`` — there is no ``src``
+    level and the 4-levels-up computation points at a nonexistent
+    ``.../pythonX.Y/email-templates``. The Dockerfiles copy the templates to
+    ``/app/apps/api/email-templates`` (the API WORKDIR is ``/app/apps/api``;
+    the worker's is ``/app/apps/worker`` but it copies the dir to the same
+    ``/app/apps/api`` path). Try the known locations and pick the first that
+    exists. ``EMAIL_TEMPLATES_DIR`` env var overrides everything.
+    """
+    override = os.environ.get("EMAIL_TEMPLATES_DIR")
+    if override:
+        return Path(override)
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "email-templates",  # source tree: apps/api/email-templates
+        Path("/app/apps/api/email-templates"),  # prod containers (API + worker)
+        here.parents[1] / "email-templates",  # if ever shipped as package data
+        Path.cwd() / "email-templates",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+# Location of the email templates (the branded shell + any file-based steps).
+EMAIL_TEMPLATES_DIR = _resolve_email_templates_dir()
 
 
 # Enrollment event types — append-only log entries. Adding a new
