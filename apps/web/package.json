@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "walkthrough": "node e2e/walkthrough.mjs"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.9.0",
@@ -35,6 +36,7 @@
     "eslint": "^9.0.0",
     "eslint-config-next": "15.2.4",
     "jsdom": "29.1.1",
+    "playwright": "1.61.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
