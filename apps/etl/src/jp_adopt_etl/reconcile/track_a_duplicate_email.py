@@ -1317,6 +1317,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
+    # Mirror the orchestrator's main(): when invoked via the console script
+    # (e.g. chained after dt-etl in run-cron.sh) nothing has configured the
+    # root logger yet, so this is what makes the reconcile visible in cron
+    # logs. Idempotent — a no-op if logging is already configured.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     mode: Mode = "production" if args.apply else "dry_run"
     decisions = load_decisions(args.decisions) if args.decisions else None
     result = run(
