@@ -147,6 +147,19 @@ def map_contact(
         else None
     )
 
+    # DT marks an incomplete/unsubmitted contact with WordPress's native
+    # post_status='draft' (the plugin hides overall_status from staff, so a
+    # draft carries no lifecycle status of its own). Surface those as 'draft'
+    # rather than letting them default to 'new'/NULL. Only override when the
+    # mapped status hasn't already advanced past 'new', so a genuinely-further
+    # contact that happens to be an unpublished post is not demoted.
+    post_status = (post_row.get("post_status") or "").strip().lower()
+    if post_status == "draft":
+        if party_kind == "adopter" and adopter_status in (None, "new"):
+            adopter_status = "draft"
+        elif party_kind == "facilitator" and facilitator_status in (None, "new"):
+            facilitator_status = "draft"
+
     origin = _first_source(meta.get(META_KEY_SOURCES))
 
     channels = extract_comm_channels(meta)
