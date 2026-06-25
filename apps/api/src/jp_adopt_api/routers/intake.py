@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jp_adopt_api.config import Settings
 from jp_adopt_api.deps import DbSession, SettingsDep
+from jp_adopt_api.domain.state_machine import EVENT_CONTACT_SUBMITTED
 from jp_adopt_api.email_utils import normalize_email
 from jp_adopt_api.models import (
     AdopterInterest,
@@ -653,6 +654,27 @@ async def process_adoption_payload(
         event_type=EVENT_SUBMISSION_RECEIVED,
         payload=outbox_payload,
     )
+
+    # A completed form sign-up enters the adopter funnel as a real submission,
+    # so it should receive the "Adopter sign-up welcome" drip — which triggers
+    # on ``contact.submitted`` (the same event a draft→new promotion emits).
+    # Forms intake lands the contact directly in 'new'/'potential_adopter'
+    # without going through that transition, so emit the event here too.
+    # Only on first creation: a returning submitter (created=False) is already
+    # in the funnel and must not be re-welcomed. do_not_engage contacts return
+    # earlier and never reach here. During bulk forms-etl import emit_outbox is
+    # suppressed, so historical signups don't retroactively enroll.
+    if created:
+        emit_outbox(
+            session,
+            event_type=EVENT_CONTACT_SUBMITTED,
+            payload={
+                "event": EVENT_CONTACT_SUBMITTED,
+                "contact_id": str(contact.id),
+                "party_kind": "adopter",
+                "adopter_status": contact.adopter_status,
+            },
+        )
 
     return IntakeOutcome(
         contact_id=contact.id,

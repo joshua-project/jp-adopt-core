@@ -17,10 +17,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from jp_adopt_api.config import get_settings
-from jp_adopt_api.models import Contact, SubmissionBlocked
+from jp_adopt_api.domain.state_machine import EVENT_CONTACT_SUBMITTED
+from jp_adopt_api.models import Contact, Outbox, SubmissionBlocked
 from jp_adopt_api.routers.intake import (
-    IntakeValidationError,
     SOURCE_SYSTEM_FORMS,
+    IntakeValidationError,
     process_adoption_payload,
     process_facilitation_payload,
 )
@@ -232,3 +233,131 @@ def test_fpg_selections_cap_accepts_2000_rejects_2001(model) -> None:
         model.model_validate(
             {**base, "fpg_selections": [{"people_id3": f"R{i:04d}"} for i in range(2001)]}
         )
+
+
+async def _contact_submitted_rows(
+    session: AsyncSession, contact_id: uuid.UUID
+) -> list[Outbox]:
+    return list(
+        (
+            await session.execute(
+                select(Outbox).where(
+                    Outbox.event_type == EVENT_CONTACT_SUBMITTED,
+                    Outbox.payload_json["contact_id"].astext == str(contact_id),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_signup_emits_contact_submitted(session: AsyncSession) -> None:
+    """A completed first-time form sign-up emits contact.submitted so the
+    'Adopter sign-up welcome' drip (which triggers on that event) enrolls it."""
+    email = f"helper-welcome-{uuid.uuid4().hex[:8]}@example.com"
+    await _clean_email(session, email)
+    payload = AdoptionIntake.model_validate(
+        {
+            "email": email,
+            "display_name": "Welcome Me",
+            "fpg_selections": [{"people_id3": "AAA01"}],
+        }
+    )
+    outcome = await process_adoption_payload(
+        session, payload=payload, settings=get_settings()
+    )
+    assert outcome.created is True
+    rows = await _contact_submitted_rows(session, outcome.contact_id)
+    assert len(rows) == 1
+    assert rows[0].payload_json["party_kind"] == "adopter"
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_no_fpg_signup_still_emits_contact_submitted(
+    session: AsyncSession,
+) -> None:
+    """A no-FPG signup lands as 'potential_adopter' but is still a complete
+    sign-up, so it must also trigger the welcome."""
+    email = f"helper-nofpg-{uuid.uuid4().hex[:8]}@example.com"
+    await _clean_email(session, email)
+    payload = AdoptionIntake.model_validate(
+        {"email": email, "display_name": "No FPG", "fpg_selections": []}
+    )
+    outcome = await process_adoption_payload(
+        session, payload=payload, settings=get_settings()
+    )
+    rows = await _contact_submitted_rows(session, outcome.contact_id)
+    assert len(rows) == 1
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_returning_submitter_does_not_re_emit_contact_submitted(
+    session: AsyncSession,
+) -> None:
+    """An already-existing contact (created=False) is in the funnel already and
+    must not be re-welcomed on a repeat submission."""
+    email = f"helper-return-{uuid.uuid4().hex[:8]}@example.com"
+    await _clean_email(session, email)
+    contact = Contact(
+        id=uuid.uuid4(),
+        party_kind="adopter",
+        display_name="Returning",
+        adopter_status="new",
+        email_normalized=email.lower(),
+    )
+    session.add(contact)
+    await session.commit()
+
+    payload = AdoptionIntake.model_validate(
+        {
+            "email": email,
+            "display_name": "Returning Again",
+            "fpg_selections": [{"people_id3": "AAA01"}],
+        }
+    )
+    outcome = await process_adoption_payload(
+        session, payload=payload, settings=get_settings()
+    )
+    assert outcome.created is False
+    rows = await _contact_submitted_rows(session, contact.id)
+    assert rows == []
+    await session.rollback()
+    await _clean_email(session, email)
+
+
+@pytest.mark.asyncio
+async def test_blocked_submission_does_not_emit_contact_submitted(
+    session: AsyncSession,
+) -> None:
+    """A do_not_engage contact short-circuits before the welcome emit."""
+    email = f"helper-block-welcome-{uuid.uuid4().hex[:8]}@example.com"
+    await _clean_email(session, email)
+    contact = Contact(
+        id=uuid.uuid4(),
+        party_kind="adopter",
+        display_name="Blocked",
+        adopter_status="do_not_engage",
+        email_normalized=email.lower(),
+    )
+    session.add(contact)
+    await session.commit()
+
+    payload = AdoptionIntake.model_validate(
+        {
+            "email": email,
+            "display_name": "Blocked Welcome",
+            "fpg_selections": [{"people_id3": "AAA01"}],
+        }
+    )
+    outcome = await process_adoption_payload(
+        session, payload=payload, settings=get_settings()
+    )
+    assert outcome.was_blocked is True
+    rows = await _contact_submitted_rows(session, contact.id)
+    assert rows == []
+    await session.rollback()
+    await _clean_email(session, email)
