@@ -321,6 +321,31 @@ ADOPTER_TRANSITIONS: dict[tuple[AdopterState, AdopterState], TransitionSpec] = {
         requires_reason=False,
         event_type=EVENT_CONTACT_RECLASSIFIED,
     ),
+    # Correction back to DRAFT: intake lands new adopters in 'new', so a record
+    # that arrived incomplete (a saved draft / missing info) has no other way to
+    # be re-marked 'draft'. Allow an adoption_manager/admin to send any pre-match
+    # funnel state back to 'draft'. Same RECLASSIFIED event — no drip/intake
+    # side effects fire.
+    (AdopterState.NEW, AdopterState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.POTENTIAL_ADOPTER, AdopterState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.CONTACTED, AdopterState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.ENGAGED, AdopterState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
 }
 
 
@@ -377,6 +402,23 @@ FACILITATOR_TRANSITIONS: dict[
         event_type=EVENT_FACILITATOR_RECLASSIFIED,
     ),
     (FacilitatorState.NOT_READY, FacilitatorState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
+    ),
+    # Correction back to DRAFT (parity with the adopter side) for facilitators
+    # that arrived incomplete.
+    (FacilitatorState.NEW, FacilitatorState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
+    ),
+    (FacilitatorState.NOT_READY, FacilitatorState.DRAFT): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
+    ),
+    (FacilitatorState.READY, FacilitatorState.DRAFT): TransitionSpec(
         allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
         requires_reason=False,
         event_type=EVENT_FACILITATOR_RECLASSIFIED,

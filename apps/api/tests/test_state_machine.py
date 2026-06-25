@@ -142,6 +142,22 @@ def test_adoption_manager_can_correct_engaged_backward() -> None:
     # Forward + opt-out still available.
     assert AdopterState.MATCHED in options
     assert AdopterState.DO_NOT_ENGAGE in options
+    # ...and all the way back to draft (incomplete record correction).
+    assert AdopterState.DRAFT in options
+
+
+def test_facilitator_can_be_corrected_back_to_draft() -> None:
+    for state in (
+        FacilitatorState.NEW,
+        FacilitatorState.NOT_READY,
+        FacilitatorState.READY,
+    ):
+        options = available_transitions(state, "adoption_manager", kind="facilitator")
+        assert FacilitatorState.DRAFT in options, state
+    # Corrections (incl. -> draft) are adoption_manager/admin only.
+    assert FacilitatorState.DRAFT not in available_transitions(
+        FacilitatorState.READY, "facilitator", kind="facilitator"
+    )
 
 
 def test_facilitator_cannot_use_adopter_corrections() -> None:
@@ -494,6 +510,67 @@ async def test_facilitator_transition_new_to_ready(session: AsyncSession) -> Non
         actor_role="adoption_manager",
     )
     assert contact.facilitator_status == "ready"
+
+
+async def test_correction_adopter_new_to_draft(session: AsyncSession) -> None:
+    # An adopter that arrived incomplete (landed in 'new' from intake) can be
+    # re-marked 'draft' by an adoption_manager.
+    contact = await _make_contact(session, adopter_status="new")
+
+    updated = await transition_adopter(
+        session,
+        contact,
+        to_state=AdopterState.DRAFT,
+        actor_b2c_sub=ACTOR_SUB,
+        actor_role="adoption_manager",
+    )
+    assert updated.adopter_status == "draft"
+
+    reclassified = (
+        (
+            await session.execute(
+                select(Outbox).where(
+                    Outbox.event_type == "jp.adopt.v1.contact.reclassified"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mine = [
+        r for r in reclassified
+        if r.payload_json.get("contact_id") == str(contact.id)
+    ]
+    assert len(mine) == 1
+    assert mine[0].payload_json["to_state"] == "draft"
+
+
+async def test_correction_to_draft_blocked_for_facilitator_role(
+    session: AsyncSession,
+) -> None:
+    contact = await _make_contact(session, adopter_status="new")
+    with pytest.raises(RoleNotPermittedError):
+        await transition_adopter(
+            session,
+            contact,
+            to_state=AdopterState.DRAFT,
+            actor_b2c_sub=ACTOR_SUB,
+            actor_role="facilitator",
+        )
+
+
+async def test_correction_facilitator_ready_to_draft(
+    session: AsyncSession,
+) -> None:
+    contact = await _make_contact(session, facilitator_status="ready")
+    updated = await transition_facilitator(
+        session,
+        contact,
+        to_state=FacilitatorState.DRAFT,
+        actor_b2c_sub=ACTOR_SUB,
+        actor_role="adoption_manager",
+    )
+    assert updated.facilitator_status == "draft"
 
 
 async def test_correction_facilitator_ready_to_not_ready(
