@@ -51,6 +51,10 @@ type Activity =
   paths["/v1/contacts/{contact_id}/activity"]["get"]["responses"]["200"]["content"]["application/json"];
 type Enrollments =
   paths["/v1/contacts/{contact_id}/enrollments"]["get"]["responses"]["200"]["content"]["application/json"];
+type Interests =
+  paths["/v1/contacts/{contact_id}/interests"]["get"]["responses"]["200"]["content"]["application/json"];
+type FpgResults =
+  paths["/v1/fpgs"]["get"]["responses"]["200"]["content"]["application/json"];
 type Profile = NonNullable<Contact["profile"]>;
 
 const INPUT = "w-full rounded border border-slate-300 px-2 py-1 text-sm";
@@ -214,11 +218,173 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="text-sm text-slate-400">{children}</p>;
 }
 
+function FpgInterestsTile({
+  contactId,
+  interests,
+  onChange,
+}: {
+  contactId: string;
+  interests: Interests["items"];
+  onChange: () => Promise<void> | void;
+}) {
+  const ctx = useApiContext();
+  const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<FpgResults["items"]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Debounced FPG typeahead.
+  useEffect(() => {
+    if (!adding) return;
+    const term = query.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    let ignore = false;
+    const t = setTimeout(() => {
+      apiFetch<FpgResults>(
+        ctx,
+        `/v1/fpgs?q=${encodeURIComponent(term)}&limit=15`,
+      )
+        .then((r) => !ignore && setResults(r?.items ?? []))
+        .catch(() => !ignore && setResults([]));
+    }, 250);
+    return () => {
+      ignore = true;
+      clearTimeout(t);
+    };
+  }, [ctx, query, adding]);
+
+  const add = async (peopleId3: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch(ctx, `/v1/contacts/${contactId}/interests`, {
+        method: "POST",
+        body: { people_id3: peopleId3 },
+      });
+      setQuery("");
+      setResults([]);
+      setAdding(false);
+      await onChange();
+    } catch (e) {
+      setErr(formatApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (interestId: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await apiFetch<void>(
+        ctx,
+        `/v1/contacts/${contactId}/interests/${interestId}`,
+        { method: "DELETE" },
+      );
+      await onChange();
+    } catch (e) {
+      setErr(formatApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Tile
+      title="People-group interests"
+      count={interests.length}
+      action={
+        <button
+          type="button"
+          className={BTN}
+          disabled={busy}
+          onClick={() => {
+            setAdding((v) => !v);
+            setErr(null);
+          }}
+        >
+          {adding ? "Cancel" : "+ Add FPG"}
+        </button>
+      }
+    >
+      {interests.length ? (
+        <ul className="space-y-1.5 text-sm">
+          {interests.map((it) => (
+            <li key={it.id} className="flex items-center gap-2">
+              <span className="text-slate-800">
+                {it.people_id3_name ?? "Unknown people group"}
+              </span>
+              {it.people_id3_country ? (
+                <CodeChip>{it.people_id3_country}</CodeChip>
+              ) : null}
+              {it.people_id3 ? <CodeChip>{it.people_id3}</CodeChip> : null}
+              <button
+                type="button"
+                className="ml-auto text-xs text-rose-600 hover:text-rose-800 disabled:opacity-40"
+                disabled={busy}
+                onClick={() => remove(it.id)}
+                aria-label="Remove people group"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Empty>No FPG selections yet.</Empty>
+      )}
+
+      {adding ? (
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+          <input
+            autoFocus
+            className={INPUT}
+            placeholder="Search people groups by name or ROP3…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {results.length ? (
+            <ul className="max-h-48 overflow-auto rounded border border-slate-200 text-sm">
+              {results.map((f) => (
+                <li key={f.people_id3}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-slate-50 disabled:opacity-40"
+                    disabled={busy}
+                    onClick={() => add(f.people_id3)}
+                  >
+                    <span className="text-slate-800">{f.name}</span>
+                    {f.country_code ? <CodeChip>{f.country_code}</CodeChip> : null}
+                    <CodeChip>{f.people_id3}</CodeChip>
+                    {f.frontier ? (
+                      <span className="ml-auto text-[11px] text-orange-600">
+                        FPG
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : query.trim() ? (
+            <p className="text-xs text-slate-400">No matches.</p>
+          ) : null}
+        </div>
+      ) : null}
+      {err ? <p className="mt-2 text-xs text-rose-600">{err}</p> : null}
+    </Tile>
+  );
+}
+
 export function ContactRecord({ contactId }: { contactId: string }) {
   const ctx = useApiContext();
   const router = useRouter();
   const [contact, setContact] = useState<Contact | null>(null);
   const [matches, setMatches] = useState<Matches | null>(null);
+  const [interestsData, setInterestsData] = useState<Interests | null>(null);
   const [transitions, setTransitions] = useState<Transitions | null>(null);
   const [activity, setActivity] = useState<Activity | null>(null);
   const [enrollments, setEnrollments] = useState<Enrollments | null>(null);
@@ -257,12 +423,13 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [c, m, t, a, en] = await Promise.all([
+      const [c, m, t, a, en, ints] = await Promise.all([
         apiFetch<Contact>(ctx, `/v1/contacts/${contactId}`),
         apiFetch<Matches>(ctx, `/v1/contacts/${contactId}/matches`),
         apiFetch<Transitions>(ctx, `/v1/contacts/${contactId}/transitions`),
         apiFetch<Activity>(ctx, `/v1/contacts/${contactId}/activity`),
         apiFetch<Enrollments>(ctx, `/v1/contacts/${contactId}/enrollments`),
+        apiFetch<Interests>(ctx, `/v1/contacts/${contactId}/interests`),
       ]);
       if (!c) {
         setErr("Contact not found");
@@ -270,6 +437,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       }
       setContact(c);
       setMatches(m ?? null);
+      setInterestsData(ints ?? null);
       setTransitions(t ?? null);
       setActivity(a ?? null);
       setEnrollments(en ?? null);
@@ -525,13 +693,10 @@ export function ContactRecord({ contactId }: { contactId: string }) {
   const profile = contact.profile;
   const partyKind = isAdopter ? "adopter" : "facilitator";
 
-  const interestMap = new Map<string, { name: string | null; country: string | null }>();
-  for (const m of matches?.items ?? []) {
-    if (m.people_id3 && !interestMap.has(m.people_id3)) {
-      interestMap.set(m.people_id3, { name: m.people_id3_name ?? null, country: m.people_id3_country ?? null });
-    }
-  }
-  const interests = [...interestMap.entries()];
+  // The contact's actual FPG selections (adopter_interest), independent of
+  // whether they've been matched. Was previously derived from matches only, so
+  // an un-matched selection looked "lost."
+  const interests = interestsData?.items ?? [];
 
   function renderInput([key, , input]: FieldDef) {
     const k = key as string;
@@ -680,21 +845,11 @@ export function ContactRecord({ contactId }: { contactId: string }) {
       {/* Read tiles */}
       <div className="grid gap-4 lg:grid-cols-2">
         {isAdopter ? (
-          <Tile title="People-group interests" count={interests.length}>
-            {interests.length ? (
-              <ul className="space-y-1.5 text-sm">
-                {interests.map(([peopleId3, info]) => (
-                  <li key={peopleId3} className="flex items-center gap-2">
-                    <span className="text-slate-800">{info.name ?? "Unknown people group"}</span>
-                    {info.country ? <CodeChip>{info.country}</CodeChip> : null}
-                    <CodeChip>{peopleId3}</CodeChip>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <Empty>No FPG selections yet.</Empty>
-            )}
-          </Tile>
+          <FpgInterestsTile
+            contactId={contactId}
+            interests={interests}
+            onChange={load}
+          />
         ) : null}
 
         <Tile title="Matches" count={matches?.total ?? 0}>

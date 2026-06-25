@@ -233,6 +233,33 @@ class ContactMatchesResponse(BaseModel):
     total: int
 
 
+class ContactInterestRow(BaseModel):
+    """A people-group (FPG) selection on the contact — the adopter_interest
+    row, independent of whether it has been matched yet."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    people_id3: str | None
+    people_id3_name: str | None = None
+    people_id3_country: str | None = None
+    engagement_status: str | None = None
+    created_at: datetime
+
+
+class ContactInterestsResponse(BaseModel):
+    items: list[ContactInterestRow]
+    total: int
+
+
+class ContactInterestCreate(BaseModel):
+    """Add an FPG selection to a contact by its people_id3."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    people_id3: str = Field(min_length=1, max_length=32)
+
+
 class ContactTransitionRow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

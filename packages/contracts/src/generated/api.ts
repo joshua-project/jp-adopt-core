@@ -162,6 +162,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contacts/{contact_id}/interests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Contact Interests
+         * @description The contact's FPG (people-group) selections — the adopter_interest rows,
+         *     resolved to people-group name/country. Independent of matches: an FPG a
+         *     contact selected but hasn't been matched on still shows here. (Previously
+         *     the UI derived people-group interests from matches only, so un-matched
+         *     selections were invisible.)
+         */
+        get: operations["get_contact_interests_v1_contacts__contact_id__interests_get"];
+        put?: never;
+        /**
+         * Add Contact Interest
+         * @description Add an FPG selection to a contact. Locally-created (source_id NULL) so
+         *     the DT re-import never clobbers it.
+         */
+        post: operations["add_contact_interest_v1_contacts__contact_id__interests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contacts/{contact_id}/interests/{interest_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Contact Interest
+         * @description Remove an FPG selection. Refuses if a match references it (the match
+         *     must be sent back/decided first) — the FK would block it anyway, but we
+         *     return a clean 409 instead of a 500.
+         */
+        delete: operations["remove_contact_interest_v1_contacts__contact_id__interests__interest_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/contacts/{contact_id}/transitions": {
         parameters: {
             query?: never;
@@ -1191,6 +1242,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fpgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Fpgs */
+        get: operations["search_fpgs_v1_fpgs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1508,6 +1576,46 @@ export interface components {
         ContactEnrollmentsResponse: {
             /** Items */
             items: components["schemas"]["ContactEnrollmentRow"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ContactInterestCreate
+         * @description Add an FPG selection to a contact by its people_id3.
+         */
+        ContactInterestCreate: {
+            /** People Id3 */
+            people_id3: string;
+        };
+        /**
+         * ContactInterestRow
+         * @description A people-group (FPG) selection on the contact — the adopter_interest
+         *     row, independent of whether it has been matched yet.
+         */
+        ContactInterestRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** People Id3 */
+            people_id3: string | null;
+            /** People Id3 Name */
+            people_id3_name?: string | null;
+            /** People Id3 Country */
+            people_id3_country?: string | null;
+            /** Engagement Status */
+            engagement_status?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ContactInterestsResponse */
+        ContactInterestsResponse: {
+            /** Items */
+            items: components["schemas"]["ContactInterestRow"][];
             /** Total */
             total: number;
         };
@@ -2141,6 +2249,22 @@ export interface components {
             name?: string | null;
             /** Country Code */
             country_code?: string | null;
+        };
+        /** FpgListResponse */
+        FpgListResponse: {
+            /** Items */
+            items: components["schemas"]["FpgRead"][];
+        };
+        /** FpgRead */
+        FpgRead: {
+            /** People Id3 */
+            people_id3: string;
+            /** Name */
+            name: string;
+            /** Country Code */
+            country_code?: string | null;
+            /** Frontier */
+            frontier: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3039,6 +3163,108 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContactMatchesResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_contact_interests_v1_contacts__contact_id__interests_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactInterestsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_contact_interest_v1_contacts__contact_id__interests_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactInterestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContactInterestRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_contact_interest_v1_contacts__contact_id__interests__interest_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contact_id: string;
+                interest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -5321,6 +5547,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManualContactResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_fpgs_v1_fpgs_get: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive substring of name or people_id3. */
+                q?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FpgListResponse"];
                 };
             };
             /** @description Validation Error */

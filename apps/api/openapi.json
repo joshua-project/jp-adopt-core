@@ -536,6 +536,197 @@
         }
       }
     },
+    "/v1/contacts/{contact_id}/interests": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Get Contact Interests",
+        "description": "The contact's FPG (people-group) selections \u2014 the adopter_interest rows,\nresolved to people-group name/country. Independent of matches: an FPG a\ncontact selected but hasn't been matched on still shows here. (Previously\nthe UI derived people-group interests from matches only, so un-matched\nselections were invisible.)",
+        "operationId": "get_contact_interests_v1_contacts__contact_id__interests_get",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactInterestsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Add Contact Interest",
+        "description": "Add an FPG selection to a contact. Locally-created (source_id NULL) so\nthe DT re-import never clobbers it.",
+        "operationId": "add_contact_interest_v1_contacts__contact_id__interests_post",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactInterestCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactInterestRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{contact_id}/interests/{interest_id}": {
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Remove Contact Interest",
+        "description": "Remove an FPG selection. Refuses if a match references it (the match\nmust be sent back/decided first) \u2014 the FK would block it anyway, but we\nreturn a clean 409 instead of a 500.",
+        "operationId": "remove_contact_interest_v1_contacts__contact_id__interests__interest_id__delete",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "interest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Interest Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contacts/{contact_id}/transitions": {
       "get": {
         "tags": [
@@ -4692,6 +4883,85 @@
           }
         }
       }
+    },
+    "/v1/fpgs": {
+      "get": {
+        "tags": [
+          "fpgs"
+        ],
+        "summary": "Search Fpgs",
+        "operationId": "search_fpgs_v1_fpgs_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of name or people_id3.",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of name or people_id3."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FpgListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5520,6 +5790,110 @@
           "total"
         ],
         "title": "ContactEnrollmentsResponse"
+      },
+      "ContactInterestCreate": {
+        "properties": {
+          "people_id3": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "People Id3"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "people_id3"
+        ],
+        "title": "ContactInterestCreate",
+        "description": "Add an FPG selection to a contact by its people_id3."
+      },
+      "ContactInterestRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "people_id3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "People Id3"
+          },
+          "people_id3_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "People Id3 Name"
+          },
+          "people_id3_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "People Id3 Country"
+          },
+          "engagement_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engagement Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "people_id3",
+          "created_at"
+        ],
+        "title": "ContactInterestRow",
+        "description": "A people-group (FPG) selection on the contact \u2014 the adopter_interest\nrow, independent of whether it has been matched yet."
+      },
+      "ContactInterestsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContactInterestRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ContactInterestsResponse"
       },
       "ContactListResponse": {
         "properties": {
@@ -7731,6 +8105,56 @@
         ],
         "title": "FpgCoverageRead",
         "description": "One row in the `facilitator_fpg_coverage` join table, with the\nFPG name pre-resolved so the UI doesn't have to round-trip."
+      },
+      "FpgListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FpgRead"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "FpgListResponse"
+      },
+      "FpgRead": {
+        "properties": {
+          "people_id3": {
+            "type": "string",
+            "title": "People Id3"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "frontier": {
+            "type": "boolean",
+            "title": "Frontier"
+          }
+        },
+        "type": "object",
+        "required": [
+          "people_id3",
+          "name",
+          "frontier"
+        ],
+        "title": "FpgRead"
       },
       "HTTPValidationError": {
         "properties": {

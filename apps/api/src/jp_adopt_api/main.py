@@ -16,6 +16,7 @@ from jp_adopt_api.routers import (
     contacts,
     drips,
     etl_admin,
+    fpgs,
     health,
     intake,
     manual_contacts,
@@ -117,6 +118,7 @@ app.include_router(etl_admin.router)
 app.include_router(drips.router)
 app.include_router(suppression.router)
 app.include_router(manual_contacts.router)
+app.include_router(fpgs.router)
 
 
 def _custom_openapi() -> dict[str, object]:
