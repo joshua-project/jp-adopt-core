@@ -604,6 +604,7 @@ export function ContactRecord({ contactId }: { contactId: string }) {
             </span>
             <StatusBadge status={status ?? undefined} kind={statusKind} />
             {contact.email_normalized ? <span>{contact.email_normalized}</span> : null}
+            {contact.phone ? <span>{contact.phone}</span> : null}
             {contact.country_code ? <CodeChip>{contact.country_code}</CodeChip> : null}
             {(contact.language_codes ?? []).map((l) => <CodeChip key={l}>{l}</CodeChip>)}
           </div>

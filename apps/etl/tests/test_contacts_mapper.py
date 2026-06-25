@@ -107,12 +107,12 @@ def test_status_sourced_from_overall_status_not_vestigial_field() -> None:
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_OVERALL_STATUS: "active",  # → matched
+            META_KEY_OVERALL_STATUS: "active",  # → engaged (no adopter matched in DT)
             "adopter_status": "new",  # vestigial, must be ignored
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "matched"
+    assert kwargs["adopter_status"] == "engaged"
 
 
 def test_facilitator_status_from_overall_status() -> None:

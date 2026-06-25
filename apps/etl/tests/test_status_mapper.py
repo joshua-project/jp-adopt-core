@@ -25,6 +25,9 @@ from jp_adopt_etl.mappers.status import (
         ("matched", "matched"),
         ("active", "engaged"),
         ("inactive", "do_not_engage"),
+        # 'unassignable' = needs an FPG, not opted out.
+        ("unassignable", "potential_adopter"),
+        ("closed", "do_not_engage"),
     ],
 )
 def test_adopter_status_known_values(source: str, expected: str) -> None:
@@ -96,10 +99,12 @@ def test_adopter_and_facilitator_diverge_on_same_source() -> None:
     assert map_facilitator_status("engaged", mode="dry_run") == "not_ready"
 
 
-def test_unassignable_maps_to_do_not_engage_both_sides() -> None:
-    # DT's overall_status='unassignable' is the real lifecycle source (the
-    # dedicated adopter/facilitator_status postmeta are vestigial 'new').
-    assert map_adopter_status("unassignable", mode="dry_run") == "do_not_engage"
+def test_unassignable_maps_to_needs_fpg_for_adopters() -> None:
+    # DT 'unassignable' = couldn't assign an FPG → the adopter still NEEDS one,
+    # not that they opted out. Adopters become 'potential_adopter' ("Needs FPG
+    # selection"). Facilitators have no needs-FPG state, so they stay
+    # do_not_engage.
+    assert map_adopter_status("unassignable", mode="dry_run") == "potential_adopter"
     assert map_facilitator_status("unassignable", mode="dry_run") == "do_not_engage"
 
 

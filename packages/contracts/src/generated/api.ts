@@ -1760,6 +1760,8 @@ export interface components {
             version: number;
             /** Email Normalized */
             email_normalized: string | null;
+            /** Phone */
+            phone: string | null;
             /** Country Code */
             country_code: string | null;
             /** Language Codes */
