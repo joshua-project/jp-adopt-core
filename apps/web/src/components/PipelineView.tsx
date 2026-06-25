@@ -92,6 +92,9 @@ export function PipelineView({
   // Raw input value vs the debounced value that actually drives fetches.
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
+  // Creation-date range filter (YYYY-MM-DD; empty = unbounded).
+  const [createdAfter, setCreatedAfter] = useState("");
+  const [createdBefore, setCreatedBefore] = useState("");
 
   const statusParam =
     partyKind === "adopter" ? "adopter_status" : "facilitator_status";
@@ -121,6 +124,8 @@ export function PipelineView({
           qs.append(statusParam, s);
         }
         if (debouncedQ) qs.set("q", debouncedQ);
+        if (createdAfter) qs.set("created_after", createdAfter);
+        if (createdBefore) qs.set("created_before", createdBefore);
         const [listResp, countsResp] = await Promise.all([
           apiFetch<ContactsResponse>(ctx, `/v1/contacts?${qs.toString()}`, {
             signal,
@@ -157,7 +162,8 @@ export function PipelineView({
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [ctx, partyKind, selectedKey, statusParam, debouncedQ], // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ctx, partyKind, selectedKey, statusParam, debouncedQ, createdAfter, createdBefore],
   );
 
   // Debounce the raw search input into the value that drives fetches.
@@ -204,20 +210,58 @@ export function PipelineView({
         </div>
       </header>
 
-      <label className="block">
-        <span className="text-sm font-medium text-slate-700">
-          Search by name or email
-        </span>
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search name or email…"
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block min-w-[16rem] flex-1">
+          <span className="text-sm font-medium text-slate-700">
+            Search by name or email
+          </span>
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search name or email…"
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">
+            Created from
+          </span>
+          <input
+            type="date"
+            value={createdAfter}
+            max={createdBefore || undefined}
+            onChange={(e) => setCreatedAfter(e.target.value)}
+            className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">
+            Created to
+          </span>
+          <input
+            type="date"
+            value={createdBefore}
+            min={createdAfter || undefined}
+            onChange={(e) => setCreatedBefore(e.target.value)}
+            className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        {createdAfter || createdBefore ? (
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+            onClick={() => {
+              setCreatedAfter("");
+              setCreatedBefore("");
+            }}
+          >
+            Clear dates
+          </button>
+        ) : null}
+      </div>
 
       <StatusFilter
         statuses={statuses}

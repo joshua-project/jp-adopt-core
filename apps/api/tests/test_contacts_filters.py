@@ -530,3 +530,68 @@ def test_status_counts_rejects_unknown_party_kind() -> None:
             headers=_auth_headers(),
         )
         assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_created_date_filter_and_newest_first(
+    session: AsyncSession,
+) -> None:
+    """created_after / created_before scope by creation date, and results
+    come back newest-first."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    app = __import__("jp_adopt_api.main", fromlist=["app"]).app
+    old = await _make_contact(
+        session, party_kind="adopter", adopter_status="new", display_name="Old One"
+    )
+    mid = await _make_contact(
+        session, party_kind="adopter", adopter_status="new", display_name="Mid One"
+    )
+    new = await _make_contact(
+        session, party_kind="adopter", adopter_status="new", display_name="New One"
+    )
+    await session.execute(
+        update(Contact).where(Contact.id == old.id).values(
+            created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+    )
+    await session.execute(
+        update(Contact).where(Contact.id == mid.id).values(
+            created_at=datetime(2026, 6, 1, tzinfo=UTC)
+        )
+    )
+    await session.execute(
+        update(Contact).where(Contact.id == new.id).values(
+            created_at=datetime(2026, 6, 20, tzinfo=UTC)
+        )
+    )
+    await session.commit()
+    try:
+        with TestClient(app) as client:
+            r = client.get(
+                "/v1/contacts?created_after=2026-05-01&limit=500",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, r.text
+            ours = [
+                i["display_name"]
+                for i in r.json()["items"]
+                if i["display_name"] in {"Old One", "Mid One", "New One"}
+            ]
+            assert "Old One" not in ours
+            assert ours == ["New One", "Mid One"]  # newest first
+
+            r2 = client.get(
+                "/v1/contacts?created_before=2026-05-01&limit=500",
+                headers=_auth_headers(),
+            )
+            ours2 = [
+                i["display_name"]
+                for i in r2.json()["items"]
+                if i["display_name"] in {"Old One", "Mid One", "New One"}
+            ]
+            assert ours2 == ["Old One"]
+    finally:
+        await _cleanup_filter_test_contacts(session)

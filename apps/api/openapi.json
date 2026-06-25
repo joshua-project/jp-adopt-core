@@ -171,6 +171,44 @@
             "description": "Case-insensitive substring search over display_name OR email_normalized, across the whole dataset. Empty/whitespace is treated as absent."
           },
           {
+            "name": "created_after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only contacts created on or after this date (UTC).",
+              "title": "Created After"
+            },
+            "description": "Only contacts created on or after this date (UTC)."
+          },
+          {
+            "name": "created_before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only contacts created on or before this date (UTC).",
+              "title": "Created Before"
+            },
+            "description": "Only contacts created on or before this date (UTC)."
+          },
+          {
             "name": "authorization",
             "in": "header",
             "required": false,
