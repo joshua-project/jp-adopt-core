@@ -4,7 +4,14 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # ── Adoption profile (U9): contact_profile field enums ─────────────────────
 # Option sets mirror dt-adoption-fields/custom-fields.php + migration 0012.
@@ -117,6 +124,10 @@ class ContactRead(BaseModel):
     # local_modified_after_import) are intentionally NOT exposed.
     version: int
     email_normalized: str | None
+    # Primary phone (migrated from DT comm channels). It was stored on the
+    # Contact but never exposed by this schema, so phone numbers appeared
+    # "missing" in the UI even though the data was imported.
+    phone: str | None
     country_code: str | None
     language_codes: list[str] | None
     origin: str | None

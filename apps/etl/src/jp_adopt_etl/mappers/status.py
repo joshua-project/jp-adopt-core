@@ -37,11 +37,13 @@ ADOPTER_STATUS_MAP: Final[dict[str, str]] = {
     # DT 'active', 0 had a real match). Map to core 'engaged', not 'matched'.
     "active": "engaged",
     "inactive": "do_not_engage",
-    # overall_status is the authoritative DT lifecycle source (see
-    # .dt-inspection/decisions.md). 'unassignable' = closed / not pursued.
-    "unassignable": "do_not_engage",
-    # 'closed' surfaced in DT production — same terminal-not-pursuing
-    # semantics as 'unassignable' (6 adopter rows in prod at cutover).
+    # 'unassignable' means DT could not assign the adopter an FPG — i.e. the
+    # adopter still NEEDS a people group, not that they opted out. Map to
+    # 'potential_adopter' ("Needs FPG selection"), NOT do_not_engage. (Verified
+    # 2026-06-24 against prod + DT: the contacts Amy flagged as wrongly "Opted
+    # out" were DT 'unassignable' adopters who need an FPG.)
+    "unassignable": "potential_adopter",
+    # 'closed' surfaced in DT production — genuinely terminal / not pursued.
     "closed": "do_not_engage",
 }
 
