@@ -129,6 +129,51 @@ def test_facilitator_status_from_overall_status() -> None:
     assert kwargs["facilitator_status"] == "ready"
 
 
+def test_draft_post_status_maps_adopter_to_draft() -> None:
+    # DT marks incomplete contacts with WordPress post_status='draft'; the
+    # overall_status postmeta is hidden from staff and typically unset.
+    post = _post(post_status="draft")
+    meta = _meta(**{META_KEY_PARTY_KIND: "adopter"})
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "draft"
+
+
+def test_draft_post_status_overrides_default_new() -> None:
+    post = _post(post_status="draft")
+    meta = _meta(
+        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "new"}
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "draft"
+
+
+def test_draft_post_status_does_not_demote_advanced_contact() -> None:
+    # A draft (unpublished) post whose overall_status already advanced past
+    # 'new' keeps the advanced status — we don't demote it to draft.
+    post = _post(post_status="draft")
+    meta = _meta(
+        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "active"}
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "engaged"
+
+
+def test_draft_post_status_maps_facilitator_to_draft() -> None:
+    post = _post(post_status="draft")
+    meta = _meta(**{META_KEY_PARTY_KIND: "facilitator"})
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["facilitator_status"] == "draft"
+
+
+def test_published_post_status_unaffected() -> None:
+    post = _post(post_status="publish")
+    meta = _meta(
+        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "new"}
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "new"
+
+
 def test_map_contact_falls_back_to_post_title_when_meta_name_missing() -> None:
     post = _post(post_title="Post Title Fallback")
     meta = _meta(**{META_KEY_PARTY_KIND: "adopter"})
