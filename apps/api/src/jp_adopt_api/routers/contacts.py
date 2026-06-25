@@ -37,6 +37,9 @@ from jp_adopt_api.schemas import (
     ContactEnrollmentEventRow,
     ContactEnrollmentRow,
     ContactEnrollmentsResponse,
+    ContactInterestCreate,
+    ContactInterestRow,
+    ContactInterestsResponse,
     ContactListResponse,
     ContactMatchesResponse,
     ContactMatchRow,
@@ -379,6 +382,157 @@ async def get_contact_matches(
         for (m, people_id3, name, fpg_name, fpg_country) in rows
     ]
     return ContactMatchesResponse(items=items, total=total)
+
+
+@router.get("/{contact_id}/interests", response_model=ContactInterestsResponse)
+async def get_contact_interests(
+    contact_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactInterestsResponse:
+    """The contact's FPG (people-group) selections — the adopter_interest rows,
+    resolved to people-group name/country. Independent of matches: an FPG a
+    contact selected but hasn't been matched on still shows here. (Previously
+    the UI derived people-group interests from matches only, so un-matched
+    selections were invisible.)"""
+    await _require_contact(db, contact_id)
+    rows = (
+        await db.execute(
+            select(
+                AdopterInterest.id,
+                AdopterInterest.people_id3,
+                Fpg.name,
+                Fpg.country_code,
+                AdopterInterest.engagement_status,
+                AdopterInterest.created_at,
+            )
+            .outerjoin(Fpg, Fpg.people_id3 == AdopterInterest.people_id3)
+            .where(AdopterInterest.contact_id == contact_id)
+            .order_by(AdopterInterest.created_at.asc())
+        )
+    ).all()
+    items = [
+        ContactInterestRow(
+            id=r.id,
+            people_id3=r.people_id3,
+            people_id3_name=r.name,
+            people_id3_country=r.country_code,
+            engagement_status=r.engagement_status,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+    return ContactInterestsResponse(items=items, total=len(items))
+
+
+@router.post(
+    "/{contact_id}/interests",
+    response_model=ContactInterestRow,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_contact_interest(
+    contact_id: uuid.UUID,
+    body: ContactInterestCreate,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> ContactInterestRow:
+    """Add an FPG selection to a contact. Locally-created (source_id NULL) so
+    the DT re-import never clobbers it."""
+    await _require_contact(db, contact_id)
+    fpg = (
+        await db.execute(select(Fpg).where(Fpg.people_id3 == body.people_id3))
+    ).scalar_one_or_none()
+    if fpg is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "unknown_fpg",
+                "message": f"No people group with people_id3 {body.people_id3!r}",
+            },
+        )
+    existing = (
+        await db.execute(
+            select(AdopterInterest.id).where(
+                AdopterInterest.contact_id == contact_id,
+                AdopterInterest.people_id3 == body.people_id3,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "interest_exists",
+                "message": "Contact already has this people group selected",
+            },
+        )
+    interest = AdopterInterest(
+        id=uuid.uuid4(),
+        contact_id=contact_id,
+        people_id3=body.people_id3,
+        source_system="local",
+    )
+    db.add(interest)
+    await db.commit()
+    await db.refresh(interest)
+    return ContactInterestRow(
+        id=interest.id,
+        people_id3=interest.people_id3,
+        people_id3_name=fpg.name,
+        people_id3_country=fpg.country_code,
+        engagement_status=interest.engagement_status,
+        created_at=interest.created_at,
+    )
+
+
+@router.delete(
+    "/{contact_id}/interests/{interest_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_contact_interest(
+    contact_id: uuid.UUID,
+    interest_id: uuid.UUID,
+    db: DbSession,
+    _user: Annotated[tuple[object, frozenset[str]], Depends(_STAFF_DEP)],
+) -> None:
+    """Remove an FPG selection. Refuses if a match references it (the match
+    must be sent back/decided first) — the FK would block it anyway, but we
+    return a clean 409 instead of a 500."""
+    await _require_contact(db, contact_id)
+    interest = (
+        await db.execute(
+            select(AdopterInterest).where(
+                AdopterInterest.id == interest_id,
+                AdopterInterest.contact_id == contact_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if interest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "interest_not_found", "message": "No such selection"},
+        )
+    has_match = (
+        await db.execute(
+            select(Match.id)
+            .where(Match.adopter_interest_id == interest_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if has_match is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "interest_has_match",
+                "message": (
+                    "This selection has a match; decide/send back the match "
+                    "before removing the people group"
+                ),
+            },
+        )
+    await db.delete(interest)
+    await db.commit()
+    return None
 
 
 @router.get("/{contact_id}/transitions", response_model=ContactTransitionsResponse)
