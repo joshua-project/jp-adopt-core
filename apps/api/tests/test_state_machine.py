@@ -130,6 +130,29 @@ def test_available_transitions_for_facilitator_role() -> None:
     assert AdopterState.DO_NOT_ENGAGE not in options
 
 
+def test_adoption_manager_can_correct_engaged_backward() -> None:
+    # Operator corrections: an engaged contact that was mis-classified can be
+    # walked back to an earlier funnel state (e.g. still needs an FPG).
+    options = available_transitions(
+        AdopterState.ENGAGED, "adoption_manager", kind="adopter"
+    )
+    assert AdopterState.POTENTIAL_ADOPTER in options
+    assert AdopterState.CONTACTED in options
+    assert AdopterState.NEW in options
+    # Forward + opt-out still available.
+    assert AdopterState.MATCHED in options
+    assert AdopterState.DO_NOT_ENGAGE in options
+
+
+def test_facilitator_cannot_use_adopter_corrections() -> None:
+    options = available_transitions(
+        AdopterState.ENGAGED, "facilitator", kind="adopter"
+    )
+    # Corrections are adoption_manager/admin only.
+    assert AdopterState.POTENTIAL_ADOPTER not in options
+    assert AdopterState.CONTACTED not in options
+
+
 # ---------------------------------------------------------------------------
 # Async DB-backed transition tests.
 # ---------------------------------------------------------------------------
@@ -186,6 +209,56 @@ async def test_happy_path_new_to_contacted(session: AsyncSession) -> None:
     assert len(mine) == 1
     assert mine[0].payload_json["from_state"] == "new"
     assert mine[0].payload_json["to_state"] == "contacted"
+
+
+async def test_correction_engaged_to_potential_adopter(
+    session: AsyncSession,
+) -> None:
+    # Amy's case: a contact imported as 'engaged' that actually still needs an
+    # FPG can be corrected back to 'potential_adopter' by an adoption_manager.
+    contact = await _make_contact(session, adopter_status="engaged")
+
+    updated = await transition_adopter(
+        session,
+        contact,
+        to_state=AdopterState.POTENTIAL_ADOPTER,
+        actor_b2c_sub=ACTOR_SUB,
+        actor_role="adoption_manager",
+    )
+    assert updated.adopter_status == "potential_adopter"
+
+    # Emits the dedicated reclassified event (NOT a normal entry event), so no
+    # drip campaign or intake side effect is triggered by a correction.
+    reclassified = (
+        (
+            await session.execute(
+                select(Outbox).where(
+                    Outbox.event_type == "jp.adopt.v1.contact.reclassified"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mine = [
+        r for r in reclassified
+        if r.payload_json.get("contact_id") == str(contact.id)
+    ]
+    assert len(mine) == 1
+    assert mine[0].payload_json["from_state"] == "engaged"
+    assert mine[0].payload_json["to_state"] == "potential_adopter"
+
+
+async def test_correction_blocked_for_facilitator(session: AsyncSession) -> None:
+    contact = await _make_contact(session, adopter_status="engaged")
+    with pytest.raises(RoleNotPermittedError):
+        await transition_adopter(
+            session,
+            contact,
+            to_state=AdopterState.POTENTIAL_ADOPTER,
+            actor_b2c_sub=ACTOR_SUB,
+            actor_role="facilitator",
+        )
 
 
 async def test_happy_path_matched_to_sent_back_with_reason(
