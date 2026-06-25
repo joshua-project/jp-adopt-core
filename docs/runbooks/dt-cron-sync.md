@@ -18,8 +18,24 @@ manual `--mode dry_run` rehearsal documented in `docs/runbooks/dt-cutover.md`.
   the timezone choice doesn't affect business logic, but operators
   comparing log timestamps to scheduled fires should expect the cron's
   invocation timestamps in UTC.
-- **Command** `./run-cron.sh` → `dt-etl --table all --mode production
-  --watermark auto --verbose` (see `apps/etl/run-cron.sh`).
+- **Command** `./run-cron.sh` (see `apps/etl/run-cron.sh`), which runs two
+  steps in sequence:
+  1. `dt-etl --table all --mode production --watermark auto --verbose` — the
+     delta sync.
+  2. `dt-reconcile-track-a --apply` — Track A duplicate_email reconcile (see
+     below). Chained because the sync itself can *create* the conflicts it
+     resolves: DT permits the same email on multiple contacts but the new
+     system's partial unique index does not, so a synced DT contact whose
+     email is already owned by an existing (e.g. forms-intake) contact lands
+     with its email NULLed and a `duplicate_email` conflict recorded. Running
+     reconcile every hour keeps those from accumulating as unmerged duplicates.
+     `set -e` aborts before step 2 if the sync fails, so reconcile never runs
+     against a half-synced state.
+
+  Track A auto-merges only the high-confidence name+email matches
+  (DT-authoritative merge onto the email owner); ambiguous cases stay as
+  `duplicate_email` conflict rows for Amy to review. The run is idempotent —
+  an hour with no new conflicts is a no-op.
 - **Watermark** the previous successful run's `MIN(MAX(etl_run.source_max_modified_at))`
   per table. Resolved inside the orchestrator's
   `resolve_auto_watermark()`. First run after deploy: no prior

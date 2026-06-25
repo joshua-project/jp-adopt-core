@@ -25,10 +25,26 @@ PG_URL=$(echo "$DATABASE_URL" | sed \
     -e 's|^postgresql+asyncpg://|postgresql+psycopg2://|' \
     -e 's|^postgresql://|postgresql+psycopg2://|')
 
-exec dt-etl \
+dt-etl \
     --mysql-url "$DT_MYSQL_URL" \
     --postgres-url "$PG_URL" \
     --table all \
     --mode production \
     --watermark auto \
     --verbose
+
+# After the delta sync, reconcile the duplicate_email conflicts it just
+# recorded. DT allows the same email on multiple contacts; the new system's
+# partial unique index does not, so when a synced DT contact carries an email
+# already owned by an existing (e.g. forms-intake) contact, the importer keeps
+# the row but NULLs the colliding email and records a duplicate_email conflict.
+# Track A merges those DT-authoritatively onto the email owner — but only the
+# high-confidence name+email matches; ambiguous cases stay as conflict rows for
+# Amy to review. Running it here (a separate process, AFTER the outbox-suppressed
+# sync) means each merge's effect is captured in its own outbox summary.
+# Idempotent: a run with no new conflicts is a no-op. set -e above already
+# aborts before this on a failed sync, so we never reconcile a half-synced state.
+exec dt-reconcile-track-a \
+    --mysql-url "$DT_MYSQL_URL" \
+    --postgres-url "$PG_URL" \
+    --apply

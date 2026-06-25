@@ -26,6 +26,8 @@ dev = [
 # Console entry point exposed as ``uv run --package jp-adopt-etl dt-etl``.
 dt-etl = "jp_adopt_etl.orchestrator:main"
 forms-etl = "jp_adopt_etl.forms_orchestrator:main"
+# Track A duplicate_email reconcile — chained after dt-etl in run-cron.sh.
+dt-reconcile-track-a = "jp_adopt_etl.reconcile.track_a_duplicate_email:main"
 
 [build-system]
 requires = ["setuptools>=75"]
