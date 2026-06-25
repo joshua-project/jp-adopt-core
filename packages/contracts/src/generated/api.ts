@@ -2975,6 +2975,10 @@ export interface operations {
                 facilitator_status?: string[] | null;
                 /** @description Case-insensitive substring search over display_name OR email_normalized, across the whole dataset. Empty/whitespace is treated as absent. */
                 q?: string | null;
+                /** @description Only contacts created on or after this date (UTC). */
+                created_after?: string | null;
+                /** @description Only contacts created on or before this date (UTC). */
+                created_before?: string | null;
             };
             header?: {
                 authorization?: string | null;

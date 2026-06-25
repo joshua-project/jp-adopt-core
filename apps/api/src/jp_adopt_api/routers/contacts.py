@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -141,6 +141,14 @@ async def list_contacts(
             ),
         ),
     ] = None,
+    created_after: Annotated[
+        date | None,
+        Query(description="Only contacts created on or after this date (UTC)."),
+    ] = None,
+    created_before: Annotated[
+        date | None,
+        Query(description="Only contacts created on or before this date (UTC)."),
+    ] = None,
 ) -> ContactListResponse:
     # Validate status values against the known enum so a typo gets a 422
     # right away instead of silently returning an empty list.
@@ -196,9 +204,24 @@ async def list_contacts(
                 Contact.email_normalized.ilike(pattern, escape="\\"),
             )
         )
+    # Creation-date range (UTC). created_before is inclusive of the whole day,
+    # so compare against the start of the NEXT day.
+    if created_after is not None:
+        conditions.append(
+            Contact.created_at
+            >= datetime.combine(created_after, datetime.min.time(), tzinfo=UTC)
+        )
+    if created_before is not None:
+        conditions.append(
+            Contact.created_at
+            < datetime.combine(
+                created_before + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+            )
+        )
 
     count_stmt = select(func.count()).select_from(Contact)
-    list_stmt = select(Contact).order_by(Contact.created_at)
+    # Newest first so freshly-synced/created contacts surface at the top.
+    list_stmt = select(Contact).order_by(Contact.created_at.desc())
     for c in conditions:
         count_stmt = count_stmt.where(c)
         list_stmt = list_stmt.where(c)
