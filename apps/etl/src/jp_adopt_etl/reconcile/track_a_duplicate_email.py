@@ -90,6 +90,7 @@ from jp_adopt_api.models import (
     Contact,
     ContactAssignment,
     ContactProfile,
+    DuplicateReviewDecision,
     EtlRun,
     IdentityLink,
     Match,
@@ -251,6 +252,58 @@ def load_decisions(path: str | None) -> Decisions:
         for email, source_id in (raw.get("multi_keep") or {}).items()
         if email
     }
+    return Decisions(force_merge=force_merge, multi_keep=multi_keep)
+
+
+def load_decisions_from_db(pg_session: Session) -> Decisions:
+    """Build :class:`Decisions` from the ``duplicate_review_decision`` table.
+
+    This is the UI-driven path (the staff "Review duplicates" page writes
+    ``merge`` rows): the hourly cron passes ``--decisions-from-db`` so a
+    reviewer's call is applied on the next run with no operator file.
+
+    Mapping mirrors how :func:`plan_merges` consumes ``Decisions`` — and it is
+    cluster-aware, because the two override paths are NOT interchangeable:
+
+    * A **single-collision** email (one ``duplicate_email`` conflict) merges
+      only via ``force_merge`` — the ``is_chosen_keeper`` path requires a
+      cluster size > 1, so ``multi_keep`` alone would never fire.
+    * A **multi-collision** email (a shared inbox with several DT records)
+      must use ``multi_keep`` to pick the ONE keeper. Putting such an email in
+      ``force_merge`` would merge EVERY member of the cluster onto the owner —
+      exactly the shared-inbox false-merge the ambiguity gate exists to prevent.
+
+    So we look up each merge-decision email's conflict count and route it to the
+    right bucket.
+    """
+    rows = list(
+        pg_session.execute(
+            select(
+                DuplicateReviewDecision.email_normalized,
+                DuplicateReviewDecision.dt_source_id,
+            ).where(DuplicateReviewDecision.decision == "merge")
+        ).all()
+    )
+    if not rows:
+        return Decisions()
+
+    # Cluster size per email = how many duplicate_email conflicts share it.
+    cluster_counts: dict[str, int] = {}
+    for conflict in _load_conflicts(pg_session):
+        email = (conflict.source_value or {}).get("email_normalized")
+        if email:
+            cluster_counts[normalize_email(email)] = (
+                cluster_counts.get(normalize_email(email), 0) + 1
+            )
+
+    force_merge: set[str] = set()
+    multi_keep: dict[str, str] = {}
+    for email_raw, source_id in rows:
+        email = normalize_email(email_raw)
+        if cluster_counts.get(email, 0) > 1:
+            multi_keep[email] = source_id
+        else:
+            force_merge.add(email)
     return Decisions(force_merge=force_merge, multi_keep=multi_keep)
 
 
@@ -1137,6 +1190,7 @@ def reconcile(
     dt_reader: DtReader = _default_dt_reader,
     review_path: str | None = None,
     decisions: Decisions | None = None,
+    decisions_from_db: bool = False,
 ) -> ReconcileResult:
     """Plan + (in production) apply the DT-authoritative duplicate_email merge.
 
@@ -1147,7 +1201,13 @@ def reconcile(
     PRODUCTION (``mode='production'``, i.e. ``--apply``): applies every
     auto-mergeable plan inside one ``outbox_suppressed`` scope (single
     bulk_imported summary event), commits, and still emits the review list.
+
+    ``decisions_from_db`` (the cron path) loads reviewer overrides from the
+    ``duplicate_review_decision`` table when no explicit ``decisions`` are
+    passed — an empty table yields empty Decisions, so behavior is unchanged.
     """
+    if decisions is None and decisions_from_db:
+        decisions = load_decisions_from_db(pg_session)
     result = plan_merges(
         pg_session=pg_session,
         mysql_conn=mysql_conn,
@@ -1265,6 +1325,7 @@ def run(
     mode: Mode = "dry_run",
     review_path: str | None = None,
     decisions: Decisions | None = None,
+    decisions_from_db: bool = False,
 ) -> ReconcileResult:
     """Open both engines and reconcile. The MySQL engine is only
     ``.connect()``-ed; the gated reader does the actual queries. This is
@@ -1281,6 +1342,7 @@ def run(
                 mode=mode,
                 review_path=review_path,
                 decisions=decisions,
+                decisions_from_db=decisions_from_db,
             )
     finally:
         pg_engine.dispose()
@@ -1312,6 +1374,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             "fed back in so --apply honors reviewer calls."
         ),
     )
+    parser.add_argument(
+        "--decisions-from-db",
+        action="store_true",
+        help=(
+            "Load reviewer overrides from the duplicate_review_decision table "
+            "(the staff 'Review duplicates' UI). The cron passes this so a "
+            "reviewer's merge call applies on the next run. Ignored when "
+            "--decisions is also given."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1333,6 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         review_path=args.review_out,
         decisions=decisions,
+        decisions_from_db=args.decisions_from_db,
     )
     logger.info(
         "track_a duplicate_email: mode=%s planned=%d merged=%d review=%d skipped=%d",
@@ -1350,6 +1423,7 @@ __all__ = [
     "MergePlan",
     "ReconcileResult",
     "load_decisions",
+    "load_decisions_from_db",
     "main",
     "names_look_like_same_person",
     "plan_merges",

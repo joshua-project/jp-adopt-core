@@ -3742,6 +3742,206 @@
         }
       }
     },
+    "/v1/admin/duplicate-conflicts": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List Duplicate Conflicts",
+        "description": "List unresolved ``duplicate_email`` conflicts as reviewable pairs.\n\nEach item carries the DT-origin contact, the contact that owns the email\n(the merge target), the cluster size (how many DT records share the\nemail), and any pending reviewer decision. ``ignore``-d conflicts are\nhidden unless ``include_ignored=true``. ``merge``-d ones remain (shown as\nqueued) until the next Track A run applies and deletes them.",
+        "operationId": "list_duplicate_conflicts_v1_admin_duplicate_conflicts_get",
+        "parameters": [
+          {
+            "name": "include_ignored",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Ignored"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateConflictListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/duplicate-conflicts/decide": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Decide Duplicate Conflict",
+        "description": "Record a reviewer's call on one ``duplicate_email`` conflict.\n\n``merge`` queues the DT-authoritative merge for the next Track A run;\n``ignore`` hides a shared-inbox false positive. Idempotent upsert keyed on\n``(email, dt_source_id)``. For a ``merge`` in a shared-email cluster only\nONE keeper is allowed, so any other ``merge`` on the same email is cleared.",
+        "operationId": "decide_duplicate_conflict_v1_admin_duplicate_conflicts_decide_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DuplicateDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateDecisionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Clear Duplicate Decision",
+        "description": "Undo a prior decision so the conflict returns to the review list.",
+        "operationId": "clear_duplicate_decision_v1_admin_duplicate_conflicts_decide_delete",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Email"
+            }
+          },
+          {
+            "name": "dt_source_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dt Source Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "Caller lacks the staff_admin role"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drips/campaigns": {
       "get": {
         "tags": [
@@ -7482,6 +7682,220 @@
           "contact_adopter_status"
         ],
         "title": "DecideResponse"
+      },
+      "DuplicateConflictContact": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "adopter_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adopter Status"
+          },
+          "email_normalized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Normalized"
+          },
+          "source_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source System"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "DuplicateConflictContact"
+      },
+      "DuplicateConflictItem": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "dt_source_id": {
+            "type": "string",
+            "title": "Dt Source Id"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "cluster_size": {
+            "type": "integer",
+            "title": "Cluster Size"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "merge",
+                  "ignore"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "dt_contact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DuplicateConflictContact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner_contact": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DuplicateConflictContact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "dt_source_id",
+          "detected_at",
+          "cluster_size"
+        ],
+        "title": "DuplicateConflictItem"
+      },
+      "DuplicateConflictListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateConflictItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "DuplicateConflictListResponse"
+      },
+      "DuplicateDecisionRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "dt_source_id": {
+            "type": "string",
+            "title": "Dt Source Id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "ignore"
+            ],
+            "title": "Decision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "dt_source_id",
+          "decision"
+        ],
+        "title": "DuplicateDecisionRequest"
+      },
+      "DuplicateDecisionResponse": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "dt_source_id": {
+            "type": "string",
+            "title": "Dt Source Id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "ignore"
+            ],
+            "title": "Decision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "dt_source_id",
+          "decision"
+        ],
+        "title": "DuplicateDecisionResponse"
       },
       "EtlDeletedInSourceListResponse": {
         "properties": {

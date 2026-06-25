@@ -509,6 +509,40 @@ class MigrationConflict(Base):
     )
 
 
+class DuplicateReviewDecision(Base):
+    """A staff reviewer's call on a ``duplicate_email`` conflict.
+
+    ``merge`` is consumed by the hourly Track A reconcile (force_merge /
+    multi_keep); ``ignore`` filters the conflict out of the review UI. Keyed on
+    ``(email_normalized, dt_source_id)`` — the conflict's identity.
+    """
+
+    __tablename__ = "duplicate_review_decision"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('merge', 'ignore')",
+            name="ck_duplicate_review_decision_decision",
+        ),
+        UniqueConstraint(
+            "email_normalized",
+            "dt_source_id",
+            name="uq_duplicate_review_decision_conflict",
+        ),
+        Index("ix_duplicate_review_decision_decision", "decision"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    dt_source_id: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class FacilitatingOrg(Base):
     __tablename__ = "facilitating_org"
     __table_args__ = (

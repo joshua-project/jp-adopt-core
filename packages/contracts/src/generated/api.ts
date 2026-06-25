@@ -952,6 +952,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/duplicate-conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Duplicate Conflicts
+         * @description List unresolved ``duplicate_email`` conflicts as reviewable pairs.
+         *
+         *     Each item carries the DT-origin contact, the contact that owns the email
+         *     (the merge target), the cluster size (how many DT records share the
+         *     email), and any pending reviewer decision. ``ignore``-d conflicts are
+         *     hidden unless ``include_ignored=true``. ``merge``-d ones remain (shown as
+         *     queued) until the next Track A run applies and deletes them.
+         */
+        get: operations["list_duplicate_conflicts_v1_admin_duplicate_conflicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/duplicate-conflicts/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Duplicate Conflict
+         * @description Record a reviewer's call on one ``duplicate_email`` conflict.
+         *
+         *     ``merge`` queues the DT-authoritative merge for the next Track A run;
+         *     ``ignore`` hides a shared-inbox false positive. Idempotent upsert keyed on
+         *     ``(email, dt_source_id)``. For a ``merge`` in a shared-email cluster only
+         *     ONE keeper is allowed, so any other ``merge`` on the same email is cleared.
+         */
+        post: operations["decide_duplicate_conflict_v1_admin_duplicate_conflicts_decide_post"];
+        /**
+         * Clear Duplicate Decision
+         * @description Undo a prior decision so the conflict returns to the review list.
+         */
+        delete: operations["clear_duplicate_decision_v1_admin_duplicate_conflicts_decide_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/drips/campaigns": {
         parameters: {
             query?: never;
@@ -1988,6 +2043,75 @@ export interface components {
             contact_adopter_status: string | null;
             /** New Match Id */
             new_match_id?: string | null;
+        };
+        /** DuplicateConflictContact */
+        DuplicateConflictContact: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /** Adopter Status */
+            adopter_status?: string | null;
+            /** Email Normalized */
+            email_normalized?: string | null;
+            /** Source System */
+            source_system?: string | null;
+            /** Source Id */
+            source_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** DuplicateConflictItem */
+        DuplicateConflictItem: {
+            /** Email */
+            email: string;
+            /** Dt Source Id */
+            dt_source_id: string;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+            /** Cluster Size */
+            cluster_size: number;
+            /** Decision */
+            decision?: ("merge" | "ignore") | null;
+            dt_contact?: components["schemas"]["DuplicateConflictContact"] | null;
+            owner_contact?: components["schemas"]["DuplicateConflictContact"] | null;
+        };
+        /** DuplicateConflictListResponse */
+        DuplicateConflictListResponse: {
+            /** Items */
+            items: components["schemas"]["DuplicateConflictItem"][];
+            /** Total */
+            total: number;
+        };
+        /** DuplicateDecisionRequest */
+        DuplicateDecisionRequest: {
+            /** Email */
+            email: string;
+            /** Dt Source Id */
+            dt_source_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "merge" | "ignore";
+        };
+        /** DuplicateDecisionResponse */
+        DuplicateDecisionResponse: {
+            /** Email */
+            email: string;
+            /** Dt Source Id */
+            dt_source_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "merge" | "ignore";
         };
         /** EtlDeletedInSourceListResponse */
         EtlDeletedInSourceListResponse: {
@@ -4864,6 +4988,128 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EtlDeletedInSourceListResponse"];
                 };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_duplicate_conflicts_v1_admin_duplicate_conflicts_get: {
+        parameters: {
+            query?: {
+                include_ignored?: boolean;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateConflictListResponse"];
+                };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_duplicate_conflict_v1_admin_duplicate_conflicts_decide_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuplicateDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateDecisionResponse"];
+                };
+            };
+            /** @description Caller lacks the staff_admin role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_duplicate_decision_v1_admin_duplicate_conflicts_decide_delete: {
+        parameters: {
+            query: {
+                email: string;
+                dt_source_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Caller lacks the staff_admin role */
             403: {

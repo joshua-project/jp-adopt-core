@@ -845,3 +845,42 @@ export async function removeSuppression(
     method: "DELETE",
   });
 }
+
+type DuplicateConflictListBody =
+  paths["/v1/admin/duplicate-conflicts"]["get"]["responses"]["200"]["content"]["application/json"];
+type DuplicateDecisionBody =
+  paths["/v1/admin/duplicate-conflicts/decide"]["post"]["requestBody"]["content"]["application/json"];
+
+export async function listDuplicateConflicts(
+  ctx: ApiClientContext,
+  opts: { includeIgnored?: boolean; limit?: number } = {},
+): Promise<DuplicateConflictListBody> {
+  return _assertPresent(
+    await apiFetch<DuplicateConflictListBody>(
+      ctx,
+      "/v1/admin/duplicate-conflicts",
+      { query: { include_ignored: opts.includeIgnored, limit: opts.limit } },
+    ),
+    "/v1/admin/duplicate-conflicts",
+  );
+}
+
+export async function decideDuplicateConflict(
+  ctx: ApiClientContext,
+  body: DuplicateDecisionBody,
+): Promise<void> {
+  await apiFetch<void>(ctx, "/v1/admin/duplicate-conflicts/decide", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function clearDuplicateDecision(
+  ctx: ApiClientContext,
+  params: { email: string; dt_source_id: string },
+): Promise<void> {
+  await apiFetch<void>(ctx, "/v1/admin/duplicate-conflicts/decide", {
+    method: "DELETE",
+    query: { email: params.email, dt_source_id: params.dt_source_id },
+  });
+}

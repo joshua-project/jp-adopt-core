@@ -14,6 +14,7 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/admin/users", label: "Admin" },
   { href: "/admin/orgs", label: "Orgs" },
   { href: "/admin/intake-keys", label: "Keys" },
+  { href: "/admin/duplicates", label: "Duplicates" },
 ];
 
 const AUTH_EXEMPT_PATHS = new Set(["/signin", "/auth/callback"]);

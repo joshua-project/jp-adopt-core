@@ -44,7 +44,12 @@ dt-etl \
 # sync) means each merge's effect is captured in its own outbox summary.
 # Idempotent: a run with no new conflicts is a no-op. set -e above already
 # aborts before this on a failed sync, so we never reconcile a half-synced state.
+#
+# --decisions-from-db reads the duplicate_review_decision table (the staff
+# "Review duplicates" UI), so a reviewer's "same person → merge" call is applied
+# on the next run.
 exec dt-reconcile-track-a \
     --mysql-url "$DT_MYSQL_URL" \
     --postgres-url "$PG_URL" \
-    --apply
+    --apply \
+    --decisions-from-db
