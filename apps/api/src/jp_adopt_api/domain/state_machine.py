@@ -193,6 +193,12 @@ EVENT_MATCH_REASSIGNED = "jp.adopt.v1.match.reassigned"
 EVENT_MATCH_ACCEPTED = "jp.adopt.v1.match.accepted"
 EVENT_CONTACT_DEACTIVATED = "jp.adopt.v1.contact.deactivated"
 EVENT_CONTACT_DO_NOT_ENGAGE = "jp.adopt.v1.contact.do_not_engage"
+# Operator correction: an adoption_manager/admin re-classifies a contact to an
+# EARLIER funnel state to fix a mis-import or mistake (e.g. a contact landed in
+# 'engaged' but actually still needs an FPG). Deliberately a DEDICATED event so
+# corrections never trigger a drip campaign or re-fire intake side effects the
+# way reusing the normal entry events would.
+EVENT_CONTACT_RECLASSIFIED = "jp.adopt.v1.contact.reclassified"
 
 EVENT_FACILITATOR_SUBMITTED = "jp.adopt.v1.facilitator.submitted"
 EVENT_FACILITATOR_MARKED_NOT_READY = "jp.adopt.v1.facilitator.marked_not_ready"
@@ -271,6 +277,43 @@ ADOPTER_TRANSITIONS: dict[tuple[AdopterState, AdopterState], TransitionSpec] = {
         allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
         requires_reason=False,
         event_type=EVENT_CONTACT_DEACTIVATED,
+    ),
+    # ── Operator corrections ────────────────────────────────────────────────
+    # Backward moves among the pre-match funnel states (new / potential_adopter
+    # / contacted / engaged) so an adoption_manager/admin can fix a contact that
+    # was imported or advanced into the wrong state — e.g. an 'engaged' contact
+    # who actually still needs an FPG → 'potential_adopter'. Match/active states
+    # are intentionally excluded (those carry a match row; use sent_back). All
+    # use the dedicated RECLASSIFIED event so no drip/intake side effects fire.
+    (AdopterState.POTENTIAL_ADOPTER, AdopterState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.CONTACTED, AdopterState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.CONTACTED, AdopterState.POTENTIAL_ADOPTER): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.ENGAGED, AdopterState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.ENGAGED, AdopterState.POTENTIAL_ADOPTER): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
+    ),
+    (AdopterState.ENGAGED, AdopterState.CONTACTED): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_CONTACT_RECLASSIFIED,
     ),
 }
 
