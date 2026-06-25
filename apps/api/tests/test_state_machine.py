@@ -153,6 +153,27 @@ def test_facilitator_cannot_use_adopter_corrections() -> None:
     assert AdopterState.CONTACTED not in options
 
 
+def test_adoption_manager_can_correct_facilitator_backward() -> None:
+    # Operator corrections: a facilitator mistakenly marked 'ready' can be
+    # walked back to an earlier readiness state.
+    options = available_transitions(
+        FacilitatorState.READY, "adoption_manager", kind="facilitator"
+    )
+    assert FacilitatorState.NOT_READY in options
+    assert FacilitatorState.NEW in options
+    # Opt-out still available.
+    assert FacilitatorState.DO_NOT_ENGAGE in options
+
+
+def test_facilitator_corrections_are_adoption_manager_only() -> None:
+    options = available_transitions(
+        FacilitatorState.READY, "facilitator", kind="facilitator"
+    )
+    # Corrections are adoption_manager/admin only.
+    assert FacilitatorState.NOT_READY not in options
+    assert FacilitatorState.NEW not in options
+
+
 # ---------------------------------------------------------------------------
 # Async DB-backed transition tests.
 # ---------------------------------------------------------------------------
@@ -473,6 +494,58 @@ async def test_facilitator_transition_new_to_ready(session: AsyncSession) -> Non
         actor_role="adoption_manager",
     )
     assert contact.facilitator_status == "ready"
+
+
+async def test_correction_facilitator_ready_to_not_ready(
+    session: AsyncSession,
+) -> None:
+    # A facilitator imported/advanced as 'ready' that actually still needs
+    # review can be corrected back to 'not_ready' by an adoption_manager.
+    contact = await _make_contact(session, facilitator_status="ready")
+
+    updated = await transition_facilitator(
+        session,
+        contact,
+        to_state=FacilitatorState.NOT_READY,
+        actor_b2c_sub=ACTOR_SUB,
+        actor_role="adoption_manager",
+    )
+    assert updated.facilitator_status == "not_ready"
+
+    # Emits the dedicated reclassified event (NOT a mark event), so no
+    # facilitator entry side effect is triggered by a correction.
+    reclassified = (
+        (
+            await session.execute(
+                select(Outbox).where(
+                    Outbox.event_type == "jp.adopt.v1.facilitator.reclassified"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mine = [
+        r for r in reclassified
+        if r.payload_json.get("contact_id") == str(contact.id)
+    ]
+    assert len(mine) == 1
+    assert mine[0].payload_json["from_state"] == "ready"
+    assert mine[0].payload_json["to_state"] == "not_ready"
+
+
+async def test_facilitator_correction_blocked_for_facilitator_role(
+    session: AsyncSession,
+) -> None:
+    contact = await _make_contact(session, facilitator_status="ready")
+    with pytest.raises(RoleNotPermittedError):
+        await transition_facilitator(
+            session,
+            contact,
+            to_state=FacilitatorState.NOT_READY,
+            actor_b2c_sub=ACTOR_SUB,
+            actor_role="facilitator",
+        )
 
 
 # ---------------------------------------------------------------------------

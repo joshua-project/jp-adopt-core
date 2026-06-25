@@ -204,6 +204,12 @@ EVENT_FACILITATOR_SUBMITTED = "jp.adopt.v1.facilitator.submitted"
 EVENT_FACILITATOR_MARKED_NOT_READY = "jp.adopt.v1.facilitator.marked_not_ready"
 EVENT_FACILITATOR_MARKED_READY = "jp.adopt.v1.facilitator.marked_ready"
 EVENT_FACILITATOR_DO_NOT_ENGAGE = "jp.adopt.v1.facilitator.do_not_engage"
+# Operator correction: an adoption_manager/admin walks a facilitator back to an
+# EARLIER readiness state to fix a mis-import or mistake (e.g. one marked 'ready'
+# that actually still needs review → 'not_ready'). Dedicated event, mirroring
+# EVENT_CONTACT_RECLASSIFIED, so corrections never re-fire facilitator entry
+# side effects (drips, notifications) the way reusing the mark events would.
+EVENT_FACILITATOR_RECLASSIFIED = "jp.adopt.v1.facilitator.reclassified"
 
 
 ADOPTER_TRANSITIONS: dict[tuple[AdopterState, AdopterState], TransitionSpec] = {
@@ -353,6 +359,27 @@ FACILITATOR_TRANSITIONS: dict[
         allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
         requires_reason=False,
         event_type=EVENT_FACILITATOR_MARKED_READY,
+    ),
+    # ── Operator corrections ────────────────────────────────────────────────
+    # Backward moves among the readiness funnel states (new / not_ready / ready)
+    # so an adoption_manager/admin can fix a facilitator that was imported or
+    # advanced into the wrong state — e.g. one marked 'ready' that actually
+    # still needs review → 'not_ready'. Mirrors the adopter corrections; uses
+    # the dedicated RECLASSIFIED event so no facilitator entry side effects fire.
+    (FacilitatorState.READY, FacilitatorState.NOT_READY): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
+    ),
+    (FacilitatorState.READY, FacilitatorState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
+    ),
+    (FacilitatorState.NOT_READY, FacilitatorState.NEW): TransitionSpec(
+        allowed_roles=_ADOPTION_MANAGER_OR_ADMIN,
+        requires_reason=False,
+        event_type=EVENT_FACILITATOR_RECLASSIFIED,
     ),
 }
 
