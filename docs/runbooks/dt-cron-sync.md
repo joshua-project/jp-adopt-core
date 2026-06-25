@@ -22,20 +22,24 @@ manual `--mode dry_run` rehearsal documented in `docs/runbooks/dt-cutover.md`.
   steps in sequence:
   1. `dt-etl --table all --mode production --watermark auto --verbose` — the
      delta sync.
-  2. `dt-reconcile-track-a --apply` — Track A duplicate_email reconcile (see
-     below). Chained because the sync itself can *create* the conflicts it
-     resolves: DT permits the same email on multiple contacts but the new
-     system's partial unique index does not, so a synced DT contact whose
-     email is already owned by an existing (e.g. forms-intake) contact lands
-     with its email NULLed and a `duplicate_email` conflict recorded. Running
-     reconcile every hour keeps those from accumulating as unmerged duplicates.
-     `set -e` aborts before step 2 if the sync fails, so reconcile never runs
-     against a half-synced state.
+  2. `dt-reconcile-track-a --apply --decisions-from-db` — Track A
+     duplicate_email reconcile (see below). Chained because the sync itself can
+     *create* the conflicts it resolves: DT permits the same email on multiple
+     contacts but the new system's partial unique index does not, so a synced
+     DT contact whose email is already owned by an existing (e.g. forms-intake)
+     contact lands with its email NULLed and a `duplicate_email` conflict
+     recorded. Running reconcile every hour keeps those from accumulating as
+     unmerged duplicates. `set -e` aborts before step 2 if the sync fails, so
+     reconcile never runs against a half-synced state.
 
   Track A auto-merges only the high-confidence name+email matches
   (DT-authoritative merge onto the email owner); ambiguous cases stay as
-  `duplicate_email` conflict rows for Amy to review. The run is idempotent —
-  an hour with no new conflicts is a no-op.
+  `duplicate_email` conflict rows for staff to judge in the **Review
+  duplicates** UI (`/admin/duplicates`, staff_admin). `--decisions-from-db`
+  feeds those calls back: a "same person → merge" decision is applied on the
+  next hourly run (force_merge / multi_keep, from the `duplicate_review_decision`
+  table); "not a duplicate → ignore" just hides shared-inbox false positives.
+  The run is idempotent — an hour with no new conflicts/decisions is a no-op.
 - **Watermark** the previous successful run's `MIN(MAX(etl_run.source_max_modified_at))`
   per table. Resolved inside the orchestrator's
   `resolve_auto_watermark()`. First run after deploy: no prior
@@ -182,7 +186,7 @@ ORDER BY 2 DESC;
 | `local_modified_after_import` | A staff member edited the contact in jp-adopt-core after a prior import. ETL preserved the local edit. | Expected. Reconcile post-cutover by deciding which value wins per case. |
 | `local_assignment_override` | Staff reassigned the contact in jp-adopt-core after a prior import; DT still has the old assignee. | Expected. The cron will NOT clobber the staff reassignment. |
 | `assignee_no_subject` | DT `assigned_to` resolves to a `dt_user_id` that has no B2C subject. | Auto-resolves the hour the staff member first signs into jp-adopt-core. |
-| `duplicate_email` | DT contact's email matches an existing contact in jp-adopt-core (likely from intake forms). | Reconcile manually — typically merge the DT history into the forms contact. |
+| `duplicate_email` | DT contact's email matches an existing contact in jp-adopt-core (likely from intake forms). | Matching names auto-merge each hour (Track A). Ambiguous ones surface in the **Review duplicates** UI (`/admin/duplicates`): "same person → merge" applies next sync; "not a duplicate → ignore" hides shared inboxes. |
 | `fpg_not_found` | DT `fpg_submission_data` references a `peopleId3` not in the `fpg` table. | Verify the FPG seed is current (re-run `sync_fpg`). Truly absent peopleId3 values are typos or stale references in DT data. |
 | `unmapped_status:*` | DT enum value not in `mappers/status.py`. | Add the mapping in `apps/etl/src/jp_adopt_etl/mappers/status.py`, deploy. The cron in production mode records `unknown` + the conflict; dry-run fails loud. |
 

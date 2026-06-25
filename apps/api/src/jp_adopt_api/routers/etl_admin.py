@@ -20,15 +20,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from jp_adopt_api.auth import AuthUser
 from jp_adopt_api.deps import DbSession, require_role
-from jp_adopt_api.models import EtlDeletedInSource, EtlRun, MigrationConflict
+from jp_adopt_api.models import (
+    Contact,
+    DuplicateReviewDecision,
+    EtlDeletedInSource,
+    EtlRun,
+    MigrationConflict,
+)
 
 _FORBIDDEN_RESPONSE: dict[int | str, dict[str, Any]] = {
     403: {"description": "Caller lacks the staff_admin role"},
@@ -343,3 +350,247 @@ async def list_etl_deleted_in_source(
         items=[EtlDeletedInSourceRead.model_validate(r) for r in rows],
         total=total,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Duplicate-email review — the staff "Review duplicates" UI
+# ──────────────────────────────────────────────────────────────────────────
+#
+# A ``duplicate_email`` conflict is a DT-origin contact whose email collided
+# with an existing (usually forms-intake) contact during import. Track A
+# auto-merges the high-confidence name+email matches; the ambiguous remainder
+# sits here for a human to judge. These endpoints surface each conflict as a
+# PAIR (the DT contact ↔ the email owner) and record the reviewer's call in
+# ``duplicate_review_decision`` — ``merge`` is applied by the next hourly Track
+# A run (``--decisions-from-db``); ``ignore`` hides shared-inbox false positives.
+
+_DUP_CONFLICT_TYPE = "duplicate_email"
+
+
+class DuplicateConflictContact(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    display_name: str
+    adopter_status: str | None = None
+    email_normalized: str | None = None
+    source_system: str | None = None
+    source_id: str | None = None
+    created_at: datetime | None = None
+
+
+class DuplicateConflictItem(BaseModel):
+    email: str
+    dt_source_id: str
+    detected_at: datetime
+    # How many DT records collide on this email. >1 ⇒ likely a shared inbox
+    # (different people), where at most ONE can be the merge keeper.
+    cluster_size: int
+    decision: Literal["merge", "ignore"] | None = None
+    dt_contact: DuplicateConflictContact | None = None
+    owner_contact: DuplicateConflictContact | None = None
+
+
+class DuplicateConflictListResponse(BaseModel):
+    items: list[DuplicateConflictItem]
+    total: int
+
+
+class DuplicateDecisionRequest(BaseModel):
+    email: str
+    dt_source_id: str
+    decision: Literal["merge", "ignore"]
+
+
+class DuplicateDecisionResponse(BaseModel):
+    email: str
+    dt_source_id: str
+    decision: Literal["merge", "ignore"]
+
+
+def _dup_contact_payload(
+    contact: Contact | None,
+) -> DuplicateConflictContact | None:
+    return (
+        DuplicateConflictContact.model_validate(contact)
+        if contact is not None
+        else None
+    )
+
+
+@router.get(
+    "/v1/admin/duplicate-conflicts",
+    response_model=DuplicateConflictListResponse,
+    responses=_FORBIDDEN_RESPONSE,
+)
+async def list_duplicate_conflicts(
+    db: DbSession,
+    _: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+    include_ignored: bool = False,
+    limit: int = Query(_LIMIT_DEFAULT, ge=1, le=_LIMIT_MAX),
+) -> DuplicateConflictListResponse:
+    """List unresolved ``duplicate_email`` conflicts as reviewable pairs.
+
+    Each item carries the DT-origin contact, the contact that owns the email
+    (the merge target), the cluster size (how many DT records share the
+    email), and any pending reviewer decision. ``ignore``-d conflicts are
+    hidden unless ``include_ignored=true``. ``merge``-d ones remain (shown as
+    queued) until the next Track A run applies and deletes them.
+    """
+    conflicts = (
+        await db.execute(
+            select(MigrationConflict).where(
+                MigrationConflict.conflict_type == _DUP_CONFLICT_TYPE
+            )
+        )
+    ).scalars().all()
+
+    # Cluster sizes (email → number of colliding DT records).
+    cluster: dict[str, int] = {}
+    for c in conflicts:
+        email = (c.source_value or {}).get("email_normalized")
+        if email:
+            cluster[email] = cluster.get(email, 0) + 1
+
+    decisions = {
+        (d.email_normalized, d.dt_source_id): d.decision
+        for d in (
+            await db.execute(select(DuplicateReviewDecision))
+        ).scalars().all()
+    }
+
+    dt_ids = [c.source_id for c in conflicts if c.source_id]
+    emails = [
+        e
+        for c in conflicts
+        if (e := (c.source_value or {}).get("email_normalized"))
+    ]
+    dt_by_id: dict[str, Contact] = {}
+    if dt_ids:
+        dt_by_id = {
+            r.source_id: r
+            for r in (
+                await db.execute(
+                    select(Contact).where(
+                        Contact.source_system == "dt",
+                        Contact.source_id.in_(dt_ids),
+                    )
+                )
+            ).scalars().all()
+            if r.source_id
+        }
+    owner_by_email: dict[str, Contact] = {}
+    if emails:
+        owner_by_email = {
+            r.email_normalized: r
+            for r in (
+                await db.execute(
+                    select(Contact).where(Contact.email_normalized.in_(emails))
+                )
+            ).scalars().all()
+            if r.email_normalized
+        }
+
+    items: list[DuplicateConflictItem] = []
+    for c in conflicts:
+        email = (c.source_value or {}).get("email_normalized")
+        if not email:
+            continue
+        decision = decisions.get((email, c.source_id))
+        if decision == "ignore" and not include_ignored:
+            continue
+        items.append(
+            DuplicateConflictItem(
+                email=email,
+                dt_source_id=c.source_id,
+                detected_at=c.detected_at,
+                cluster_size=cluster.get(email, 1),
+                decision=decision,
+                dt_contact=_dup_contact_payload(dt_by_id.get(c.source_id)),
+                owner_contact=_dup_contact_payload(owner_by_email.get(email)),
+            )
+        )
+
+    # Undecided first (the reviewer's actual work), then group by email so
+    # shared-inbox clusters sit together.
+    items.sort(key=lambda i: (i.decision is not None, i.email, i.dt_source_id))
+    return DuplicateConflictListResponse(items=items[:limit], total=len(items))
+
+
+@router.post(
+    "/v1/admin/duplicate-conflicts/decide",
+    response_model=DuplicateDecisionResponse,
+    responses=_FORBIDDEN_RESPONSE,
+)
+async def decide_duplicate_conflict(
+    db: DbSession,
+    body: DuplicateDecisionRequest,
+    actor: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+) -> DuplicateDecisionResponse:
+    """Record a reviewer's call on one ``duplicate_email`` conflict.
+
+    ``merge`` queues the DT-authoritative merge for the next Track A run;
+    ``ignore`` hides a shared-inbox false positive. Idempotent upsert keyed on
+    ``(email, dt_source_id)``. For a ``merge`` in a shared-email cluster only
+    ONE keeper is allowed, so any other ``merge`` on the same email is cleared.
+    """
+    user = actor[0]
+    decided_by = user.email or user.sub
+    if body.decision == "merge":
+        await db.execute(
+            delete(DuplicateReviewDecision).where(
+                DuplicateReviewDecision.email_normalized == body.email,
+                DuplicateReviewDecision.dt_source_id != body.dt_source_id,
+                DuplicateReviewDecision.decision == "merge",
+            )
+        )
+    await db.execute(
+        pg_insert(DuplicateReviewDecision)
+        .values(
+            email_normalized=body.email,
+            dt_source_id=body.dt_source_id,
+            decision=body.decision,
+            decided_by=decided_by,
+        )
+        .on_conflict_do_update(
+            constraint="uq_duplicate_review_decision_conflict",
+            set_={
+                "decision": body.decision,
+                "decided_by": decided_by,
+                "decided_at": func.now(),
+            },
+        )
+    )
+    await db.commit()
+    return DuplicateDecisionResponse(
+        email=body.email,
+        dt_source_id=body.dt_source_id,
+        decision=body.decision,
+    )
+
+
+@router.delete(
+    "/v1/admin/duplicate-conflicts/decide",
+    status_code=204,
+    responses=_FORBIDDEN_RESPONSE,
+)
+async def clear_duplicate_decision(
+    db: DbSession,
+    _: Annotated[
+        tuple[AuthUser, frozenset[str]], Depends(_staff_admin_dep)
+    ],
+    email: str = Query(...),
+    dt_source_id: str = Query(...),
+) -> None:
+    """Undo a prior decision so the conflict returns to the review list."""
+    await db.execute(
+        delete(DuplicateReviewDecision).where(
+            DuplicateReviewDecision.email_normalized == email,
+            DuplicateReviewDecision.dt_source_id == dt_source_id,
+        )
+    )
+    await db.commit()
