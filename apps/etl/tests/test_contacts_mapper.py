@@ -10,7 +10,9 @@ import phpserialize
 import pytest
 
 from jp_adopt_etl.mappers.contacts import (
+    META_KEY_ADOPTER_STATUS,
     META_KEY_DISPLAY_NAME,
+    META_KEY_FACILITATOR_STATUS,
     META_KEY_OVERALL_STATUS,
     META_KEY_PARTY_KIND,
     META_KEY_SOURCES,
@@ -78,7 +80,7 @@ def test_party_kind_from_sub_type() -> None:
         **{
             META_KEY_PARTY_KIND: "adopter",
             META_KEY_DISPLAY_NAME: "Alice Smith",
-            META_KEY_OVERALL_STATUS: "new",
+            META_KEY_ADOPTER_STATUS: "new",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
@@ -100,27 +102,44 @@ def test_party_kind_ignores_dt_type_field() -> None:
     assert kwargs["party_kind"] == "adopter"
 
 
-def test_status_sourced_from_overall_status_not_vestigial_field() -> None:
-    """``adopter_status``/``facilitator_status`` postmeta are vestigial
-    'new'; the real lifecycle status is ``overall_status``."""
+def test_adopter_status_from_adopter_status_field_not_overall() -> None:
+    """The JP ``adopter_status`` field is the lifecycle source; a generic
+    ``overall_status='active'`` does NOT override it (only the terminal
+    closed/unassignable signals do). A 'not_ready' adopter → potential_adopter."""
     post = _post()
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_OVERALL_STATUS: "active",  # → engaged (no adopter matched in DT)
-            "adopter_status": "new",  # vestigial, must be ignored
+            META_KEY_ADOPTER_STATUS: "not_ready",
+            META_KEY_OVERALL_STATUS: "active",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "engaged"
+    assert kwargs["adopter_status"] == "potential_adopter"
 
 
-def test_facilitator_status_from_overall_status() -> None:
+def test_adopter_draft_from_adopter_status_field() -> None:
+    """A saved-not-submitted form sign-up lands as adopter_status='draft' in
+    DT (overall_status is 'active', a published post). Must surface as draft."""
+    post = _post(post_status="publish")
+    meta = _meta(
+        **{
+            META_KEY_PARTY_KIND: "adopter",
+            META_KEY_ADOPTER_STATUS: "draft",
+            META_KEY_OVERALL_STATUS: "active",
+        }
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "draft"
+
+
+def test_facilitator_status_from_facilitator_status_field() -> None:
     post = _post(post_id=42)
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "facilitator",
-            META_KEY_OVERALL_STATUS: "active",  # → ready
+            META_KEY_FACILITATOR_STATUS: "ready",
+            META_KEY_OVERALL_STATUS: "active",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
@@ -129,49 +148,46 @@ def test_facilitator_status_from_overall_status() -> None:
     assert kwargs["facilitator_status"] == "ready"
 
 
-def test_draft_post_status_maps_adopter_to_draft() -> None:
-    # DT marks incomplete contacts with WordPress post_status='draft'; the
-    # overall_status postmeta is hidden from staff and typically unset.
-    post = _post(post_status="draft")
-    meta = _meta(**{META_KEY_PARTY_KIND: "adopter"})
-    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "draft"
-
-
-def test_draft_post_status_overrides_default_new() -> None:
-    post = _post(post_status="draft")
+def test_facilitator_draft_from_facilitator_status_field() -> None:
+    post = _post(post_id=43)
     meta = _meta(
-        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "new"}
+        **{
+            META_KEY_PARTY_KIND: "facilitator",
+            META_KEY_FACILITATOR_STATUS: "draft",
+            META_KEY_OVERALL_STATUS: "active",
+        }
     )
-    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "draft"
-
-
-def test_draft_post_status_does_not_demote_advanced_contact() -> None:
-    # A draft (unpublished) post whose overall_status already advanced past
-    # 'new' keeps the advanced status — we don't demote it to draft.
-    post = _post(post_status="draft")
-    meta = _meta(
-        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "active"}
-    )
-    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "engaged"
-
-
-def test_draft_post_status_maps_facilitator_to_draft() -> None:
-    post = _post(post_status="draft")
-    meta = _meta(**{META_KEY_PARTY_KIND: "facilitator"})
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
     assert kwargs["facilitator_status"] == "draft"
 
 
-def test_published_post_status_unaffected() -> None:
-    post = _post(post_status="publish")
+def test_overall_closed_overrides_to_do_not_engage() -> None:
+    """A closed DT record is terminal regardless of pipeline stage."""
+    post = _post()
     meta = _meta(
-        **{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "new"}
+        **{
+            META_KEY_PARTY_KIND: "adopter",
+            META_KEY_ADOPTER_STATUS: "new",
+            META_KEY_OVERALL_STATUS: "closed",
+        }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
-    assert kwargs["adopter_status"] == "new"
+    assert kwargs["adopter_status"] == "do_not_engage"
+
+
+def test_overall_unassignable_overrides_adopter_to_potential() -> None:
+    """unassignable = the adopter still needs an FPG → potential_adopter
+    (NOT opted-out), even when the pipeline field says 'new'."""
+    post = _post()
+    meta = _meta(
+        **{
+            META_KEY_PARTY_KIND: "adopter",
+            META_KEY_ADOPTER_STATUS: "new",
+            META_KEY_OVERALL_STATUS: "unassignable",
+        }
+    )
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "potential_adopter"
 
 
 def test_map_contact_falls_back_to_post_title_when_meta_name_missing() -> None:
@@ -224,7 +240,7 @@ def test_map_contact_dry_run_raises_on_unmapped_status() -> None:
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_OVERALL_STATUS: "weird_value",
+            META_KEY_ADOPTER_STATUS: "weird_value",
         }
     )
     with pytest.raises(UnmappedStatusError):
@@ -236,7 +252,7 @@ def test_map_contact_production_maps_unmapped_status_to_unknown() -> None:
     meta = _meta(
         **{
             META_KEY_PARTY_KIND: "adopter",
-            META_KEY_OVERALL_STATUS: "weird_value",
+            META_KEY_ADOPTER_STATUS: "weird_value",
         }
     )
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")

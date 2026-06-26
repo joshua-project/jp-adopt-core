@@ -19,6 +19,9 @@ from jp_adopt_etl.mappers.status import (
     [
         ("draft", "draft"),
         ("new", "new"),
+        # JP adopter_status lifecycle field values (the primary source now):
+        ("not_ready", "potential_adopter"),
+        ("do_not_engage", "do_not_engage"),
         ("new_inquiry", "new"),  # spike-era artifact
         ("contacted", "new"),
         ("engaged", "contacted"),
@@ -68,6 +71,10 @@ def test_adopter_status_production_maps_unknown() -> None:
     [
         ("draft", "draft"),
         ("new", "new"),
+        # JP facilitator_status lifecycle field values (map 1:1 to core):
+        ("not_ready", "not_ready"),
+        ("ready", "ready"),
+        ("do_not_engage", "do_not_engage"),
         ("contacted", "new"),
         ("engaged", "not_ready"),
         ("matched", "ready"),
