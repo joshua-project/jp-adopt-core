@@ -170,6 +170,16 @@ def map_contact(
         if overall in ("closed", "unassignable"):
             facilitator_status = "do_not_engage"
 
+    # Floor an empty lifecycle field to 'new': a real DT contact with no
+    # pipeline value still belongs in the funnel, not shown as 'Unset'. The
+    # closed/unassignable overrides above already set the terminal states, and
+    # production 'unknown' is not None — so only a genuinely-absent value lands
+    # here.
+    if party_kind == "adopter" and adopter_status is None:
+        adopter_status = "new"
+    elif party_kind == "facilitator" and facilitator_status is None:
+        facilitator_status = "new"
+
     origin = _first_source(meta.get(META_KEY_SOURCES))
 
     channels = extract_comm_channels(meta)

@@ -266,3 +266,19 @@ def test_map_contact_default_party_kind_is_adopter() -> None:
     meta = _meta(**{META_KEY_PARTY_KIND: "missionary"})
     kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
     assert kwargs["party_kind"] == "adopter"
+
+
+def test_empty_adopter_status_floors_to_new() -> None:
+    """A real DT contact with no lifecycle value sits in the funnel as 'new',
+    not 'Unset' (None)."""
+    post = _post()
+    meta = _meta(**{META_KEY_PARTY_KIND: "adopter", META_KEY_OVERALL_STATUS: "active"})
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["adopter_status"] == "new"
+
+
+def test_empty_facilitator_status_floors_to_new() -> None:
+    post = _post(post_id=44)
+    meta = _meta(**{META_KEY_PARTY_KIND: "facilitator", META_KEY_OVERALL_STATUS: "active"})
+    kwargs = map_contact(post_row=post, meta_rows=meta, mode="production")
+    assert kwargs["facilitator_status"] == "new"
