@@ -28,6 +28,12 @@ Mode = Literal["dry_run", "production"]
 ADOPTER_STATUS_MAP: Final[dict[str, str]] = {
     "draft": "draft",
     "new": "new",
+    # The DT JP `adopter_status` lifecycle field carries 'not_ready' (an adopter
+    # entered but not yet ready to proceed) and 'do_not_engage'. 'not_ready' has
+    # no core adopter equivalent → core's "needs work" holding state
+    # 'potential_adopter' (Joel, 2026-06-26).
+    "not_ready": "potential_adopter",
+    "do_not_engage": "do_not_engage",
     "new_inquiry": "new",  # spike-era artifact; treated as new
     "contacted": "new",  # DT's "contacted" was lighter touch than ours
     "engaged": "contacted",
@@ -53,6 +59,11 @@ ADOPTER_STATUS_MAP: Final[dict[str, str]] = {
 FACILITATOR_STATUS_MAP: Final[dict[str, str]] = {
     "draft": "draft",
     "new": "new",
+    # DT's JP `facilitator_status` lifecycle field maps 1:1 to core (core has
+    # the same not_ready/ready states); these are the primary values now.
+    "not_ready": "not_ready",
+    "ready": "ready",
+    "do_not_engage": "do_not_engage",
     "contacted": "new",
     "engaged": "not_ready",
     "matched": "ready",

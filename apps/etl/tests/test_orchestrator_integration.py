@@ -322,13 +322,13 @@ def test_import_contacts_pivots_postmeta_and_writes_one_bulk_outbox_event(
         9101: [
             {"meta_key": "sub_type", "meta_value": "adopter"},
             {"meta_key": "name", "meta_value": "Alice"},
-            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "adopter_status", "meta_value": "new"},
             {"meta_key": "sources", "meta_value": "website"},
         ],
         9102: [
             {"meta_key": "sub_type", "meta_value": "facilitator"},
             {"meta_key": "name", "meta_value": "Bob"},
-            {"meta_key": "overall_status", "meta_value": "active"},  # → ready
+            {"meta_key": "facilitator_status", "meta_value": "ready"},
         ],
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
@@ -407,7 +407,7 @@ def test_import_contacts_skips_locally_modified_rows(
         9201: [
             {"meta_key": "type", "meta_value": "adopter"},
             {"meta_key": "contact_email", "meta_value": "edited@example.com"},
-            {"meta_key": "overall_status", "meta_value": "new"},
+            {"meta_key": "adopter_status", "meta_value": "new"},
         ]
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
@@ -1271,7 +1271,7 @@ def test_dry_run_exception_path_preserves_audit(
     postmeta = {
         9905: [
             {"meta_key": "sub_type", "meta_value": "adopter"},
-            {"meta_key": "overall_status", "meta_value": "totally_unknown"},
+            {"meta_key": "adopter_status", "meta_value": "totally_unknown"},
         ],
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)
@@ -1480,7 +1480,7 @@ def test_suppressed_dt_contact_with_unmappable_status_records_no_conflict(
     postmeta = {
         9460: [
             {"meta_key": "sub_type", "meta_value": "adopter"},
-            {"meta_key": "overall_status", "meta_value": "totally_unknown"},
+            {"meta_key": "adopter_status", "meta_value": "totally_unknown"},
         ],
     }
     mock = _MockedDtSource(contacts=contacts, postmeta=postmeta)

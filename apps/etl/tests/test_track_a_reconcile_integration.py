@@ -199,9 +199,16 @@ def _post_row(post_id: int, title: str) -> dict:
 
 
 def _meta(sub_type="adopter", status="new", phone=None, sources=None) -> list[dict]:
+    # Core status comes from the per-kind JP lifecycle field; overall_status is
+    # DT's generic record status (real DT contacts are 'active') used only for
+    # the closed/unassignable overrides.
+    status_key = (
+        "adopter_status" if sub_type == "adopter" else "facilitator_status"
+    )
     rows = [
         {"meta_key": "sub_type", "meta_value": sub_type},
-        {"meta_key": "overall_status", "meta_value": status},
+        {"meta_key": status_key, "meta_value": status},
+        {"meta_key": "overall_status", "meta_value": "active"},
     ]
     if phone is not None:
         # DT comm-channel shape: hashed key under contact_phone_<hex>.

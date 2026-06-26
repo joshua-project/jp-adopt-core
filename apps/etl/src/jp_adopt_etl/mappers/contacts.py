@@ -34,8 +34,16 @@ logger = logging.getLogger(__name__)
 # `contact_email`) that do not exist in the actual data.
 META_KEY_PARTY_KIND = "sub_type"  # 'adopter' | 'facilitator' (DT `type` is access/user)
 META_KEY_DISPLAY_NAME = "name"  # usually absent; falls back to wp_posts.post_title
-# overall_status is the authoritative lifecycle status. The dedicated
-# adopter_status/facilitator_status postmeta are vestigial (always 'new').
+# The JP adoption-program lifecycle status lives in these per-kind postmeta
+# fields (the form integration writes them, e.g. 'draft' on a saved-not-
+# submitted sign-up). `overall_status` is DT's GENERIC record status
+# (active/paused/closed/unassignable) — it is NOT the adoption pipeline stage,
+# and is used here only for the terminal/special overrides it encodes. (An
+# earlier build wrongly treated adopter_status as vestigial and keyed off
+# overall_status; that mislabeled every draft/not_ready adopter — see
+# docs/runbooks/dt-cron-sync.md.)
+META_KEY_ADOPTER_STATUS = "adopter_status"
+META_KEY_FACILITATOR_STATUS = "facilitator_status"
 META_KEY_OVERALL_STATUS = "overall_status"
 META_KEY_SOURCES = "sources"  # multi_select; first entry → origin
 
@@ -135,30 +143,42 @@ def map_contact(
         # something so downstream UI doesn't render blank cells.
         display_name = f"DT contact {post_id}"
 
-    overall_status = meta.get(META_KEY_OVERALL_STATUS)
-    adopter_status = (
-        map_adopter_status(overall_status, mode=mode)
-        if party_kind == "adopter"
-        else None
-    )
-    facilitator_status = (
-        map_facilitator_status(overall_status, mode=mode)
-        if party_kind == "facilitator"
-        else None
-    )
+    # Core status comes from the JP per-kind lifecycle field (adopter_status /
+    # facilitator_status), which carries the real pipeline stage including
+    # 'draft' (a saved-not-submitted form sign-up). `overall_status` is DT's
+    # generic record status and only contributes the terminal/special signals
+    # the pipeline field doesn't encode:
+    #   * closed       → do_not_engage (the record is closed regardless of stage)
+    #   * unassignable → potential_adopter (adopter still needs an FPG; this is
+    #     the "Needs FPG selection" case, NOT opted-out). For a facilitator,
+    #     unassignable is terminal → do_not_engage.
+    overall = (meta.get(META_KEY_OVERALL_STATUS) or "").strip().lower()
+    adopter_status: str | None = None
+    facilitator_status: str | None = None
+    if party_kind == "adopter":
+        adopter_status = map_adopter_status(
+            meta.get(META_KEY_ADOPTER_STATUS), mode=mode
+        )
+        if overall == "closed":
+            adopter_status = "do_not_engage"
+        elif overall == "unassignable" and adopter_status != "do_not_engage":
+            adopter_status = "potential_adopter"
+    else:
+        facilitator_status = map_facilitator_status(
+            meta.get(META_KEY_FACILITATOR_STATUS), mode=mode
+        )
+        if overall in ("closed", "unassignable"):
+            facilitator_status = "do_not_engage"
 
-    # DT marks an incomplete/unsubmitted contact with WordPress's native
-    # post_status='draft' (the plugin hides overall_status from staff, so a
-    # draft carries no lifecycle status of its own). Surface those as 'draft'
-    # rather than letting them default to 'new'/NULL. Only override when the
-    # mapped status hasn't already advanced past 'new', so a genuinely-further
-    # contact that happens to be an unpublished post is not demoted.
-    post_status = (post_row.get("post_status") or "").strip().lower()
-    if post_status == "draft":
-        if party_kind == "adopter" and adopter_status in (None, "new"):
-            adopter_status = "draft"
-        elif party_kind == "facilitator" and facilitator_status in (None, "new"):
-            facilitator_status = "draft"
+    # Floor an empty lifecycle field to 'new': a real DT contact with no
+    # pipeline value still belongs in the funnel, not shown as 'Unset'. The
+    # closed/unassignable overrides above already set the terminal states, and
+    # production 'unknown' is not None — so only a genuinely-absent value lands
+    # here.
+    if party_kind == "adopter" and adopter_status is None:
+        adopter_status = "new"
+    elif party_kind == "facilitator" and facilitator_status is None:
+        facilitator_status = "new"
 
     origin = _first_source(meta.get(META_KEY_SOURCES))
 
@@ -192,7 +212,9 @@ def map_contact(
 
 
 __all__ = [
+    "META_KEY_ADOPTER_STATUS",
     "META_KEY_DISPLAY_NAME",
+    "META_KEY_FACILITATOR_STATUS",
     "META_KEY_OVERALL_STATUS",
     "META_KEY_PARTY_KIND",
     "META_KEY_SOURCES",
